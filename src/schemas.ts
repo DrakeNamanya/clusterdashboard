@@ -10,6 +10,12 @@ export interface ColumnDef {
   name: string;
   /** How the value should be standardized. */
   type: ColType;
+  /**
+   * Optional: if this column's own source value is empty/missing, fill it from
+   * another source column (by header name). Used e.g. for `docId` which must be
+   * populated from `__Submissions-id` (or `unique_id`) when it arrives blank.
+   */
+  fillFrom?: string;
 }
 
 export interface SheetSchema {
@@ -35,10 +41,18 @@ export interface SheetSchema {
 }
 
 // Helper to build a column list from a comma spec + a type map.
-function cols(spec: string, types: Record<string, ColType> = {}): ColumnDef[] {
+// `fill` maps a target column -> a source column to pull from when the target's
+// own value is empty (e.g. docId <- __Submissions-id).
+function cols(
+  spec: string,
+  types: Record<string, ColType> = {},
+  fill: Record<string, string> = {}
+): ColumnDef[] {
   return spec.split(',').map((raw) => {
     const name = raw.trim();
-    return { name, type: types[name] ?? 'text' };
+    const def: ColumnDef = { name, type: types[name] ?? 'text' };
+    if (fill[name]) def.fillFrom = fill[name];
+    return def;
   });
 }
 
@@ -95,7 +109,8 @@ export const SCHEMAS: SheetSchema[] = [
         lastUpdated: 'date',
         distribution_date: 'date',
         submissionDate: 'date',
-      }
+      },
+      { docId: '__Submissions-id' }
     ),
   },
   {
@@ -128,7 +143,8 @@ export const SCHEMAS: SheetSchema[] = [
         updatedAt: 'date',
         dateCreated: 'date',
         lastUpdated: 'date',
-      }
+      },
+      { docId: 'unique_id' }
     ),
   },
   {
@@ -145,7 +161,8 @@ export const SCHEMAS: SheetSchema[] = [
         distribution_date: 'date',
         submissionDate: 'date',
         phone_number: 'phone',
-      }
+      },
+      { docId: '__Submissions-id' }
     ),
   },
   {
@@ -161,7 +178,8 @@ export const SCHEMAS: SheetSchema[] = [
         lastUpdated: 'date',
         distribution_date: 'date',
         submissionDate: 'date',
-      }
+      },
+      { docId: '__Submissions-id' }
     ),
   },
 ];

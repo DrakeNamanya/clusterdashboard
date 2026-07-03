@@ -270,7 +270,7 @@ app.get('/api/schemas', (c) =>
       label: s.label,
       dedupKey: s.dedupKey,
       filenameHints: s.filenameHints,
-      columns: s.columns.map((col) => ({ name: col.name, type: col.type })),
+      columns: s.columns.map((col) => ({ name: col.name, type: col.type, fillFrom: col.fillFrom })),
     })),
   })
 );

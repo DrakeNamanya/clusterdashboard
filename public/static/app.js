@@ -74,22 +74,38 @@ function cleanBatch(schema, headers, rows, startSeq){
     for(const col of schema.columns){
       if(col.type==='seq'){ rec[col.name]=String(seq); continue; }
       const i=idx.get(normHeader(col.name));
-      rec[col.name]=cleanValue(col.type, i===undefined?'':(row[i]??''));
+      let raw = i===undefined?'':(row[i]??'');
+      if((raw==null||String(raw).trim()==='') && col.fillFrom){
+        const fi=idx.get(normHeader(col.fillFrom));
+        if(fi!==undefined) raw=row[fi]??'';
+      }
+      rec[col.name]=cleanValue(col.type, raw);
     }
     out.push(rec); seq++;
   }
   return out;
 }
 
-// ---- File parsing (SheetJS in-browser) -------------------------------------
-async function parseFileClient(file){
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type:'array', raw:false });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'', blankrows:false });
-  const headers = (aoa.shift()||[]).map(h=>String(h??'').trim());
-  const rows = aoa.map(r=>r.map(c=>String(c??'')));
-  return { headers, rows };
+// ---- File parsing: preview via a Web Worker (no main-thread freeze) --------
+// We only pull the header + first chunk of rows for detection/preview so even
+// a 700k-row / 75MB file never blocks the UI. Full parsing happens later,
+// streamed straight to the server on confirm.
+function previewViaWorker(file){
+  return new Promise((resolve,reject)=>{
+    const w=new Worker('/static/parse-worker.js');
+    let headers=null; const rows=[]; let settled=false;
+    const finish=()=>{ if(settled) return; settled=true; w.terminate(); resolve({headers:headers||[],rows}); };
+    w.onmessage=(e)=>{
+      const m=e.data;
+      if(m.type==='meta'){ headers=m.headers; }
+      else if(m.type==='rows'){ for(const r of m.rows){ if(rows.length<200) rows.push(r.map(c=>String(c??''))); }
+        if(rows.length>=200) finish(); }
+      else if(m.type==='done'){ finish(); }
+      else if(m.type==='error'){ if(!settled){settled=true; w.terminate(); reject(new Error(m.error));} }
+    };
+    w.onerror=(err)=>{ if(!settled){settled=true; w.terminate(); reject(err.message?new Error(err.message):err);} };
+    w.postMessage({ file });
+  });
 }
 
 // ---- Upload UI -------------------------------------------------------------
@@ -107,12 +123,13 @@ async function handleFile(file){
   $('detectResult').innerHTML='<div class="text-slate-500"><i class="fas fa-spinner fa-spin mr-2"></i>Parsing &amp; detecting template…</div>';
   $('uploadActions').classList.add('hidden'); $('uploadStatus').classList.add('hidden');
   try{
-    const { headers, rows } = await parseFileClient(file);
+    const { headers, rows } = await previewViaWorker(file);
+    if(!headers.length) throw new Error('Could not read a header row from the file.');
     const det = detect(headers, file.name);
-    pending = { file, headers, rows, detection: det };
+    pending = { file, headers, detection: det };  // note: rows here are a PREVIEW only
     renderDetection(det, headers, rows);
   }catch(err){
-    $('detectResult').innerHTML=`<div class="text-red-600">Parse failed: ${esc(String(err))}</div>`;
+    $('detectResult').innerHTML=`<div class="text-red-600">Parse failed: ${esc(String(err&&err.message?err.message:err))}</div>`;
   }
 }
 
@@ -126,7 +143,7 @@ function renderDetection(det, headers, rows){
     <div class="text-sm mt-2 grid grid-cols-2 gap-x-6 gap-y-1">
       <div><b>Target schema:</b> ${esc(det.schema.label)} <span class="text-slate-400">(${esc(det.schema.key)})</span></div>
       <div><b>Confidence:</b> ${(det.score*100).toFixed(0)}%</div>
-      <div><b>Source rows:</b> ${rows.length.toLocaleString()}</div>
+      <div><b>Preview rows:</b> ${rows.length.toLocaleString()}${rows.length>=200?'+ (full file streamed on append)':''}</div>
       <div><b>Target columns:</b> ${targetCols.length}</div>
     </div>`;
   if(det.missingColumns.length) html+=`<p class="text-xs mt-2 text-amber-700"><b>Filled blank (missing in source):</b> ${det.missingColumns.map(esc).join(', ')}</p>`;
@@ -147,49 +164,102 @@ function renderDetection(det, headers, rows){
 $('cancelBtn').addEventListener('click',resetUpload);
 function resetUpload(){ pending=null; fileInput.value=''; ['fileMeta','detectResult','uploadActions','uploadStatus'].forEach(id=>$(id).classList.add('hidden')); }
 
-// ---- Chunked streaming upload ---------------------------------------------
-const CHUNK_ROWS = 400;
+// ---- Chunked streaming upload (parse in worker, upload as chunks arrive) ---
+const CHUNK_ROWS = 400;   // rows per POST to /api/append
+
 $('confirmBtn').addEventListener('click', async ()=>{
   if(!pending) return;
-  const { file, headers, rows, detection } = pending;
+  const { file, headers, detection } = pending;
   const schema = detection.schema;
-  $('confirmBtn').disabled=true;
+  $('confirmBtn').disabled=true; $('cancelBtn').disabled=true;
   $('uploadStatus').classList.remove('hidden');
 
-  // Get current maxSeq to continue the No sequence.
+  // Continue the No sequence from the server.
   let seq = 1;
   try{ const r=await fetch('/api/maxseq/'+schema.key); seq=(await r.json()).maxSeq+1; }catch{}
 
-  let totalInserted=0, totalDup=0, done=0;
-  const total=rows.length;
+  let totalInserted=0, totalDup=0, processed=0, grandTotal=0;
   const t0=performance.now();
-  for(let i=0;i<total;i+=CHUNK_ROWS){
-    const batch=rows.slice(i,i+CHUNK_ROWS);
-    const res=await fetch('/api/append',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ schemaKey:schema.key, headers, rows:batch, sourceFile:file.name, startSeq:seq }),
-    });
-    if(!res.ok){ const e=await res.json().catch(()=>({})); $('uploadStatus').innerHTML=`<div class="text-red-600 bg-red-50 p-3 rounded"><b>Failed at row ${i}:</b> ${esc(e.error||res.status)}</div>`; $('confirmBtn').disabled=false; return; }
-    const d=await res.json();
-    totalInserted+=d.result.inserted; totalDup+=d.result.duplicatesSkipped;
-    seq=d.nextSeq; done=Math.min(i+CHUNK_ROWS,total);
-    const pct=Math.round(done/total*100);
+
+  const paint=(msg)=>{
+    const pct = grandTotal>0 ? Math.round(processed/grandTotal*100) : 0;
+    const barW = grandTotal>0 ? pct+'%' : '100%';
+    const label = grandTotal>0
+      ? `${processed.toLocaleString()}/${grandTotal.toLocaleString()} rows`
+      : `${processed.toLocaleString()} rows`;
     $('uploadStatus').innerHTML=`<div class="text-sm">
-      <div class="flex justify-between mb-1"><span>Cleaning &amp; appending… ${done.toLocaleString()}/${total.toLocaleString()} rows</span><span>${pct}%</span></div>
-      <div class="w-full bg-slate-200 rounded-full h-2.5"><div class="bg-emerald-500 h-2.5 rounded-full transition-all" style="width:${pct}%"></div></div>
+      <div class="flex justify-between mb-1"><span>${msg||'Cleaning &amp; appending…'} ${label}</span><span>${grandTotal>0?pct+'%':''}</span></div>
+      <div class="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden"><div class="bg-emerald-500 h-2.5 rounded-full transition-all ${grandTotal>0?'':'animate-pulse'}" style="width:${barW}"></div></div>
       <div class="text-xs text-slate-500 mt-1">Inserted ${totalInserted.toLocaleString()} · Skipped ${totalDup.toLocaleString()} duplicates</div>
     </div>`;
+  };
+  paint('Reading file…');
+
+  // Upload a batch of raw rows to the server (server cleans + dedups).
+  async function sendBatch(rows){
+    if(!rows.length) return true;
+    const res=await fetch('/api/append',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ schemaKey:schema.key, headers, rows, sourceFile:file.name, startSeq:seq }),
+    });
+    if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
+    const d=await res.json();
+    totalInserted+=d.result.inserted; totalDup+=d.result.duplicatesSkipped;
+    seq=d.nextSeq; processed+=rows.length;
+    paint();
+    return true;
   }
-  const secs=((performance.now()-t0)/1000).toFixed(1);
-  const base=window.__BASE__;
-  $('uploadStatus').innerHTML=`<div class="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded text-sm">
-    <div class="font-semibold text-emerald-700"><i class="fas fa-circle-check mr-1"></i>Appended to <b>${esc(schema.label)}</b> in ${secs}s</div>
-    <div class="mt-1">Inserted <b>${totalInserted.toLocaleString()}</b> new · Skipped <b>${totalDup.toLocaleString()}</b> duplicates · Processed ${total.toLocaleString()} rows.</div>
-    <div class="mt-1 text-xs">OData feed: <a class="text-emerald-700 underline break-all" href="${base}/odata/${schema.key}" target="_blank">${base}/odata/${schema.key}</a></div>
-  </div>`;
-  $('confirmBtn').disabled=false;
-  loadStats();
-  setTimeout(()=>{ ['fileMeta','detectResult','uploadActions'].forEach(id=>$(id).classList.add('hidden')); pending=null; fileInput.value=''; }, 500);
+
+  // Parse via worker; buffer worker chunks into CHUNK_ROWS-sized POSTs, and
+  // apply back-pressure (worker rows arrive faster than we can upload, so we
+  // queue and drain sequentially).
+  await new Promise((resolve,reject)=>{
+    const w=new Worker('/static/parse-worker.js');
+    let buf=[];               // pending rows waiting to be POSTed
+    let uploading=false;      // a POST is in flight
+    let workerDone=false;
+    let failed=false;
+
+    const drain=async ()=>{
+      if(uploading||failed) return;
+      uploading=true;
+      try{
+        while(buf.length>=CHUNK_ROWS){
+          await sendBatch(buf.splice(0,CHUNK_ROWS));
+        }
+        if(workerDone && buf.length){
+          await sendBatch(buf.splice(0,buf.length));
+        }
+        if(workerDone && buf.length===0){ w.terminate(); resolve(); }
+      }catch(err){ failed=true; w.terminate(); reject(err); }
+      finally{ uploading=false; }
+    };
+
+    w.onmessage=(e)=>{
+      const m=e.data;
+      if(m.type==='meta'){ if(m.total>0){ grandTotal=m.total; } paint('Cleaning &amp; appending…'); }
+      else if(m.type==='rows'){ for(const r of m.rows) buf.push(r); drain(); }
+      else if(m.type==='done'){ workerDone=true; if(grandTotal<=0) grandTotal=processed+buf.length; drain(); }
+      else if(m.type==='error'){ failed=true; w.terminate(); reject(new Error(m.error)); }
+    };
+    w.onerror=(err)=>{ failed=true; w.terminate(); reject(err.message?new Error(err.message):new Error('Worker error')); };
+    w.postMessage({ file });
+  }).catch((err)=>{
+    $('uploadStatus').innerHTML=`<div class="text-red-600 bg-red-50 p-3 rounded"><b>Upload failed:</b> ${esc(String(err&&err.message?err.message:err))}<div class="text-xs mt-1">Inserted ${totalInserted.toLocaleString()} before failure.</div></div>`;
+    $('confirmBtn').disabled=false; $('cancelBtn').disabled=false;
+    throw err;
+  }).then(()=>{
+    const secs=((performance.now()-t0)/1000).toFixed(1);
+    const base=window.__BASE__;
+    $('uploadStatus').innerHTML=`<div class="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded text-sm">
+      <div class="font-semibold text-emerald-700"><i class="fas fa-circle-check mr-1"></i>Appended to <b>${esc(schema.label)}</b> in ${secs}s</div>
+      <div class="mt-1">Inserted <b>${totalInserted.toLocaleString()}</b> new · Skipped <b>${totalDup.toLocaleString()}</b> duplicates · Processed ${processed.toLocaleString()} rows.</div>
+      <div class="mt-1 text-xs">OData feed: <a class="text-emerald-700 underline break-all" href="${base}/odata/${schema.key}" target="_blank">${base}/odata/${schema.key}</a></div>
+    </div>`;
+    $('confirmBtn').disabled=false; $('cancelBtn').disabled=false;
+    loadStats();
+    setTimeout(()=>{ ['fileMeta','detectResult','uploadActions'].forEach(id=>$(id).classList.add('hidden')); pending=null; fileInput.value=''; }, 800);
+  }).catch(()=>{});
 });
 
 // ---- Stats -----------------------------------------------------------------

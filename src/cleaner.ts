@@ -234,7 +234,13 @@ export function cleanRecords(
         continue;
       }
       const idx = srcIndex.get(normHeader(col.name));
-      const raw = idx === undefined ? '' : (row[idx] ?? '');
+      let raw = idx === undefined ? '' : (row[idx] ?? '');
+      // Fallback: if this column arrived empty and it has a fillFrom source,
+      // pull the value from that source column (e.g. docId <- __Submissions-id).
+      if ((raw == null || String(raw).trim() === '') && col.fillFrom) {
+        const fidx = srcIndex.get(normHeader(col.fillFrom));
+        if (fidx !== undefined) raw = row[fidx] ?? '';
+      }
       rec[col.name] = cleanValue(col.type, raw);
     }
     cleaned.push(rec);

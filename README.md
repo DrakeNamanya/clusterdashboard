@@ -101,6 +101,21 @@ permanently lost at source. The cleaner restores the correct *format* but cannot
 recover digits that were never present in the uploaded file. Intact phone columns
 (e.g. `shg_groups_view.contact_phone_number`) are cleaned losslessly.
 
+## Large-file handling (no browser freeze)
+The browser parses uploads inside a **Web Worker** (`public/static/parse-worker.js`)
+and streams rows to the server in 400-row chunks *as they are parsed*. The main
+thread never blocks, so very large files (e.g. the 755k-row / 75 MB
+`all_trainees_view.xlsx`) upload without the "Page Unresponsive" dialog. CSV files
+are streamed line-by-line; XLSX is parsed with SheetJS inside the worker.
+
+## docId auto-fill
+`docId` is never left blank when a source value is available:
+- `shg_group.docId`, `participants_shg.docId`, `agrihubs.docId` ← `__Submissions-id`
+- `distribution_form_v2.docId` ← `unique_id`
+
+This is a fallback: an existing non-empty `docId` in the source is kept as-is;
+only blank/missing `docId` values are filled from the mapped source column.
+
 ## Deployment
 - **Platform**: Cloudflare Pages
 - **Production URL**: https://shg-data-cleaner.pages.dev
