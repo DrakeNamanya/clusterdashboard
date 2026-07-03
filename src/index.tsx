@@ -4,20 +4,38 @@ import { SCHEMAS, SCHEMA_BY_KEY } from './schemas';
 import { parseFile } from './parse';
 import { detectSchema, cleanRecords } from './cleaner';
 import {
-  appendRecords, maxSeq, queryRecords, tableStats, clearTable, physTable,
-  backfillFilled,
-} from './db';
+  appendRecords, maxSeq, queryRecords, tableStats, clearTable,
+  backfillFilled, Env,
+} from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
 } from './odata';
 import { renderPage } from './ui';
 
-type Bindings = { DB: D1Database };
+// Cloudflare env: Supabase creds are injected as secrets / vars.
+type Bindings = Env;
+
+// Build the store Env from the request context (validates configuration).
+function storeEnv(c: any): Env {
+  const url = c.env.SUPABASE_URL;
+  const key = c.env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) {
+    throw new Error('Supabase is not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing).');
+  }
+  return { SUPABASE_URL: url, SUPABASE_SERVICE_KEY: key };
+}
 
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use('/api/*', cors());
 app.use('/odata/*', cors());
+
+// Any uncaught error (e.g. Supabase not configured, transient network) becomes
+// a clean JSON 503 instead of a raw crash — the client retries 5xx.
+app.onError((err, c) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  return c.json({ error: msg }, 503);
+});
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -100,9 +118,9 @@ app.post('/api/upload', async (c) => {
     }, 413);
   }
 
-  const startSeq = (await maxSeq(c.env.DB, schema)) + 1;
+  const startSeq = (await maxSeq(storeEnv(c), schema)) + 1;
   const { cleaned } = cleanRecords(schema, parsed.headers, parsed.rows, startSeq);
-  const result = await appendRecords(c.env.DB, schema, cleaned, file.name);
+  const result = await appendRecords(storeEnv(c), schema, cleaned, file.name);
 
   return c.json({
     ok: true,
@@ -145,11 +163,11 @@ app.post('/api/append', async (c) => {
   // Continue the `No` sequence across appends when caller does not supply it.
   const startSeq = typeof body.startSeq === 'number'
     ? body.startSeq
-    : (await maxSeq(c.env.DB, schema)) + 1;
+    : (await maxSeq(storeEnv(c), schema)) + 1;
 
   const { cleaned } = cleanRecords(schema, body.headers, body.rows, startSeq);
   try {
-    const result = await appendRecords(c.env.DB, schema, cleaned, body.sourceFile || 'upload');
+    const result = await appendRecords(storeEnv(c), schema, cleaned, body.sourceFile || 'upload');
     const nextSeq = startSeq + cleaned.length;
     return c.json({ ok: true, schemaKey: schema.key, result, nextSeq });
   } catch (err) {
@@ -164,14 +182,14 @@ app.post('/api/append', async (c) => {
 app.get('/api/maxseq/:key', async (c) => {
   const schema = SCHEMA_BY_KEY[c.req.param('key')];
   if (!schema) return c.json({ error: 'Unknown table' }, 404);
-  const m = await maxSeq(c.env.DB, schema);
+  const m = await maxSeq(storeEnv(c), schema);
   return c.json({ key: schema.key, maxSeq: m });
 });
 
 // ---- Master data browse ----------------------------------------------------
 
 app.get('/api/stats', async (c) => {
-  const stats = await tableStats(c.env.DB, SCHEMAS);
+  const stats = await tableStats(storeEnv(c), SCHEMAS);
   const base = baseUrl(c.req.url);
   return c.json({
     schemas: stats.map((s) => ({
@@ -190,7 +208,7 @@ app.get('/api/data/:key', async (c) => {
   if (!schema) return c.json({ error: 'Unknown table' }, 404);
   const top = Number(c.req.query('top') ?? 50);
   const skip = Number(c.req.query('skip') ?? 0);
-  const { rows, count } = await queryRecords(c.env.DB, schema, { top, skip });
+  const { rows, count } = await queryRecords(storeEnv(c), schema, { top, skip });
   return c.json({ key: schema.key, columns: schema.columns.map((x) => x.name), count, rows });
 });
 
@@ -199,7 +217,7 @@ app.get('/api/export/:file', async (c) => {
   const key = file.replace(/\.csv$/i, '');
   const schema = SCHEMA_BY_KEY[key];
   if (!schema) return c.json({ error: 'Unknown table' }, 404);
-  const { rows } = await queryRecords(c.env.DB, schema, { top: 50000 });
+  const { rows } = await queryRecords(storeEnv(c), schema, { top: 50000 });
   const cols = schema.columns.map((x) => x.name);
   const esc = (v: string) => {
     if (v == null) return '';
@@ -219,7 +237,7 @@ app.get('/api/export/:file', async (c) => {
 app.post('/api/reset/:key', async (c) => {
   const schema = SCHEMA_BY_KEY[c.req.param('key')];
   if (!schema) return c.json({ error: 'Unknown table' }, 404);
-  await clearTable(c.env.DB, schema);
+  await clearTable(storeEnv(c), schema);
   return c.json({ ok: true, cleared: schema.key });
 });
 
@@ -233,7 +251,7 @@ app.post('/api/backfill-docid/:key?', async (c) => {
   const report: Record<string, { updated: number; pairs: string[] }> = {};
   let total = 0;
   for (const s of targets) {
-    const r = await backfillFilled(c.env.DB, s);
+    const r = await backfillFilled(storeEnv(c), s);
     if (r.pairs.length) report[s.key] = r;
     total += r.updated;
   }
@@ -283,7 +301,7 @@ app.get('/odata/:set', async (c) => {
     desc = (dir ?? '').toLowerCase() === 'desc';
   }
 
-  const { rows, count } = await queryRecords(c.env.DB, schema, {
+  const { rows, count } = await queryRecords(storeEnv(c), schema, {
     top, skip, orderBy: orderCol, desc,
   });
 
