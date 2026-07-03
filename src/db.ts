@@ -18,6 +18,34 @@ export function physTable(schema: SheetSchema): string {
   return `t_${schema.key}`;
 }
 
+/** Fast, stable string hash (FNV-1a, 32-bit hex) for composite dedup keys. */
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return ('0000000' + h.toString(16)).slice(-8);
+}
+
+/**
+ * Compute the effective dedup key for a cleaned record.
+ * - If `dedupCols` is set: key = hash of those columns joined (composite rule,
+ *   e.g. all_trainees_view excludes `_id`).
+ * - Else: use the single `dedupKey` value; if blank, fall back to a full-row
+ *   hash so blank-id rows still de-duplicate on identical content.
+ */
+export function dedupKeyFor(schema: SheetSchema, rec: Record<string, string>): string {
+  if (schema.dedupCols && schema.dedupCols.length) {
+    const joined = schema.dedupCols.map((c) => (rec[c] ?? '').trim()).join('\u0001');
+    return 'h:' + fnv1a(joined);
+  }
+  const key = (rec[schema.dedupKey] ?? '').trim();
+  if (key) return key;
+  const all = schema.columns.map((c) => (rec[c.name] ?? '').trim()).join('\u0001');
+  return 'h:' + fnv1a(all);
+}
+
 /** Create the master table for a schema if it does not exist. */
 export async function ensureTable(db: D1Database, schema: SheetSchema): Promise<void> {
   const tbl = physTable(schema);
@@ -29,11 +57,6 @@ export async function ensureTable(db: D1Database, schema: SheetSchema): Promise<
     ${colDefs}
   )`;
   await db.prepare(sql).run();
-}
-
-/** Index of the dedup key column within the schema. */
-function dedupIndex(schema: SheetSchema): number {
-  return schema.columns.findIndex((c) => c.name === schema.dedupKey);
 }
 
 /** Max value of the seq (`No`) column so appends continue the sequence. */
@@ -48,12 +71,11 @@ export async function maxSeq(db: D1Database, schema: SheetSchema): Promise<numbe
   return row?.m ?? 0;
 }
 
-/** Fetch the set of existing dedup keys (for append-only de-duplication). */
+/** Fetch the set of existing dedup keys (for append-only de-duplication).
+ * The dedup key is stored as `_rowid` (the PRIMARY KEY), so read it directly. */
 export async function existingKeys(db: D1Database, schema: SheetSchema): Promise<Set<string>> {
   const tbl = physTable(schema);
-  const idx = dedupIndex(schema);
-  const col = physCol(idx);
-  const res = await db.prepare(`SELECT ${col} AS k FROM ${tbl}`).all<{ k: string }>();
+  const res = await db.prepare(`SELECT _rowid AS k FROM ${tbl}`).all<{ k: string }>();
   return new Set((res.results ?? []).map((r) => r.k));
 }
 
@@ -75,7 +97,6 @@ export async function appendRecords(
 ): Promise<AppendResult> {
   await ensureTable(db, schema);
   const tbl = physTable(schema);
-  const dedupCol = schema.dedupKey;
 
   const now = new Date().toISOString();
   const physCols = schema.columns.map((_, i) => physCol(i));
@@ -83,15 +104,15 @@ export async function appendRecords(
   const colList = `(_rowid, _ingested_at, _source_file, ${physCols.join(', ')})`;
 
   // De-duplicate within this batch only. Cross-batch / cross-upload dedup is
-  // enforced by the PRIMARY KEY + `INSERT OR IGNORE` at the DB level, so we do
-  // NOT scan the whole table on every batch (that would be O(n^2)).
+  // enforced by the PRIMARY KEY (_rowid = dedup key) + `INSERT OR IGNORE` at the
+  // DB level, so we do NOT scan the whole table on every batch (avoids O(n^2)).
+  // The dedup key follows the schema rule: a composite of `dedupCols` when set
+  // (e.g. all_trainees_view, which EXCLUDES `_id`), else the single `dedupKey`.
   const seen = new Set<string>();
   const toInsert: string[][] = [];
 
   for (const rec of records) {
-    const key = (rec[dedupCol] ?? '').trim();
-    // If no dedup key value, synthesize a stable key from all values.
-    const effKey = key || 'row:' + schema.columns.map((c) => rec[c.name] ?? '').join('|');
+    const effKey = dedupKeyFor(schema, rec);
     if (seen.has(effKey)) continue;
     seen.add(effKey);
 

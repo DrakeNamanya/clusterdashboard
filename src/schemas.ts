@@ -21,6 +21,15 @@ export interface SheetSchema {
   filenameHints: string[];
   /** The unique identifier column used for append-only de-duplication. */
   dedupKey: string;
+  /**
+   * Optional: columns that TOGETHER define a duplicate. When set, two rows are
+   * duplicates iff ALL these columns match (a composite key), regardless of
+   * `dedupKey`. Use this when a single id is NOT the uniqueness rule.
+   * e.g. all_trainees_view: a participant may appear many times (many
+   * trainings); a row is a duplicate only when every real field matches, so we
+   * dedup on all 16 data columns EXCLUDING the system-generated `_id`.
+   */
+  dedupCols?: string[];
   /** Ordered list of target columns (order MUST be preserved on output). */
   columns: ColumnDef[];
 }
@@ -59,6 +68,15 @@ export const SCHEMAS: SheetSchema[] = [
     label: 'All_trainees_view',
     filenameHints: ['all_trainees_view', 'all trainees', 'trainees_view'],
     dedupKey: '_id',
+    // A participant can be trained many times; a duplicate is when EVERY real
+    // field matches. `_id` is a system-generated submission id, so it is
+    // EXCLUDED from the duplicate check (confirmed: Option A).
+    dedupCols: [
+      'participant_name', 'participant_id', 'group_id', 'training_type',
+      'activity_date', 'data_collector', 'group_name', 'sex', 'district',
+      'subcounty', 'Parish', 'Village', 'Disability_status',
+      'Employment_status', 'Employment_sector', 'Do_for_living',
+    ],
     columns: cols(
       '_id,participant_name,participant_id,group_id,training_type,activity_date,data_collector,group_name,sex,district,subcounty,Parish,Village,Disability_status,Employment_status,Employment_sector,Do_for_living',
       { activity_date: 'date' }

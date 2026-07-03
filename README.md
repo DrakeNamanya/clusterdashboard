@@ -37,8 +37,15 @@ fixed output schema and a master table.
 - **Text**: trimmed, internal whitespace collapsed (meaning preserved, casing kept).
 - **`No` column** (Sheet 1 only): auto-incrementing sequence, continued across
   appends.
-- **Append-only de-duplication**: rows whose dedup key (`_id`) already exists are
+- **Append-only de-duplication**: rows whose dedup key already exists are
   skipped (enforced by the D1 PRIMARY KEY + `INSERT OR IGNORE`, O(1) per row).
+  - Most templates dedup on `_id`.
+  - **`all_trainees_view` is special**: a participant can be trained many times,
+    so a row is a duplicate only when **all real fields match** (participant,
+    training_type, activity_date, group, location, etc.). The system-generated
+    `_id` is **excluded** from the duplicate check; dedup uses a hash of the 16
+    data columns. Identical person+training+date rows collapse to one; genuine
+    multi-training rows are kept.
 
 ## How to Use (Web UI)
 1. Open the app.
