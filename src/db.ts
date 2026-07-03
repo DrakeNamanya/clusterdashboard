@@ -136,13 +136,27 @@ export async function appendRecords(
 
   // Execute all statements for this batch in a single D1 batch call and sum
   // the actual rows written (rows_written reflects INSERT OR IGNORE result).
+  // D1 can intermittently return a transient error (surfaces as HTTP 503) when
+  // busy, so retry each sub-batch a few times with backoff.
   let inserted = 0;
-  const BATCH = 30;
+  const BATCH = 20;
   for (let i = 0; i < stmts.length; i += BATCH) {
-    const res = await db.batch(stmts.slice(i, i + BATCH));
-    for (const r of res) {
-      const rw = (r.meta && (r.meta as any).changes) ?? 0;
-      inserted += rw;
+    const slice = stmts.slice(i, i + BATCH);
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const res = await db.batch(slice);
+        for (const r of res) {
+          const rw = (r.meta && (r.meta as any).changes) ?? 0;
+          inserted += rw;
+        }
+        break;
+      } catch (err) {
+        attempt++;
+        if (attempt >= 4) throw err;
+        await new Promise((r) => setTimeout(r, 150 * attempt));
+      }
     }
   }
 
@@ -206,6 +220,42 @@ export async function queryRecords(
 export async function clearTable(db: D1Database, schema: SheetSchema): Promise<void> {
   await ensureTable(db, schema);
   await db.prepare(`DELETE FROM ${physTable(schema)}`).run();
+}
+
+/**
+ * Backfill any column that has a `fillFrom` rule (e.g. docId <- __Submissions-id
+ * / unique_id) for rows already stored with an empty target value. This repairs
+ * data that was ingested before the fill rule existed. Operates directly on the
+ * physical columns via a single UPDATE per schema.
+ */
+export async function backfillFilled(
+  db: D1Database,
+  schema: SheetSchema
+): Promise<{ updated: number; pairs: string[] }> {
+  await ensureTable(db, schema);
+  const tbl = physTable(schema);
+  const pairs: string[] = [];
+  let updated = 0;
+
+  for (let i = 0; i < schema.columns.length; i++) {
+    const col = schema.columns[i];
+    if (!col.fillFrom) continue;
+    const srcIdx = schema.columns.findIndex((x) => x.name === col.fillFrom);
+    if (srcIdx < 0) continue;
+
+    const tgt = physCol(i);
+    const src = physCol(srcIdx);
+    // Fill target from source where target is empty/null AND source has a value.
+    const sql =
+      `UPDATE ${tbl} SET ${tgt} = ${src} ` +
+      `WHERE (${tgt} IS NULL OR ${tgt} = '') AND ${src} IS NOT NULL AND ${src} <> ''`;
+    const res = await db.prepare(sql).run();
+    const n = (res.meta && (res.meta as any).changes) ?? 0;
+    updated += n;
+    pairs.push(`${col.name}<-${col.fillFrom}:${n}`);
+  }
+
+  return { updated, pairs };
 }
 
 /** Row count per master table for the dashboard. */

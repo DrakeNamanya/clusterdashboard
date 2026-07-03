@@ -5,6 +5,7 @@ import { parseFile } from './parse';
 import { detectSchema, cleanRecords } from './cleaner';
 import {
   appendRecords, maxSeq, queryRecords, tableStats, clearTable, physTable,
+  backfillFilled,
 } from './db';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -147,10 +148,16 @@ app.post('/api/append', async (c) => {
     : (await maxSeq(c.env.DB, schema)) + 1;
 
   const { cleaned } = cleanRecords(schema, body.headers, body.rows, startSeq);
-  const result = await appendRecords(c.env.DB, schema, cleaned, body.sourceFile || 'upload');
-  const nextSeq = startSeq + cleaned.length;
-
-  return c.json({ ok: true, schemaKey: schema.key, result, nextSeq });
+  try {
+    const result = await appendRecords(c.env.DB, schema, cleaned, body.sourceFile || 'upload');
+    const nextSeq = startSeq + cleaned.length;
+    return c.json({ ok: true, schemaKey: schema.key, result, nextSeq });
+  } catch (err) {
+    return c.json(
+      { error: `Storage error: ${err instanceof Error ? err.message : String(err)}` },
+      503
+    );
+  }
 });
 
 // Lightweight: return the current maxSeq so the client can continue numbering.
@@ -216,13 +223,46 @@ app.post('/api/reset/:key', async (c) => {
   return c.json({ ok: true, cleared: schema.key });
 });
 
+// Backfill fill-from columns (e.g. docId) on rows stored before the rule
+// existed. POST /api/backfill-docid           -> all schemas
+// POST /api/backfill-docid/:key               -> one schema
+app.post('/api/backfill-docid/:key?', async (c) => {
+  const key = c.req.param('key');
+  const targets = key ? [SCHEMA_BY_KEY[key]].filter(Boolean) : SCHEMAS;
+  if (key && targets.length === 0) return c.json({ error: 'Unknown table' }, 404);
+  const report: Record<string, { updated: number; pairs: string[] }> = {};
+  let total = 0;
+  for (const s of targets) {
+    const r = await backfillFilled(c.env.DB, s);
+    if (r.pairs.length) report[s.key] = r;
+    total += r.updated;
+  }
+  return c.json({ ok: true, totalUpdated: total, report });
+});
+
 // ---- OData v4 endpoints (for Power BI) -------------------------------------
 
-app.get('/odata', (c) => c.json(serviceDocument(baseUrl(c.req.url))));
-app.get('/odata/', (c) => c.json(serviceDocument(baseUrl(c.req.url))));
+// Power BI's OData connector is strict: JSON payloads MUST advertise the OData
+// content type and version, otherwise it rejects the URL with
+// "neither points to an OData service or a feed".
+const ODATA_JSON = 'application/json;odata.metadata=minimal;charset=utf-8';
+function odataJson(c: any, obj: unknown) {
+  return c.body(JSON.stringify(obj), 200, {
+    'Content-Type': ODATA_JSON,
+    'OData-Version': '4.0',
+    'Access-Control-Allow-Origin': '*',
+  });
+}
+
+app.get('/odata', (c) => odataJson(c, serviceDocument(baseUrl(c.req.url))));
+app.get('/odata/', (c) => odataJson(c, serviceDocument(baseUrl(c.req.url))));
 
 app.get('/odata/$metadata', (c) =>
-  c.body(metadataDocument(), 200, { 'Content-Type': 'application/xml' })
+  c.body(metadataDocument(), 200, {
+    'Content-Type': 'application/xml;charset=utf-8',
+    'OData-Version': '4.0',
+    'Access-Control-Allow-Origin': '*',
+  })
 );
 
 app.get('/odata/:set', async (c) => {
@@ -255,7 +295,7 @@ app.get('/odata/:set', async (c) => {
   }
 
   const body = entitySetResponse(baseUrl(c.req.url), schema, rows, count, includeCount, nextLink);
-  return c.json(body);
+  return odataJson(c, body);
 });
 
 // ---- Frontend --------------------------------------------------------------

@@ -165,12 +165,23 @@ $('cancelBtn').addEventListener('click',resetUpload);
 function resetUpload(){ pending=null; fileInput.value=''; ['fileMeta','detectResult','uploadActions','uploadStatus'].forEach(id=>$(id).classList.add('hidden')); }
 
 // ---- Chunked streaming upload (parse in worker, upload as chunks arrive) ---
-const CHUNK_ROWS = 400;   // rows per POST to /api/append
+// Size each POST so the server issues a bounded number of D1 statements.
+// Wide tables (e.g. distribution_form_v2 = 61 cols) force 1 row per INSERT
+// statement, so we send fewer rows per request to stay well under Cloudflare's
+// D1 subrequest/time limits (which otherwise surface as HTTP 503).
+function chunkRowsFor(schema){
+  const nCols = schema.columns.length;
+  const perRow = 3 + nCols;
+  const rowsPerStmt = Math.max(1, Math.floor(90 / perRow));
+  // Aim for <= ~120 INSERT statements per request.
+  return Math.max(50, Math.min(400, rowsPerStmt * 120));
+}
 
 $('confirmBtn').addEventListener('click', async ()=>{
   if(!pending) return;
   const { file, headers, detection } = pending;
   const schema = detection.schema;
+  const CHUNK_ROWS = chunkRowsFor(schema);
   $('confirmBtn').disabled=true; $('cancelBtn').disabled=true;
   $('uploadStatus').classList.remove('hidden');
 
@@ -196,18 +207,32 @@ $('confirmBtn').addEventListener('click', async ()=>{
   paint('Reading file…');
 
   // Upload a batch of raw rows to the server (server cleans + dedups).
+  // Retry transient failures (HTTP 503 / network) with backoff so a busy D1
+  // moment doesn't abort a large upload.
   async function sendBatch(rows){
     if(!rows.length) return true;
-    const res=await fetch('/api/append',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ schemaKey:schema.key, headers, rows, sourceFile:file.name, startSeq:seq }),
-    });
-    if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
-    const d=await res.json();
-    totalInserted+=d.result.inserted; totalDup+=d.result.duplicatesSkipped;
-    seq=d.nextSeq; processed+=rows.length;
-    paint();
-    return true;
+    const payload=JSON.stringify({ schemaKey:schema.key, headers, rows, sourceFile:file.name, startSeq:seq });
+    let lastErr;
+    for(let attempt=1; attempt<=5; attempt++){
+      try{
+        const res=await fetch('/api/append',{ method:'POST', headers:{'Content-Type':'application/json'}, body:payload });
+        if(res.status===503 || res.status===429 || res.status>=500){
+          lastErr=new Error('HTTP '+res.status+' (server busy)');
+          await new Promise(r=>setTimeout(r, 400*attempt)); continue;
+        }
+        if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
+        const d=await res.json();
+        totalInserted+=d.result.inserted; totalDup+=d.result.duplicatesSkipped;
+        seq=d.nextSeq; processed+=rows.length;
+        paint();
+        return true;
+      }catch(err){
+        lastErr=err;
+        if(attempt>=5) break;
+        await new Promise(r=>setTimeout(r, 400*attempt));
+      }
+    }
+    throw lastErr||new Error('Upload failed');
   }
 
   // Parse via worker; buffer worker chunks into CHUNK_ROWS-sized POSTs, and
@@ -280,9 +305,45 @@ async function loadStats(){
       </div>
     </div>`).join('');
   grid.querySelectorAll('.previewBtn').forEach(b=>b.addEventListener('click',()=>previewTable(b.dataset.key,b.dataset.label)));
-  grid.querySelectorAll('.resetBtn').forEach(b=>b.addEventListener('click',async()=>{ if(!confirm('Clear all records in '+b.dataset.key+'? This cannot be undone.'))return; await fetch('/api/reset/'+b.dataset.key,{method:'POST'}); loadStats(); }));
+  grid.querySelectorAll('.resetBtn').forEach(b=>b.addEventListener('click',async()=>{
+    const key=b.dataset.key;
+    if(!window.confirm('Clear ALL records in "'+key+'"? This cannot be undone.')) return;
+    const orig=b.innerHTML; b.disabled=true; b.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>Resetting…';
+    try{
+      const res=await fetch('/api/reset/'+key,{method:'POST'});
+      if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
+      await res.json();
+      await loadStats();          // rebuilds the grid; button element is replaced
+    }catch(err){
+      b.disabled=false; b.innerHTML=orig;
+      alert('Reset failed: '+(err&&err.message?err.message:err));
+    }
+  }));
 }
 $('refreshBtn').addEventListener('click',loadStats);
+
+// Backfill empty docId columns on existing rows (docId <- __Submissions-id / unique_id).
+const backfillBtn=$('backfillBtn');
+if(backfillBtn) backfillBtn.addEventListener('click',async()=>{
+  const s=$('backfillStatus');
+  backfillBtn.disabled=true; const orig=backfillBtn.innerHTML;
+  backfillBtn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>Filling…';
+  s.classList.remove('hidden'); s.className='mb-3 text-sm text-slate-500'; s.textContent='Filling empty docId values from source columns…';
+  try{
+    const res=await fetch('/api/backfill-docid',{method:'POST'});
+    if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
+    const d=await res.json();
+    const detail=Object.entries(d.report||{}).map(([k,v])=>`${k}: ${v.updated}`).join(' · ')||'no empty docId found';
+    s.className='mb-3 text-sm text-emerald-700 bg-emerald-50 border-l-4 border-emerald-500 p-2 rounded';
+    s.innerHTML=`<i class="fas fa-circle-check mr-1"></i>Filled <b>${d.totalUpdated.toLocaleString()}</b> docId values. (${esc(detail)})`;
+    loadStats();
+  }catch(err){
+    s.className='mb-3 text-sm text-red-700 bg-red-50 p-2 rounded';
+    s.textContent='Backfill failed: '+(err&&err.message?err.message:err);
+  }finally{
+    backfillBtn.disabled=false; backfillBtn.innerHTML=orig;
+  }
+});
 
 async function previewTable(key,label){
   const res=await fetch('/api/data/'+key+'?top=100'); const data=await res.json();
