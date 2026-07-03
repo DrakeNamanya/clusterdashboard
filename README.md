@@ -7,8 +7,32 @@
   to a master table **without duplicating** previously saved rows, and publish
   the master data through an **OData v4 feed** so Power BI can connect and refresh
   automatically.
-- **Tech Stack**: Hono + TypeScript on Cloudflare Pages/Workers, Cloudflare D1
-  (SQLite) for storage, SheetJS for in-browser parsing, Tailwind CSS UI.
+- **Tech Stack**: Hono + TypeScript on Cloudflare Pages/Workers, **Supabase
+  (Postgres) via PostgREST** for storage, SheetJS for in-browser parsing,
+  Tailwind CSS UI.
+
+## Storage Architecture (Supabase)
+Storage was migrated from Cloudflare D1 to **Supabase Postgres** to eliminate the
+per-request statement/parameter limits that were causing `HTTP 503` on large
+uploads (Postgres has no such limits, so bulk inserts go through in one request).
+
+- **One table `public.records`**: `(id, template, dedup_key, seq, source_file,
+  ingested_at, data JSONB)` with `UNIQUE (template, dedup_key)`.
+- **Append-only de-dup**: inserts use PostgREST upsert with
+  `Prefer: resolution=ignore-duplicates` — re-uploading the same rows never
+  duplicates; the response body returns only actually-inserted rows for an exact
+  count.
+- **6 flattened views** (`shg_groups_view`, `all_trainees_view`, `agrihubs`,
+  `distribution_form_v2`, `participants_shg`, `shg_group`) expose the JSONB as
+  clean, exact-named typed columns for Power BI / OData / CSV export.
+- **Credentials** are stored as Cloudflare Pages secrets `SUPABASE_URL` and
+  `SUPABASE_SERVICE_KEY` (never in code). Local dev uses `.dev.vars` (gitignored).
+
+### One-time setup
+Run `supabase/schema.sql` once in **Supabase → SQL Editor** to create the
+`records` table + indexes + the 6 views. This is the only manual step; DDL
+cannot be run from the sandbox (the Supabase DB password is separate from the
+service key and the direct DB host is IPv6-only).
 
 ## Supported Templates (6)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
