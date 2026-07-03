@@ -96,6 +96,9 @@ recover digits that were never present in the uploaded file. Intact phone column
 
 ## Deployment
 - **Platform**: Cloudflare Pages
-- **Database**: Cloudflare D1 `webapp-production`
-- **Status**: see below
+- **Production URL**: https://shg-data-cleaner.pages.dev
+- **OData service (Power BI)**: https://shg-data-cleaner.pages.dev/odata/
+- **OData metadata**: https://shg-data-cleaner.pages.dev/odata/$metadata
+- **Database**: Cloudflare D1 `webapp-production` (id `f1220816-22fb-4f14-86f4-42413d60186c`)
+- **Status**: ✅ Active
 - **Last Updated**: 2026-07-03
