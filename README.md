@@ -116,6 +116,25 @@ are streamed line-by-line; XLSX is parsed with SheetJS inside the worker.
 This is a fallback: an existing non-empty `docId` in the source is kept as-is;
 only blank/missing `docId` values are filled from the mapped source column.
 
+**Backfill for old data:** rows ingested before this rule can be repaired with
+the **"Fill docId"** button on the dashboard, or `POST /api/backfill-docid`
+(all schemas) / `POST /api/backfill-docid/:key` (one schema). It fills empty
+docId cells from the mapped source column in place.
+
+## Power BI / OData connection
+Connect Power BI with **Get Data → OData feed** and use the **service root**:
+`https://shg-data-cleaner.pages.dev/odata/` (trailing slash). Then pick the
+tables you need. All OData responses send `OData-Version: 4.0` and
+`Content-Type: application/json;odata.metadata=minimal`, which Power BI requires
+to recognize the feed. Individual feeds: `…/odata/<table>` e.g.
+`…/odata/all_trainees_view`.
+
+## Upload reliability (no more HTTP 503)
+Chunk size adapts to table width (wide tables like `distribution_form_v2` with
+61 columns send fewer rows per request), the server retries transient D1 errors
+with backoff, and the client retries HTTP 503/5xx per chunk — so large uploads
+complete instead of failing mid-way.
+
 ## Deployment
 - **Platform**: Cloudflare Pages
 - **Production URL**: https://shg-data-cleaner.pages.dev
