@@ -326,6 +326,46 @@ export async function refreshNewYouth(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+/**
+ * Trainings by Frontliners dashboard aggregate (calls the Postgres RPC
+ * `frontliner_dash` over the compact `frontliner_rows` table).
+ */
+export async function frontlinerDash(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string } = {}
+): Promise<any> {
+  const url = restBase(env) + '/rpc/frontliner_dash';
+  const body = {
+    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+    p_from: opts.from || null,
+    p_to: opts.to || null,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`frontliner_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild the frontliner_rows table from records (heavy; call after uploads). */
+export async function refreshFrontliners(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_frontliner_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_frontliner_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =

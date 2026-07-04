@@ -29,6 +29,9 @@ export function renderPage(base: string): string {
         <a href="/monthly-new-youth" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-semibold">
           <i class="fas fa-user-plus"></i> Monthly New Youth
         </a>
+        <a href="/frontliners" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold">
+          <i class="fas fa-table"></i> Trainings by Frontliners
+        </a>
       </div>
     </div>
   </header>

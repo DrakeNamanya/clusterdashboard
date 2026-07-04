@@ -6,7 +6,8 @@ import { detectSchema, cleanRecords } from './cleaner';
 import {
   appendRecords, maxSeq, queryRecords, tableStats, clearTable,
   backfillFilled, clusterTrainings, refreshClusterSummary,
-  newYouthDash, refreshNewYouth, Env,
+  newYouthDash, refreshNewYouth,
+  frontlinerDash, refreshFrontliners, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -14,6 +15,7 @@ import {
 import { renderPage } from './ui';
 import { renderClusterTrainings } from './cluster';
 import { renderMonthlyNewYouth } from './newyouth';
+import { renderFrontliners } from './frontliner';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -372,6 +374,32 @@ app.get('/api/new-youth', async (c) => {
 // Rebuild the new_youth first-touch table (run after new uploads change data).
 app.post('/api/new-youth/refresh', async (c) => {
   const n = await refreshNewYouth(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
+// ---- Trainings by Frontliners dashboard -----------------------------------
+
+// Page (TRAININGS table by data_collector).
+app.get('/frontliners', (c) => c.html(renderFrontliners(baseUrl(c.req.url))));
+
+// Aggregated data feed (per-collector KPIs + list columns), with filters.
+app.get('/api/frontliners', async (c) => {
+  const q = c.req.query();
+  const districts = (q.districts || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const data = await frontlinerDash(storeEnv(c), {
+    districts,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Rebuild the frontliner_rows table (heavy; run after uploads change data).
+app.post('/api/frontliners/refresh', async (c) => {
+  const n = await refreshFrontliners(storeEnv(c));
   return c.json({ ok: true, rows: n });
 });
 

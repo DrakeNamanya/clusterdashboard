@@ -56,15 +56,32 @@ export function renderMonthlyNewYouth(base: string): string {
       <!-- Left: date slicer + district filter -->
       <aside class="col-span-12 md:col-span-2 space-y-4">
         <div class="card p-3">
-          <div class="flex items-center justify-between text-xs mb-2 gap-1">
-            <input id="fromDate" type="date" class="bg-transparent border border-[var(--line)] rounded px-1.5 py-1 text-[11px] w-full" />
-            <input id="toDate" type="date" class="bg-transparent border border-[var(--line)] rounded px-1.5 py-1 text-[11px] w-full" />
+          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-2">Period</div>
+          <!-- Quick month/period pickers -->
+          <div class="flex gap-1 mb-2">
+            <select id="monthPick" class="flex-1 bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[11px]"></select>
           </div>
-          <input id="dateRange" type="range" min="0" max="100" value="100" class="w-full" />
+          <div class="grid grid-cols-3 gap-1 mb-2">
+            <button data-preset="thismonth" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)]">Month</button>
+            <button data-preset="quarter" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)]">Quarter</button>
+            <button data-preset="year" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)]">Year</button>
+          </div>
+          <!-- Explicit from/to (kept in sync with the picker) -->
+          <label class="block text-[10px] text-[var(--muted)] mb-0.5">From</label>
+          <input id="fromDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[11px] w-full mb-1.5" />
+          <label class="block text-[10px] text-[var(--muted)] mb-0.5">To</label>
+          <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[11px] w-full" />
         </div>
         <div class="card p-3">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-2">District</div>
-          <div id="districtList" class="scrollbar-thin overflow-y-auto max-h-[430px] pr-1 text-sm">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold">District</div>
+          </div>
+          <input id="distSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[11px] mb-2" />
+          <div class="flex gap-1 mb-2">
+            <button id="selAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)] font-semibold">Select all</button>
+            <button id="clrAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)] font-semibold">Unselect all</button>
+          </div>
+          <div id="districtList" class="scrollbar-thin overflow-y-auto max-h-[380px] pr-1 text-sm">
             <div class="text-[var(--muted)] text-xs">Loading…</div>
           </div>
         </div>
@@ -140,38 +157,91 @@ export function renderMonthlyNewYouth(base: string): string {
 
   <script>
     const fmt = (n) => (n ?? 0).toLocaleString('en-US');
-    let districts = [];       // all district names (may include "(Blank)")
-    let selected = new Set(); // selected districts (empty => all)
+    let districts = [];         // all district names
+    let selected = new Set();   // explicit selected districts
+    let allMode = true;         // true => all districts (default), ignores set
 
+    // For the API: allMode => '' (server treats empty as all); otherwise the list.
     function selectedParam(){
-      return selected.size ? [...selected].join(',') : '';
+      if (allMode) return '';
+      return [...selected].join(',');
     }
 
     function renderDistricts(){
       const box = document.getElementById('districtList');
-      const all = selected.size === 0;
-      let html = '<label class="dist-item font-semibold">'
-        + '<input type="checkbox" id="selAll" ' + (all ? 'checked' : '') + '/>'
-        + '<span>Select all</span></label>';
+      const q = (document.getElementById('distSearch').value || '').toLowerCase();
+      let html = '';
       for (const d of districts){
-        const on = all || selected.has(d);
+        if (q && !d.toLowerCase().includes(q)) continue;
+        const on = allMode || selected.has(d);
         html += '<label class="dist-item"><input type="checkbox" data-d="'+d+'" '
              + (on ? 'checked' : '') + '/><span>'+d+'</span></label>';
       }
+      if (!html) html = '<div class="text-[var(--muted)] text-xs py-2">No match.</div>';
       box.innerHTML = html;
-      document.getElementById('selAll').addEventListener('change', ()=>{
-        selected.clear();
-        renderDistricts(); load();
-      });
       box.querySelectorAll('input[data-d]').forEach(cb=>{
         cb.addEventListener('change', ()=>{
           const d = cb.getAttribute('data-d');
-          if (selected.size === 0){ districts.forEach(x=>selected.add(x)); }
+          // Leaving "all mode": seed the set with every district first.
+          if (allMode){ selected = new Set(districts); allMode = false; }
           if (cb.checked) selected.add(d); else selected.delete(d);
-          if (selected.size === districts.length) selected.clear();
+          // Re-entering "all mode" when everything is ticked again.
+          if (selected.size === districts.length){ allMode = true; }
           renderDistricts(); load();
         });
       });
+    }
+
+    function selectAll(){ allMode = true; selected = new Set(); renderDistricts(); load(); }
+    function unselectAll(){ allMode = false; selected = new Set(); renderDistricts(); load(); }
+
+    // Build the month dropdown for the target period Oct 2025 .. Sep 2026.
+    function buildMonthPicker(){
+      const sel = document.getElementById('monthPick');
+      const months = [];
+      let d = new Date(2025,9,1); // Oct 2025
+      const end = new Date(2026,8,1); // Sep 2026
+      while (d <= end){ months.push(new Date(d)); d.setMonth(d.getMonth()+1); }
+      const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      let opts = '<option value="">— pick a month —</option>';
+      for (const m of months){
+        const y=m.getFullYear(), mo=m.getMonth();
+        const val = y+'-'+String(mo+1).padStart(2,'0');
+        opts += '<option value="'+val+'">'+names[mo]+' '+y+'</option>';
+      }
+      sel.innerHTML = opts;
+      sel.value = '2026-06'; // default June 2026
+      sel.addEventListener('change', ()=>{
+        if (!sel.value) return;
+        const [y,mo] = sel.value.split('-').map(Number);
+        const first = y+'-'+String(mo).padStart(2,'0')+'-01';
+        const last = new Date(y, mo, 0).getDate();
+        setDates(first, y+'-'+String(mo).padStart(2,'0')+'-'+String(last).padStart(2,'0'));
+      });
+    }
+
+    function setDates(from, to){
+      document.getElementById('fromDate').value = from;
+      document.getElementById('toDate').value = to;
+      load();
+    }
+
+    function applyPreset(kind){
+      const f = document.getElementById('fromDate').value || '2026-06-01';
+      const base = new Date(f + 'T00:00:00');
+      const y = base.getFullYear(), mo = base.getMonth();
+      if (kind === 'thismonth'){
+        const last = new Date(y, mo+1, 0).getDate();
+        setDates(f.slice(0,8)+'01', y+'-'+String(mo+1).padStart(2,'0')+'-'+String(last).padStart(2,'0'));
+      } else if (kind === 'quarter'){
+        const endM = new Date(y, mo+2, 1); // 3-month window
+        const last = new Date(endM.getFullYear(), endM.getMonth()+1, 0).getDate();
+        setDates(y+'-'+String(mo+1).padStart(2,'0')+'-01',
+                 endM.getFullYear()+'-'+String(endM.getMonth()+1).padStart(2,'0')+'-'+String(last).padStart(2,'0'));
+      } else if (kind === 'year'){
+        // full programme year Oct 2025 -> Sep 2026
+        setDates('2025-10-01','2026-09-30');
+      }
     }
 
     function renderArea(series){
@@ -227,7 +297,15 @@ export function renderMonthlyNewYouth(base: string): string {
         + labels + xlab;
     }
 
+    function zeroCards(){
+      ['kTotal','kFemale','kPwd','kFemalePwd','kWork','kFemaleWork','kPwdWork','kFemalePwdWork','kTargetM','kTargetP']
+        .forEach(id=>document.getElementById(id).textContent = '0');
+      renderArea([]);
+    }
+
     async function load(){
+      // Explicit "unselect all" (not all-mode, nothing chosen) => show zeros.
+      if (!allMode && selected.size === 0){ zeroCards(); return; }
       const params = new URLSearchParams();
       const dp = selectedParam(); if (dp) params.set('districts', dp);
       const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
@@ -257,9 +335,15 @@ export function renderMonthlyNewYouth(base: string): string {
     // Default the date range to June 2026 (matches the reference dashboard view).
     document.getElementById('fromDate').value = '2026-06-01';
     document.getElementById('toDate').value = '2026-06-30';
+    buildMonthPicker();
 
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
+    document.getElementById('distSearch').addEventListener('input', renderDistricts);
+    document.getElementById('selAllBtn').addEventListener('click', selectAll);
+    document.getElementById('clrAllBtn').addEventListener('click', unselectAll);
+    document.querySelectorAll('.preset').forEach(b=>
+      b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
 
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{
       const btn = e.currentTarget; const old = btn.innerHTML;

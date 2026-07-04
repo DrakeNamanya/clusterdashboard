@@ -95,21 +95,48 @@ returns jsonb
 language sql
 stable
 as $$
-  with f as (
-    select * from public.new_youth
-    where (p_districts is null or array_length(p_districts,1) is null
-           or district = any(select upper(x) from unnest(p_districts) x))
-      and (p_from is null or first_date >= p_from)
-      and (p_to   is null or first_date <= p_to)
+  with sel as (
+    -- normalised selected districts (null/empty => all)
+    select case when p_districts is null or array_length(p_districts,1) is null
+                then null
+                else (select array_agg(upper(x)) from unnest(p_districts) x) end as dl
+  ),
+  f as (
+    select ny.* from public.new_youth ny, sel
+    where (sel.dl is null or ny.district = any(sel.dl))
+      and (p_from is null or ny.first_date >= p_from)
+      and (p_to   is null or ny.first_date <= p_to)
   ),
   series as (
     select first_date as d, count(*)::bigint as v
     from f group by first_date order by first_date
+  ),
+  -- Target rows for selected districts whose month overlaps the selected range.
+  -- A month (first day = rt.month) is "in range" when its month-window
+  -- [month, month + 1 month) intersects [p_from, p_to].
+  tsel as (
+    select rt.district, rt.month, rt.target
+    from public.reach_targets rt, sel
+    where (sel.dl is null or rt.district = any(sel.dl))
+      and (p_to   is null or rt.month <= p_to)
+      and (p_from is null or (rt.month + interval '1 month' - interval '1 day') >= p_from)
+  ),
+  tgt as (
+    select
+      coalesce(sum(target),0)                            as period_total,
+      count(distinct month)                              as n_months,
+      count(distinct district)                           as n_districts
+    from tsel
   )
   select jsonb_build_object(
     'new_total_reach',           (select count(*) from f),
-    'monthly_target',            p_target,
-    'target_selected_period',    p_target,
+    -- Target_Selected_Period = sum of monthly targets over selected districts+months
+    'target_selected_period',    (select round(period_total)::int from tgt),
+    -- Monthly_Target = per-month target (period total / months), falls back to
+    -- the supplied p_target when no target rows match the selection.
+    'monthly_target',            (select case when n_months > 0
+                                              then round(period_total / n_months)::int
+                                              else p_target end from tgt),
     'new_female_reach',          (select count(*) from f where is_female),
     'new_pwds_reach',            (select count(*) from f where is_pwd),
     'new_female_pwds_reach',     (select count(*) from f where female_pwd),
@@ -119,7 +146,11 @@ as $$
     'new_female_pwds_in_work',   (select count(*) from f where farming_fpwd),
     'by_date', (select coalesce(jsonb_agg(jsonb_build_object('date',to_char(d,'YYYY-MM-DD'),'value',v) order by d), '[]'::jsonb) from series),
     'districts', (select coalesce(jsonb_agg(distinct district order by district), '[]'::jsonb)
-                  from public.new_youth where district is not null)
+                  from (
+                    select district from public.new_youth where district is not null
+                    union
+                    select district from public.reach_targets where district is not null
+                  ) u)
   );
 $$;
 
