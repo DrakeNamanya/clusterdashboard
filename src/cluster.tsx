@@ -190,6 +190,11 @@ export function renderClusterTrainings(base: string): string {
       }
     }
 
+    // Default the date range to June 2026 (matches the reference dashboard view
+    // and keeps queries fast). Users can widen it as needed.
+    document.getElementById('fromDate').value = '2026-06-01';
+    document.getElementById('toDate').value = '2026-06-30';
+
     // Date inputs
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
