@@ -22,9 +22,14 @@ export function renderPage(base: string): string {
         <h1 class="text-xl font-bold">SHG Data Cleaner &amp; Consolidator</h1>
         <p class="text-slate-300 text-sm">Clean &amp; standardize sheets, append to master tables, publish an OData feed for Power BI.</p>
       </div>
-      <a href="/cluster-trainings" class="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold">
-        <i class="fas fa-chart-simple"></i> Cluster Trainings
-      </a>
+      <div class="ml-auto flex items-center gap-2">
+        <a href="/cluster-trainings" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold">
+          <i class="fas fa-chart-simple"></i> Cluster Trainings
+        </a>
+        <a href="/monthly-new-youth" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-semibold">
+          <i class="fas fa-user-plus"></i> Monthly New Youth
+        </a>
+      </div>
     </div>
   </header>
 

@@ -5,13 +5,15 @@ import { parseFile } from './parse';
 import { detectSchema, cleanRecords } from './cleaner';
 import {
   appendRecords, maxSeq, queryRecords, tableStats, clearTable,
-  backfillFilled, clusterTrainings, refreshClusterSummary, Env,
+  backfillFilled, clusterTrainings, refreshClusterSummary,
+  newYouthDash, refreshNewYouth, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
 } from './odata';
 import { renderPage } from './ui';
 import { renderClusterTrainings } from './cluster';
+import { renderMonthlyNewYouth } from './newyouth';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -345,6 +347,32 @@ app.get('/api/cluster-trainings', async (c) => {
 app.post('/api/cluster-trainings/refresh', async (c) => {
   const n = await refreshClusterSummary(storeEnv(c));
   return c.json({ ok: true, summaryRows: n });
+});
+
+// ---- Monthly New Youth Reached dashboard ----------------------------------
+
+// Page (Power BI-style "first touch" dashboard).
+app.get('/monthly-new-youth', (c) => c.html(renderMonthlyNewYouth(baseUrl(c.req.url))));
+
+// Aggregated data feed (10 KPIs + area chart series), with filters.
+app.get('/api/new-youth', async (c) => {
+  const q = c.req.query();
+  const districts = (q.districts || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const data = await newYouthDash(storeEnv(c), {
+    districts,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Rebuild the new_youth first-touch table (run after new uploads change data).
+app.post('/api/new-youth/refresh', async (c) => {
+  const n = await refreshNewYouth(storeEnv(c));
+  return c.json({ ok: true, rows: n });
 });
 
 // Expose schema definitions so the browser can detect + clean-preview locally.

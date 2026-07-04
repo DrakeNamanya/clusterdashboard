@@ -286,6 +286,46 @@ export async function refreshClusterSummary(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+/**
+ * Monthly New Youth Reached dashboard aggregate (calls the Postgres RPC
+ * `new_youth_dash` over the compact `new_youth` first-touch table).
+ */
+export async function newYouthDash(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string } = {}
+): Promise<any> {
+  const url = restBase(env) + '/rpc/new_youth_dash';
+  const body = {
+    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+    p_from: opts.from || null,
+    p_to: opts.to || null,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`new_youth_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild the new_youth first-touch table from records (call after new uploads). */
+export async function refreshNewYouth(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_new_youth', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_new_youth failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =
