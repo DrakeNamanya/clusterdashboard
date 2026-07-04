@@ -5,12 +5,13 @@ import { parseFile } from './parse';
 import { detectSchema, cleanRecords } from './cleaner';
 import {
   appendRecords, maxSeq, queryRecords, tableStats, clearTable,
-  backfillFilled, Env,
+  backfillFilled, clusterTrainings, refreshClusterSummary, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
 } from './odata';
 import { renderPage } from './ui';
+import { renderClusterTrainings } from './cluster';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -319,6 +320,32 @@ app.get('/odata/:set', async (c) => {
 // ---- Frontend --------------------------------------------------------------
 
 app.get('/', (c) => c.html(renderPage(baseUrl(c.req.url))));
+
+// ---- Cluster Trainings dashboard ------------------------------------------
+
+// Page (Power BI-style dashboard).
+app.get('/cluster-trainings', (c) => c.html(renderClusterTrainings(baseUrl(c.req.url))));
+
+// Aggregated data feed for the dashboard (KPIs + bar chart), with filters.
+app.get('/api/cluster-trainings', async (c) => {
+  const q = c.req.query();
+  const districts = (q.districts || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const data = await clusterTrainings(storeEnv(c), {
+    districts,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Rebuild the summary table (run after new uploads change the data).
+app.post('/api/cluster-trainings/refresh', async (c) => {
+  const n = await refreshClusterSummary(storeEnv(c));
+  return c.json({ ok: true, summaryRows: n });
+});
 
 // Expose schema definitions so the browser can detect + clean-preview locally.
 app.get('/api/schemas', (c) =>

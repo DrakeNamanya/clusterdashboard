@@ -246,6 +246,46 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
   return out;
 }
 
+/**
+ * Cluster Trainings dashboard aggregate (calls the Postgres RPC
+ * `cluster_trainings` over the compact `cluster_summary` table).
+ */
+export async function clusterTrainings(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string } = {}
+): Promise<any> {
+  const url = restBase(env) + '/rpc/cluster_trainings';
+  const body = {
+    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+    p_from: opts.from || null,
+    p_to: opts.to || null,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`cluster_trainings failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild the cluster_summary table from records (call after new uploads). */
+export async function refreshClusterSummary(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_cluster_summary', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_cluster_summary failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =

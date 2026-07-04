@@ -18,10 +18,13 @@ export function renderPage(base: string): string {
   <header class="bg-slate-900 text-white">
     <div class="max-w-7xl mx-auto px-6 py-5 flex items-center gap-3">
       <i class="fas fa-broom text-2xl text-emerald-400"></i>
-      <div>
+      <div class="flex-1">
         <h1 class="text-xl font-bold">SHG Data Cleaner &amp; Consolidator</h1>
         <p class="text-slate-300 text-sm">Clean &amp; standardize sheets, append to master tables, publish an OData feed for Power BI.</p>
       </div>
+      <a href="/cluster-trainings" class="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold">
+        <i class="fas fa-chart-simple"></i> Cluster Trainings
+      </a>
     </div>
   </header>
 
