@@ -389,8 +389,13 @@ app.get('/api/frontliners', async (c) => {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const collectors = (q.collectors || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const data = await frontlinerDash(storeEnv(c), {
     districts,
+    collectors,
     from: q.from || undefined,
     to: q.to || undefined,
   });

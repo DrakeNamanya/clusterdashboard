@@ -45,21 +45,34 @@ export function renderFrontliners(base: string): string {
 <body>
   <div class="max-w-[1300px] mx-auto p-4 md:p-6">
 
-    <!-- Title bar -->
-    <div class="flex items-center justify-between mb-4">
+    <!-- Title + top toolbar (date range moved to top) -->
+    <div class="flex flex-wrap items-center gap-3 mb-3">
       <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
-      <div class="ttl px-8 py-2"><h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">TRAININGS</h1></div>
+      <div class="ttl px-5 py-1.5"><h1 class="text-xl md:text-2xl font-extrabold tracking-tight">TRAININGS</h1></div>
+
+      <!-- Compact date range slicer -->
+      <div class="flex items-center gap-1.5 card px-3 py-1.5">
+        <span class="text-[10px] text-[var(--muted)] uppercase font-bold mr-1">Date</span>
+        <input id="fromDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
+        <span class="text-[var(--muted)] text-xs">→</span>
+        <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
+        <button data-preset="clear" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] ml-1">All time</button>
+        <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
+        <button data-preset="year" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Year</button>
+      </div>
+
+      <span class="text-[11px] text-[var(--muted)] ml-auto"><span id="rowCount">–</span> frontliners</span>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
-        <i class="fas fa-rotate mr-1"></i> Refresh data
+        <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
 
-    <div class="grid grid-cols-12 gap-4">
+    <div class="grid grid-cols-12 gap-3">
 
-      <!-- Main table -->
-      <section class="col-span-12 md:col-span-9">
+      <!-- Main table — now much wider (10/12) -->
+      <section class="col-span-12 lg:col-span-10">
         <div class="card p-2">
-          <div class="scrollbar-thin overflow-auto max-h-[calc(100vh-190px)]">
+          <div class="scrollbar-thin overflow-auto max-h-[calc(100vh-150px)]">
             <table id="tbl">
               <thead>
                 <tr>
@@ -81,32 +94,30 @@ export function renderFrontliners(base: string): string {
         </div>
       </section>
 
-      <!-- Right: date + district filters -->
-      <aside class="col-span-12 md:col-span-3 space-y-4">
-        <div class="card p-3">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-2">Date range</div>
-          <label class="block text-[10px] text-[var(--muted)] mb-0.5">From</label>
-          <input id="fromDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px] w-full mb-1.5" />
-          <label class="block text-[10px] text-[var(--muted)] mb-0.5">To</label>
-          <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px] w-full mb-2" />
-          <div class="grid grid-cols-3 gap-1">
-            <button data-preset="clear" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">All time</button>
-            <button data-preset="thismonth" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
-            <button data-preset="year" class="preset text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Year</button>
+      <!-- Right: narrow district + frontliner filters -->
+      <aside class="col-span-12 lg:col-span-2 space-y-3">
+        <div class="card p-2.5">
+          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-1.5">District</div>
+          <input id="distSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[11px] mb-1.5" />
+          <div class="flex gap-1 mb-1.5">
+            <button id="selAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">All</button>
+            <button id="clrAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">None</button>
           </div>
-        </div>
-        <div class="card p-3">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-2">District</div>
-          <input id="distSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[12px] mb-2" />
-          <div class="flex gap-1 mb-2">
-            <button id="selAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">Select all</button>
-            <button id="clrAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">Unselect all</button>
-          </div>
-          <div id="districtList" class="scrollbar-thin overflow-y-auto max-h-[360px] pr-1 text-sm">
+          <div id="districtList" class="scrollbar-thin overflow-y-auto max-h-[180px] pr-1 text-sm">
             <div class="text-[var(--muted)] text-xs">Loading…</div>
           </div>
         </div>
-        <div class="text-[11px] text-[var(--muted)] px-1"><span id="rowCount">–</span> frontliners</div>
+        <div class="card p-2.5">
+          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-1.5">Frontliner</div>
+          <input id="collSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[11px] mb-1.5" />
+          <div class="flex gap-1 mb-1.5">
+            <button id="collAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">All</button>
+            <button id="collNoneBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">None</button>
+          </div>
+          <div id="collList" class="scrollbar-thin overflow-y-auto max-h-[300px] pr-1 text-sm">
+            <div class="text-[var(--muted)] text-xs">Loading…</div>
+          </div>
+        </div>
       </aside>
     </div>
   </div>
@@ -116,10 +127,15 @@ export function renderFrontliners(base: string): string {
     let districts = [];
     let selected = new Set();
     let allMode = true;
+    // frontliner (data_collector) filter
+    let collectors = [];
+    let collSel = new Set();
+    let collAll = true;
     let sortKey = 'youth_trained';
     let lastRows = [];
 
     function selectedParam(){ return allMode ? '' : [...selected].join(','); }
+    function collectorParam(){ return collAll ? '' : [...collSel].join(','); }
 
     function renderDistricts(){
       const box = document.getElementById('districtList');
@@ -145,6 +161,33 @@ export function renderFrontliners(base: string): string {
     }
     function selectAll(){ allMode = true; selected = new Set(); renderDistricts(); load(); }
     function unselectAll(){ allMode = false; selected = new Set(); renderDistricts(); load(); }
+
+    function renderCollectors(){
+      const box = document.getElementById('collList');
+      const q = (document.getElementById('collSearch').value || '').toLowerCase();
+      let html = '';
+      let shown = 0;
+      for (const c of collectors){
+        if (q && !c.toLowerCase().includes(q)) continue;
+        if (++shown > 400) { html += '<div class="text-[var(--muted)] text-[10px] py-1">…refine search…</div>'; break; }
+        const on = collAll || collSel.has(c);
+        html += '<label class="dist-item"><input type="checkbox" data-c="'+c+'" '
+             + (on ? 'checked' : '') + '/><span>'+c+'</span></label>';
+      }
+      if (!html) html = '<div class="text-[var(--muted)] text-xs py-2">No match.</div>';
+      box.innerHTML = html;
+      box.querySelectorAll('input[data-c]').forEach(cb=>{
+        cb.addEventListener('change', ()=>{
+          const c = cb.getAttribute('data-c');
+          if (collAll){ collSel = new Set(collectors); collAll = false; }
+          if (cb.checked) collSel.add(c); else collSel.delete(c);
+          if (collSel.size === collectors.length){ collAll = true; }
+          renderCollectors(); load();
+        });
+      });
+    }
+    function collSelectAll(){ collAll = true; collSel = new Set(); renderCollectors(); load(); }
+    function collUnselectAll(){ collAll = false; collSel = new Set(); renderCollectors(); load(); }
 
     function renderTable(rows){
       lastRows = rows;
@@ -172,8 +215,10 @@ export function renderFrontliners(base: string): string {
 
     async function load(){
       if (!allMode && selected.size === 0){ renderTable([]); return; }
+      if (!collAll && collSel.size === 0){ renderTable([]); return; }
       const params = new URLSearchParams();
       const dp = selectedParam(); if (dp) params.set('districts', dp);
+      const cp = collectorParam(); if (cp) params.set('collectors', cp);
       const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
       const t = document.getElementById('toDate').value;   if (t) params.set('to', t);
       document.getElementById('tbody').innerHTML = '<tr><td colspan="8" class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
@@ -182,6 +227,7 @@ export function renderFrontliners(base: string): string {
         if (!res.ok) throw new Error('HTTP '+res.status);
         const d = await res.json();
         if (!districts.length && d.districts){ districts = d.districts; renderDistricts(); }
+        if (!collectors.length && d.collectors){ collectors = d.collectors; renderCollectors(); }
         renderTable(d.rows || []);
       }catch(err){
         document.getElementById('tbody').innerHTML =
@@ -210,6 +256,9 @@ export function renderFrontliners(base: string): string {
     document.getElementById('distSearch').addEventListener('input', renderDistricts);
     document.getElementById('selAllBtn').addEventListener('click', selectAll);
     document.getElementById('clrAllBtn').addEventListener('click', unselectAll);
+    document.getElementById('collSearch').addEventListener('input', renderCollectors);
+    document.getElementById('collAllBtn').addEventListener('click', collSelectAll);
+    document.getElementById('collNoneBtn').addEventListener('click', collUnselectAll);
     document.querySelectorAll('.preset').forEach(b=>
       b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
     document.querySelectorAll('th.sortable').forEach(th=>

@@ -34,44 +34,45 @@ create index frontliner_rows_dist_idx on public.frontliner_rows (district);
 grant select on public.frontliner_rows to anon, service_role;
 
 -- Dashboard RPC: aggregate per data_collector, honouring district + date filters.
+-- NOTE: KPIs use plain COUNT (row/attendance based), NOT DISTINCTCOUNT — a
+-- participant can attend more than one training, so each attendance counts.
 create or replace function public.frontliner_dash(
-  p_districts text[] default null,
-  p_from      date   default null,
-  p_to        date   default null,
-  p_limit     int    default 500
+  p_districts  text[] default null,
+  p_from       date   default null,
+  p_to         date   default null,
+  p_collectors text[] default null,   -- optional data_collector filter
+  p_limit      int    default 1000
 )
 returns jsonb
 language sql
 stable
 as $$
   with sel as (
-    select case when p_districts is null or array_length(p_districts,1) is null
-                then null
-                else (select array_agg(upper(x)) from unnest(p_districts) x) end as dl
+    select
+      case when p_districts is null or array_length(p_districts,1) is null
+           then null
+           else (select array_agg(upper(x)) from unnest(p_districts) x) end as dl,
+      case when p_collectors is null or array_length(p_collectors,1) is null
+           then null else p_collectors end as cl
   ),
   f as (
     select fr.* from public.frontliner_rows fr, sel
     where (sel.dl is null or fr.district = any(sel.dl))
+      and (sel.cl is null or fr.data_collector = any(sel.cl))
       and (p_from is null or fr.day >= p_from)
       and (p_to   is null or fr.day <= p_to)
   ),
   agg as (
     select
       data_collector,
-      count(distinct participant_id) filter (where has_date and participant_id is not null) as youth_trained,
-      count(distinct participant_id) filter (where sex='Female' and participant_id is not null) as female_reached,
-      count(distinct participant_id) filter (where is_pwd and participant_id is not null) as pwds_trained,
+      count(*) filter (where has_date) as youth_trained,
+      count(*) filter (where sex='Female') as female_reached,
+      count(*) filter (where is_pwd) as pwds_trained,
       count(distinct group_id) filter (where group_id is not null) as groups_reached,
-      (select string_agg(t, ', ' order by t)
-         from (select distinct training_type t from public.frontliner_rows x
-               where x.data_collector = f.data_collector and x.training_type is not null
-                 and (p_from is null or x.day >= p_from) and (p_to is null or x.day <= p_to)
-              ) s) as training_types,
-      (select string_agg(g, ', ' order by g)
-         from (select distinct group_name g from public.frontliner_rows x
-               where x.data_collector = f.data_collector and x.group_name is not null
-                 and (p_from is null or x.day >= p_from) and (p_to is null or x.day <= p_to)
-              ) s) as group_names,
+      string_agg(distinct training_type, ', ' order by training_type)
+        filter (where training_type is not null) as training_types,
+      string_agg(distinct group_name, ', ' order by group_name)
+        filter (where group_name is not null) as group_names,
       min(district) as first_district
     from f
     where data_collector is not null
@@ -96,12 +97,16 @@ as $$
         'first_district', first_district
       ) order by youth_trained desc nulls last), '[]'::jsonb),
     'districts', (select coalesce(jsonb_agg(distinct district order by district), '[]'::jsonb)
-                  from public.frontliner_rows where district is not null)
+                  from public.frontliner_rows where district is not null),
+    'collectors', (select coalesce(jsonb_agg(distinct data_collector order by data_collector), '[]'::jsonb)
+                  from public.frontliner_rows where data_collector is not null)
   ) from ranked;
 $$;
 
-alter function public.frontliner_dash(text[],date,date,int) set statement_timeout = '55000';
-grant execute on function public.frontliner_dash(text[],date,date,int) to anon, service_role;
+-- Drop the old 4-arg signature so PostgREST resolves the new 5-arg one cleanly.
+drop function if exists public.frontliner_dash(text[],date,date,int);
+alter function public.frontliner_dash(text[],date,date,text[],int) set statement_timeout = '55000';
+grant execute on function public.frontliner_dash(text[],date,date,text[],int) to anon, service_role;
 
 -- Rebuild frontliner_rows from records (heavy — may take ~2min on the full set).
 create or replace function public.refresh_frontliner_rows()

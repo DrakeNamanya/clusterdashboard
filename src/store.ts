@@ -332,13 +332,14 @@ export async function refreshNewYouth(env: Env): Promise<number> {
  */
 export async function frontlinerDash(
   env: Env,
-  opts: { districts?: string[]; from?: string; to?: string } = {}
+  opts: { districts?: string[]; from?: string; to?: string; collectors?: string[] } = {}
 ): Promise<any> {
   const url = restBase(env) + '/rpc/frontliner_dash';
   const body = {
     p_districts: opts.districts && opts.districts.length ? opts.districts : null,
     p_from: opts.from || null,
     p_to: opts.to || null,
+    p_collectors: opts.collectors && opts.collectors.length ? opts.collectors : null,
   };
   const r = await fetch(url, {
     method: 'POST',
