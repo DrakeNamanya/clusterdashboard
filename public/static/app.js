@@ -284,6 +284,8 @@ $('confirmBtn').addEventListener('click', async ()=>{
     $('confirmBtn').disabled=false; $('cancelBtn').disabled=false;
     loadStats();
     setTimeout(()=>{ ['fileMeta','detectResult','uploadActions'].forEach(id=>$(id).classList.add('hidden')); pending=null; fileInput.value=''; }, 800);
+    // Master data changed → rebuild the dashboard summaries so every page reflects it.
+    if(totalInserted>0){ rebuildDashboards(); }
   }).catch(()=>{});
 });
 
@@ -344,6 +346,42 @@ if(backfillBtn) backfillBtn.addEventListener('click',async()=>{
     backfillBtn.disabled=false; backfillBtn.innerHTML=orig;
   }
 });
+
+// Rebuild all dashboard summary tables (cluster / newyouth / distribution / frontliners)
+// so the dashboard pages reflect the latest master data.
+const DASH_LABELS={cluster:'Cluster Trainings',newyouth:'Monthly New Youth',distribution:'Distribution',frontliners:'Trainings by Frontliners'};
+async function rebuildDashboards(opts){
+  opts=opts||{};
+  const btn=$('rebuildDashBtn');
+  const s=$('rebuildDashStatus');
+  let orig='';
+  if(btn){ btn.disabled=true; orig=btn.innerHTML; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…'; }
+  if(s){ s.classList.remove('hidden'); s.className='mb-3 text-sm text-slate-500'; s.textContent='Rebuilding dashboard summaries from the master data… this can take up to a minute.'; }
+  try{
+    const res=await fetch('/api/refresh-all',{method:'POST'});
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok && !d.results){ throw new Error(d.error||('HTTP '+res.status)); }
+    const parts=Object.entries(d.results||{}).map(([k,v])=>{
+      const name=DASH_LABELS[k]||k;
+      return v.ok
+        ? `<span class="text-emerald-700"><i class="fas fa-check mr-1"></i>${esc(name)}: ${Number(v.rows||0).toLocaleString()} rows</span>`
+        : `<span class="text-red-600"><i class="fas fa-triangle-exclamation mr-1"></i>${esc(name)}: ${esc(String(v.error||'failed'))}</span>`;
+    });
+    if(s){
+      s.className='mb-3 text-sm bg-slate-50 border-l-4 '+(d.ok?'border-emerald-500':'border-amber-500')+' p-3 rounded';
+      s.innerHTML=`<div class="font-semibold mb-1">${d.ok?'<i class="fas fa-circle-check text-emerald-600 mr-1"></i>Dashboards rebuilt':'<i class="fas fa-triangle-exclamation text-amber-600 mr-1"></i>Rebuild finished with issues'}</div><div class="flex flex-col gap-0.5">${parts.join('')}</div>`;
+    }
+    await loadStats();
+    return d;
+  }catch(err){
+    if(s){ s.className='mb-3 text-sm text-red-700 bg-red-50 p-2 rounded'; s.textContent='Rebuild failed: '+(err&&err.message?err.message:err); }
+    return null;
+  }finally{
+    if(btn){ btn.disabled=false; btn.innerHTML=orig; }
+  }
+}
+const rebuildDashBtn=$('rebuildDashBtn');
+if(rebuildDashBtn) rebuildDashBtn.addEventListener('click',()=>rebuildDashboards());
 
 async function previewTable(key,label){
   const res=await fetch('/api/data/'+key+'?top=100'); const data=await res.json();

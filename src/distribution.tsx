@@ -354,10 +354,15 @@ export function renderDistribution(base: string): string {
         const ku = document.getElementById('kpiUnique'); if (ku) ku.textContent = fmt(d.unique_distributees);
         const kn = document.getElementById('kpiNew');    if (kn) kn.textContent = fmt(d.new_distributees);
         const ks = document.getElementById('kpiShgs');   if (ks) ks.textContent = fmt(d.shgs_distributees);
-        if (firstLoad){
-          for (const s of SL){ if (d[s.optsKey]){ S[s.id].opts = d[s.optsKey]; renderSlicer(s.id); } }
-          firstLoad = false;
+        // Populate each slicer's option list whenever it is still empty. The
+        // option lists are GLOBAL (not filtered), so once loaded they persist.
+        for (const s of SL){
+          if (d[s.optsKey] && d[s.optsKey].length && S[s.id].opts.length === 0){
+            S[s.id].opts = d[s.optsKey];
+            renderSlicer(s.id);
+          }
         }
+        firstLoad = false;
         renderTable();
       }catch(err){
         const eb = document.getElementById('tbody');
@@ -385,10 +390,11 @@ export function renderDistribution(base: string): string {
     SL.forEach(s=>buildSlicerShell(S[s.id]));
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
-    // Default to the current program year so the first load is fast & reliable
-    // (avoids scanning all ~20k rows / ~1.7k groups on page open).
-    document.getElementById('fromDate').value = '2025-10-01';
-    document.getElementById('toDate').value   = '2026-09-30';
+    // Default to a recent month so the first load is fast & reliable (avoids
+    // scanning all ~20k rows / ~1.7k groups on page open). Users can widen with
+    // the "All time" / "Year" buttons.
+    document.getElementById('fromDate').value = '2026-06-01';
+    document.getElementById('toDate').value   = '2026-06-30';
     document.querySelectorAll('.preset').forEach(b=>
       b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{

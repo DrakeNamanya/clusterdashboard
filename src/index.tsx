@@ -455,6 +455,37 @@ app.post('/api/distribution/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Refresh ALL dashboards after a master-sheet update --------------------
+// Rebuilds every pre-aggregated summary table so all pages reflect new data.
+// Optional ?only=cluster,newyouth,frontliners,distribution to target a subset.
+// Each summary is refreshed independently and its result/error is reported, so
+// one heavy rebuild failing (or timing out) does not block the others.
+app.post('/api/refresh-all', async (c) => {
+  const env = storeEnv(c);
+  const only = (c.req.query('only') || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  const want = (k: string) => only.length === 0 || only.includes(k);
+
+  const jobs: { key: string; fn: () => Promise<number> }[] = [];
+  if (want('cluster'))      jobs.push({ key: 'cluster',      fn: () => refreshClusterSummary(env) });
+  if (want('newyouth'))     jobs.push({ key: 'newyouth',     fn: () => refreshNewYouth(env) });
+  if (want('distribution')) jobs.push({ key: 'distribution', fn: () => refreshDistribution(env) });
+  // frontliners is the heaviest (728k rows) — run it last.
+  if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
+
+  const results: Record<string, { ok: boolean; rows?: number; error?: string }> = {};
+  for (const j of jobs) {
+    try {
+      const rows = await j.fn();
+      results[j.key] = { ok: true, rows };
+    } catch (err) {
+      results[j.key] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  const allOk = Object.values(results).every((r) => r.ok);
+  return c.json({ ok: allOk, results });
+});
+
 // Expose schema definitions so the browser can detect + clean-preview locally.
 app.get('/api/schemas', (c) =>
   c.json({

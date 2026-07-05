@@ -67,10 +67,12 @@ export function renderPage(base: string): string {
         <h2 class="text-lg font-semibold"><i class="fas fa-table text-emerald-500 mr-2"></i>Master tables</h2>
         <div class="flex items-center gap-4">
           <button id="backfillBtn" class="text-sm text-indigo-600 hover:underline" title="Fill any empty docId columns from __Submissions-id / unique_id on existing rows"><i class="fas fa-wand-magic-sparkles mr-1"></i>Fill docId</button>
+          <button id="rebuildDashBtn" class="text-sm text-white bg-teal-600 hover:bg-teal-700 px-3 py-1.5 rounded-lg font-semibold" title="Rebuild all dashboard summaries so Cluster Trainings, Monthly New Youth, Trainings by Frontliners and Distribution reflect the latest master data"><i class="fas fa-arrows-rotate mr-1"></i>Rebuild dashboards</button>
           <button id="refreshBtn" class="text-sm text-emerald-600 hover:underline"><i class="fas fa-rotate mr-1"></i>Refresh</button>
         </div>
       </div>
       <div id="backfillStatus" class="hidden mb-3 text-sm"></div>
+      <div id="rebuildDashStatus" class="hidden mb-3 text-sm"></div>
       <div id="statsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
     </section>
 
