@@ -127,7 +127,7 @@ begin
     upper(nullif(trim(data->>'district'),'')),
     case when (data->>'activity_date') ~ '^\d{4}-\d{2}-\d{2}' then (left(data->>'activity_date',10))::date else null end,
     nullif(trim(data->>'sex'),''),
-    (trim(data->>'Disability_status')='Yes'),
+    (lower(trim(data->>'Disability_status'))='yes'),   -- case-insensitive (matches DAX LOWER(...)='yes')
     ((data->>'activity_date') ~ '^\d{4}-\d{2}-\d{2}')
   from public.records
   where template='all_trainees_view';
