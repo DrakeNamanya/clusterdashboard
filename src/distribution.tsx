@@ -207,7 +207,9 @@ export function renderDistribution(base: string): string {
     function renderSlicer(id){
       const s = S[id];
       const box = document.getElementById(id+'List');
-      const q = s.cfg.search ? (document.getElementById(id+'Search').value||'').toLowerCase() : '';
+      if (!box) return;
+      const se = s.cfg.search ? document.getElementById(id+'Search') : null;
+      const q = se ? (se.value||'').toLowerCase() : '';
       let html=''; let shown=0;
       for (const o of s.opts){
         if (q && !o.toLowerCase().includes(q)) continue;
@@ -330,8 +332,10 @@ export function renderDistribution(base: string): string {
     function filterParams(){
       const params = new URLSearchParams();
       for (const s of SL){ const p = param(s.id); if (p) params.set(SL_PARAM[s.id], p); }
-      const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
-      const t = document.getElementById('toDate').value;   if (t) params.set('to', t);
+      const fe = document.getElementById('fromDate'); const f = fe ? fe.value : '';
+      const te = document.getElementById('toDate');   const t = te ? te.value : '';
+      if (f) params.set('from', f);
+      if (t) params.set('to', t);
       return params;
     }
 
@@ -340,22 +344,24 @@ export function renderDistribution(base: string): string {
       // filters changed -> detail cache is stale
       detailCache = {};
       const params = filterParams();
-      document.getElementById('tbody').innerHTML = '<tr><td class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
+      const tb = document.getElementById('tbody');
+      if (tb) tb.innerHTML = '<tr><td class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
       try{
         const res = await fetch('/api/distribution?'+params.toString());
         if (!res.ok) throw new Error('HTTP '+res.status);
         const d = await res.json();
         lastData = d;
-        document.getElementById('kpiUnique').textContent = fmt(d.unique_distributees);
-        document.getElementById('kpiNew').textContent    = fmt(d.new_distributees);
-        document.getElementById('kpiShgs').textContent   = fmt(d.shgs_distributees);
+        const ku = document.getElementById('kpiUnique'); if (ku) ku.textContent = fmt(d.unique_distributees);
+        const kn = document.getElementById('kpiNew');    if (kn) kn.textContent = fmt(d.new_distributees);
+        const ks = document.getElementById('kpiShgs');   if (ks) ks.textContent = fmt(d.shgs_distributees);
         if (firstLoad){
           for (const s of SL){ if (d[s.optsKey]){ S[s.id].opts = d[s.optsKey]; renderSlicer(s.id); } }
           firstLoad = false;
         }
         renderTable();
       }catch(err){
-        document.getElementById('tbody').innerHTML =
+        const eb = document.getElementById('tbody');
+        if (eb) eb.innerHTML =
           '<tr><td class="text-center text-red-500 py-8">Failed to load: '+err.message+'</td></tr>';
       }
     }
@@ -379,6 +385,10 @@ export function renderDistribution(base: string): string {
     SL.forEach(s=>buildSlicerShell(S[s.id]));
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
+    // Default to the current program year so the first load is fast & reliable
+    // (avoids scanning all ~20k rows / ~1.7k groups on page open).
+    document.getElementById('fromDate').value = '2025-10-01';
+    document.getElementById('toDate').value   = '2026-09-30';
     document.querySelectorAll('.preset').forEach(b=>
       b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{
