@@ -371,10 +371,17 @@ export async function refreshFrontliners(env: Env): Promise<number> {
  * Distribution to Participants dashboard aggregate (calls the Postgres RPC
  * `distribution_dash` over the compact `distribution_rows` join table).
  */
-export async function distributionDash(
-  env: Env,
-  opts: { districts?: string[]; from?: string; to?: string; materials?: string[]; units?: string[] } = {}
-): Promise<any> {
+export interface DistFilters {
+  districts?: string[];
+  from?: string;
+  to?: string;
+  materials?: string[];
+  units?: string[];
+  submitters?: string[];
+  suppliers?: string[];
+}
+
+export async function distributionDash(env: Env, opts: DistFilters = {}): Promise<any> {
   const url = restBase(env) + '/rpc/distribution_dash';
   const body = {
     p_districts: opts.districts && opts.districts.length ? opts.districts : null,
@@ -382,6 +389,8 @@ export async function distributionDash(
     p_to: opts.to || null,
     p_materials: opts.materials && opts.materials.length ? opts.materials : null,
     p_units: opts.units && opts.units.length ? opts.units : null,
+    p_submitters: opts.submitters && opts.submitters.length ? opts.submitters : null,
+    p_suppliers: opts.suppliers && opts.suppliers.length ? opts.suppliers : null,
   };
   const r = await fetch(url, {
     method: 'POST',
@@ -391,6 +400,35 @@ export async function distributionDash(
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`distribution_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Per-participant detail rows for one SHG group (expandable hierarchy). */
+export async function distributionDetail(
+  env: Env,
+  shg: string,
+  opts: DistFilters = {}
+): Promise<any> {
+  const url = restBase(env) + '/rpc/distribution_detail';
+  const body = {
+    p_shg: shg,
+    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+    p_from: opts.from || null,
+    p_to: opts.to || null,
+    p_materials: opts.materials && opts.materials.length ? opts.materials : null,
+    p_units: opts.units && opts.units.length ? opts.units : null,
+    p_submitters: opts.submitters && opts.submitters.length ? opts.submitters : null,
+    p_suppliers: opts.suppliers && opts.suppliers.length ? opts.suppliers : null,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`distribution_detail failed (${r.status}): ${t.slice(0, 200)}`);
   }
   return r.json();
 }

@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
 // "Distribution to Participants" — participants_shg ⋈ distribution_form_v2
 // (join on participants_shg[__Submissions-id] = distribution_form_v2[_id]).
-// Title, date slicer, 3 KPI cards (Unique / New Distributees, SHGs distributees),
-// table grouped by SHG_Name (First District_Name, First Material_Type,
-// First Other_Material_Type, Sum of Qty_Received, First Unit) + Total row,
-// and District / Material_Type / Unit slicers (Select all / None + search).
-// Data from GET /api/distribution (Supabase RPC distribution_dash).
+// Power BI-style matrix grouped by SHG_Name with an expandable hierarchy
+// (click a group to reveal its participants). Full column set matching the
+// reference; empty columns auto-hide. Total row. Compact slicers (District,
+// Material_Type, Unit, Submitted_By, Other_Supplier) so the table gets most of
+// the screen. Data from /api/distribution (+ /api/distribution/detail).
 // ---------------------------------------------------------------------------
 
 export function renderDistribution(base: string): string {
@@ -20,7 +20,7 @@ export function renderDistribution(base: string): string {
   <style>
     :root{
       --cream:#FCF8F5; --panel:#FFFFFF; --ink:#28343a; --muted:#7c8a8f;
-      --head:#2f5d6b; --row-alt:#e9f0f1; --line:#d9e2e3; --teal:#2f8f9d;
+      --head:#2f5d6b; --row-alt:#faf1e6; --line:#d9e2e3; --teal:#2f8f9d; --amber:#e08a2b;
     }
     body{ background:var(--cream); color:var(--ink); font-family:"Segoe UI",system-ui,-apple-system,sans-serif; }
     .card{ background:var(--panel); border:1px solid var(--line); border-radius:10px;
@@ -29,33 +29,42 @@ export function renderDistribution(base: string): string {
     .kpi{ position:relative; overflow:hidden; }
     .kpi::before{ content:''; position:absolute; top:0; left:0; right:0; height:4px; background:var(--teal); }
     table{ border-collapse:collapse; width:100%; }
-    thead th{ background:var(--head); color:#fff; font-weight:700; font-size:12px;
-              padding:8px 10px; text-align:left; position:sticky; top:0; z-index:1; }
+    thead th{ background:var(--head); color:#fff; font-weight:700; font-size:11px;
+              padding:7px 9px; text-align:left; position:sticky; top:0; z-index:2; white-space:nowrap; }
     thead th.num{ text-align:right; }
-    tbody td{ padding:7px 10px; font-size:12px; vertical-align:top; border-bottom:1px solid #e6eeef; }
-    tbody td.num{ text-align:right; white-space:nowrap; }
-    tbody tr:nth-child(even){ background:var(--row-alt); }
-    tbody tr:hover{ background:#dce8ea; }
-    tbody tr.total-row{ background:var(--head) !important; color:#fff; font-weight:700; position:sticky; bottom:0; }
-    tbody tr.total-row td{ border-bottom:none; }
+    tbody td{ padding:5px 9px; font-size:11.5px; vertical-align:top; border-bottom:1px solid #f0e6d8; white-space:nowrap; }
+    tbody td.num{ text-align:right; }
+    tbody tr.grp{ background:#fff; }
+    tbody tr.grp td{ font-weight:700; border-bottom:2px solid var(--amber); }
+    tbody tr.det td{ background:var(--row-alt); font-weight:400; border-bottom:1px solid #f0e6d8; }
+    tbody tr.grp:hover td{ background:#f4fafb; }
+    tbody tr.det:hover td{ background:#f6ead9; }
+    tbody tr.total-row td{ background:var(--head) !important; color:#fff; font-weight:700; border-bottom:none; }
+    .toggle{ cursor:pointer; user-select:none; display:inline-flex; align-items:center; gap:6px; }
+    .toggle .box{ width:13px; height:13px; border:1px solid var(--muted); border-radius:2px; display:inline-flex;
+                  align-items:center; justify-content:center; font-size:9px; line-height:1; color:var(--head); }
+    .det-name{ padding-left:22px; }
     .sortable{ cursor:pointer; user-select:none; }
-    .sortable .arrow{ opacity:.6; font-size:10px; margin-left:3px; }
-    .dist-item{ display:flex; align-items:center; gap:8px; padding:3px 2px; cursor:pointer; font-size:13px; }
-    .dist-item:hover{ background:var(--cream); border-radius:6px; }
-    .dist-item input{ accent-color:#2f5d6b; width:14px; height:14px; }
+    .sortable .arrow{ opacity:.7; font-size:9px; margin-left:2px; }
+    .dist-item{ display:flex; align-items:center; gap:6px; padding:2px 2px; cursor:pointer; font-size:12px; }
+    .dist-item:hover{ background:var(--cream); border-radius:5px; }
+    .dist-item input{ accent-color:#2f5d6b; width:13px; height:13px; }
     .scrollbar-thin::-webkit-scrollbar{ width:7px; height:7px; }
     .scrollbar-thin::-webkit-scrollbar-thumb{ background:#c7d4d5; border-radius:3px; }
+    .slbl{ font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); font-weight:700; }
+    .mini-btn{ font-size:9px; padding:2px 4px; border-radius:4px; border:1px solid var(--line); background:#fff; }
+    .mini-btn:hover{ background:var(--cream); }
+    .mini-search{ width:100%; background:#fff; border:1px solid var(--line); border-radius:5px; padding:2px 6px; font-size:10px; }
   </style>
 </head>
 <body>
-  <div class="max-w-[1300px] mx-auto p-4 md:p-6">
+  <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <!-- Title + top toolbar -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
       <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
-      <div class="ttl px-5 py-1.5"><h1 class="text-xl md:text-2xl font-extrabold tracking-tight">DISTRIBUTION TO PARTICIPANTS</h1></div>
+      <div class="ttl px-4 py-1.5"><h1 class="text-lg md:text-xl font-extrabold tracking-tight">DISTRIBUTION TO PARTICIPANTS</h1></div>
 
-      <!-- Compact date range slicer -->
       <div class="flex items-center gap-1.5 card px-3 py-1.5">
         <span class="text-[10px] text-[var(--muted)] uppercase font-bold mr-1">Date</span>
         <input id="fromDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
@@ -73,176 +82,281 @@ export function renderDistribution(base: string): string {
 
     <!-- KPI cards -->
     <div class="grid grid-cols-3 gap-3 mb-3">
-      <div class="card kpi p-3">
-        <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-semibold">Unique Distributees</div>
-        <div id="kpiUnique" class="text-3xl font-extrabold mt-1">–</div>
+      <div class="card kpi p-2.5">
+        <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">Unique Distributees</div>
+        <div id="kpiUnique" class="text-2xl font-extrabold mt-0.5">–</div>
       </div>
-      <div class="card kpi p-3">
-        <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-semibold">New Distributees</div>
-        <div id="kpiNew" class="text-3xl font-extrabold mt-1">–</div>
+      <div class="card kpi p-2.5">
+        <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">New Distributees</div>
+        <div id="kpiNew" class="text-2xl font-extrabold mt-0.5">–</div>
       </div>
-      <div class="card kpi p-3">
-        <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-semibold">SHGs distributees</div>
-        <div id="kpiShgs" class="text-3xl font-extrabold mt-1">–</div>
+      <div class="card kpi p-2.5">
+        <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">SHGs distributees</div>
+        <div id="kpiShgs" class="text-2xl font-extrabold mt-0.5">–</div>
       </div>
     </div>
 
     <div class="grid grid-cols-12 gap-3">
 
-      <!-- Main table -->
-      <section class="col-span-12 lg:col-span-9">
+      <!-- Main table — now very wide (11/12) -->
+      <section class="col-span-12 lg:col-span-11">
         <div class="card p-2">
-          <div class="scrollbar-thin overflow-auto max-h-[calc(100vh-260px)]">
+          <div class="scrollbar-thin overflow-auto max-h-[calc(100vh-210px)]">
             <table id="tbl">
-              <thead>
-                <tr>
-                  <th>SHG_Name</th>
-                  <th>First District_Name</th>
-                  <th>First Material_Type</th>
-                  <th>First Other_Material_Type</th>
-                  <th class="num sortable" data-k="qty_received">Sum of Qty_Received<span class="arrow">▼</span></th>
-                  <th>First Unit</th>
-                </tr>
-              </thead>
+              <thead id="thead"></thead>
               <tbody id="tbody">
-                <tr><td colspan="6" class="text-center text-[var(--muted)] py-8">Loading…</td></tr>
+                <tr><td class="text-center text-[var(--muted)] py-8">Loading…</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
 
-      <!-- Right: District / Material_Type / Unit slicers -->
-      <aside class="col-span-12 lg:col-span-3 space-y-3">
-        <div class="card p-2.5">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-1.5">District</div>
-          <input id="distSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[11px] mb-1.5" />
-          <div class="flex gap-1 mb-1.5">
-            <button id="selAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">Select all</button>
-            <button id="clrAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">None</button>
-          </div>
-          <div id="districtList" class="scrollbar-thin overflow-y-auto max-h-[160px] pr-1 text-sm">
-            <div class="text-[var(--muted)] text-xs">Loading…</div>
-          </div>
-        </div>
-        <div class="card p-2.5">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-1.5">Material_Type</div>
-          <div class="flex gap-1 mb-1.5">
-            <button id="matAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">Select all</button>
-            <button id="matNoneBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">None</button>
-          </div>
-          <div id="matList" class="scrollbar-thin overflow-y-auto max-h-[160px] pr-1 text-sm">
-            <div class="text-[var(--muted)] text-xs">Loading…</div>
-          </div>
-        </div>
-        <div class="card p-2.5">
-          <div class="text-[11px] uppercase tracking-wide text-[var(--muted)] font-bold mb-1.5">Unit</div>
-          <input id="unitSearch" type="text" placeholder="Search…" class="w-full bg-white border border-[var(--line)] rounded px-2 py-1 text-[11px] mb-1.5" />
-          <div class="flex gap-1 mb-1.5">
-            <button id="unitAllBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">Select all</button>
-            <button id="unitNoneBtn" class="flex-1 text-[10px] px-1 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] font-semibold">None</button>
-          </div>
-          <div id="unitList" class="scrollbar-thin overflow-y-auto max-h-[160px] pr-1 text-sm">
-            <div class="text-[var(--muted)] text-xs">Loading…</div>
-          </div>
-        </div>
+      <!-- Right: compact narrow slicers (1/12) -->
+      <aside class="col-span-12 lg:col-span-1 space-y-2">
+        <div class="card p-2" id="sl-dist"></div>
+        <div class="card p-2" id="sl-mat"></div>
+        <div class="card p-2" id="sl-unit"></div>
+        <div class="card p-2" id="sl-sub"></div>
+        <div class="card p-2" id="sl-sup"></div>
       </aside>
     </div>
   </div>
 
   <script>
     const fmt = (n) => (n ?? 0).toLocaleString('en-US');
-    const num = (n) => (Number(n) || 0).toLocaleString('en-US', {maximumFractionDigits: 2});
+    const num = (v) => { const n = Number(v); return (n||0).toLocaleString('en-US',{maximumFractionDigits:2}); };
 
-    // Three independent multi-select slicers. Each: options[], sel Set, allMode.
-    const S = {
-      dist: { opts: [], sel: new Set(), all: true, listId: 'districtList', searchId: 'distSearch' },
-      mat:  { opts: [], sel: new Set(), all: true, listId: 'matList',      searchId: null },
-      unit: { opts: [], sel: new Set(), all: true, listId: 'unitList',     searchId: 'unitSearch' },
-    };
+    // Column definitions in Power BI order. type: 'num' right-aligned & sum,
+    // 'txt' left. Every column auto-hides if empty across all visible rows.
+    const COLS = [
+      { key:'qty_received',                 label:'Sum of Qty_Received',              type:'num' },
+      { key:'first_unit',                   label:'First Unit_Received',              type:'txt' },
+      { key:'first_other_unit',             label:'First Other_Unit_Received',        type:'txt' },
+      { key:'first_livestock_type',         label:'First Livestock_Type',             type:'txt' },
+      { key:'first_other_livestock_type',   label:'First Other_Livestock_Type',       type:'txt' },
+      { key:'first_crop_type',              label:'First Crop_Type',                  type:'txt' },
+      { key:'first_other_crop_type',        label:'First Other_Crop_Type',            type:'txt' },
+      { key:'first_agri_resources_type',    label:'First Agri_Resources_Type',        type:'txt' },
+      { key:'first_other_agri_resources_type', label:'First Other_Agri_Resources_Type', type:'txt' },
+      { key:'first_isla_kits',              label:'First ISLA_Kits',                  type:'txt' },
+      { key:'first_other_isla_kits',        label:'First Other_ISLA_Kits',            type:'txt' },
+      { key:'qty_seedlings',                label:'Sum of Qty_Seedlings',             type:'num' },
+      { key:'qty_grams',                    label:'Sum of Qty_Grams',                 type:'num' },
+      { key:'qty_kgs',                      label:'Sum of Qty_KGs',                   type:'num' },
+      { key:'qty_liters',                   label:'Sum of Qty_Liters',                type:'num' },
+      { key:'qty_meters',                   label:'Sum of Qty_Meters',                type:'num' },
+      { key:'qty_other',                    label:'Sum of Qty_Other',                 type:'num' },
+      { key:'qty_foot',                     label:'Sum of Qty_Foot',                  type:'num' },
+      { key:'qty_kit',                      label:'Sum of Qty_Kit',                   type:'num' },
+      { key:'qty_number',                   label:'Sum of Qty_Number',                type:'num' },
+      { key:'qty_acre',                     label:'Sum of Qty_Acre',                  type:'num' },
+      { key:'qty_dozens',                   label:'Sum of Qty_Dozens',                type:'num' },
+      { key:'qty_boxes',                    label:'Sum of Qty_Boxes',                 type:'num' },
+      { key:'qty_pieces',                   label:'Sum of Qty_Pieces',                type:'num' },
+      { key:'qty_hectare',                  label:'Sum of Qty_Hectare',               type:'num' },
+      { key:'qty_packets',                  label:'Sum of Qty_Packets',               type:'num' },
+      { key:'qty_tins',                     label:'Sum of Qty_Tins',                  type:'num' },
+      { key:'qty_sackets',                  label:'Sum of Qty_Sackets',               type:'num' },
+      { key:'first_submitted_by',           label:'First Submitted_By',               type:'txt' },
+      { key:'first_supplier',               label:'First Supplier',                   type:'txt' },
+      { key:'first_other_supplier',         label:'First Other_Supplier',             type:'txt' },
+      { key:'count_participants',           label:'Count of Participant_Name',        type:'num' },
+      { key:'first_subcounty',              label:'First Subcounty',                  type:'txt' },
+      { key:'pwds_distributees',            label:'PWDs_Distributees',                type:'num' },
+    ];
+
+    // Slicer configs. narrow=true means no search box.
+    const SL = [
+      { id:'dist', mount:'sl-dist', label:'District',       optsKey:'districts',  search:true },
+      { id:'mat',  mount:'sl-mat',  label:'Material_Type',  optsKey:'materials',  search:false },
+      { id:'unit', mount:'sl-unit', label:'Unit',           optsKey:'units',      search:true },
+      { id:'sub',  mount:'sl-sub',  label:'Submitted_By',   optsKey:'submitters', search:true },
+      { id:'sup',  mount:'sl-sup',  label:'Other_Supplier', optsKey:'suppliers',  search:true },
+    ];
+    // param name each slicer contributes to the API
+    const SL_PARAM = { dist:'districts', mat:'materials', unit:'units', sub:'submitters', sup:'suppliers' };
+
+    const S = {};
+    SL.forEach(s => S[s.id] = { opts:[], sel:new Set(), all:true, cfg:s });
+
     let sortKey = 'qty_received';
-    let lastRows = [];
+    let lastData = null;
+    let expanded = new Set();      // SHG names currently expanded
+    let detailCache = {};          // shg -> participant rows
 
-    function param(s){ return s.all ? '' : [...s.sel].join(','); }
+    function param(id){ const s=S[id]; return s.all ? '' : [...s.sel].join(','); }
 
-    function renderSlicer(key){
-      const s = S[key];
-      const box = document.getElementById(s.listId);
-      const q = s.searchId ? (document.getElementById(s.searchId).value || '').toLowerCase() : '';
-      let html = '';
+    // ---- Slicers ----
+    function buildSlicerShell(s){
+      const searchHtml = s.cfg.search
+        ? '<input id="'+s.id+'Search" type="text" placeholder="Search…" class="mini-search mb-1" />' : '';
+      document.getElementById(s.cfg.mount).innerHTML =
+        '<div class="slbl mb-1">'+s.cfg.label+'</div>'
+        + searchHtml
+        + '<div class="flex gap-1 mb-1">'
+        +   '<button class="mini-btn flex-1 font-semibold" data-all="'+s.id+'">All</button>'
+        +   '<button class="mini-btn flex-1 font-semibold" data-none="'+s.id+'">None</button>'
+        + '</div>'
+        + '<div id="'+s.id+'List" class="scrollbar-thin overflow-y-auto max-h-[130px] pr-1"></div>';
+      if (s.cfg.search)
+        document.getElementById(s.id+'Search').addEventListener('input', ()=>renderSlicer(s.id));
+      document.querySelector('[data-all="'+s.id+'"]').addEventListener('click', ()=>{ s.all=true; s.sel=new Set(); renderSlicer(s.id); load(); });
+      document.querySelector('[data-none="'+s.id+'"]').addEventListener('click', ()=>{ s.all=false; s.sel=new Set(); renderSlicer(s.id); load(); });
+    }
+    function renderSlicer(id){
+      const s = S[id];
+      const box = document.getElementById(id+'List');
+      const q = s.cfg.search ? (document.getElementById(id+'Search').value||'').toLowerCase() : '';
+      let html=''; let shown=0;
       for (const o of s.opts){
         if (q && !o.toLowerCase().includes(q)) continue;
+        if (++shown > 300){ html+='<div class="text-[var(--muted)] text-[9px] py-1">…refine…</div>'; break; }
         const on = s.all || s.sel.has(o);
-        html += '<label class="dist-item"><input type="checkbox" data-o="'+o.replace(/"/g,'&quot;')+'" '
-             + (on ? 'checked' : '') + '/><span>'+o+'</span></label>';
+        html += '<label class="dist-item"><input type="checkbox" data-o="'+o.replace(/"/g,'&quot;')+'" '+(on?'checked':'')+'/><span>'+o+'</span></label>';
       }
-      if (!html) html = '<div class="text-[var(--muted)] text-xs py-2">No match.</div>';
+      if (!html) html='<div class="text-[var(--muted)] text-[10px] py-1">No match.</div>';
       box.innerHTML = html;
       box.querySelectorAll('input[data-o]').forEach(cb=>{
         cb.addEventListener('change', ()=>{
           const o = cb.getAttribute('data-o');
-          if (s.all){ s.sel = new Set(s.opts); s.all = false; }
+          if (s.all){ s.sel=new Set(s.opts); s.all=false; }
           if (cb.checked) s.sel.add(o); else s.sel.delete(o);
-          if (s.sel.size === s.opts.length){ s.all = true; }
-          renderSlicer(key); load();
+          if (s.sel.size === s.opts.length) s.all=true;
+          renderSlicer(id); load();
         });
       });
     }
-    function selectAll(key){ const s=S[key]; s.all=true; s.sel=new Set(); renderSlicer(key); load(); }
-    function selectNone(key){ const s=S[key]; s.all=false; s.sel=new Set(); renderSlicer(key); load(); }
 
-    function renderTable(rows, totalQty){
-      lastRows = rows;
+    // ---- Table ----
+    function activeCols(rows, total){
+      // Hide a column if every visible group row (and total) is empty/blank.
+      return COLS.filter(c=>{
+        const anyRow = rows.some(r=>{
+          const v=r[c.key];
+          return c.type==='num' ? (Number(v)||0)!==0 : (v!=null && String(v).trim()!=='');
+        });
+        const t = total ? total[c.key] : null;
+        const totalHas = c.type==='num' ? (Number(t)||0)!==0 : (t!=null && String(t).trim()!=='');
+        return anyRow || totalHas;
+      });
+    }
+    function cell(r, c){
+      const v = r[c.key];
+      if (c.type==='num'){
+        const n = Number(v)||0;
+        return '<td class="num">'+(n? num(n) : '')+'</td>';
+      }
+      return '<td>'+(v==null?'':v)+'</td>';
+    }
+    function renderHead(cols){
+      let html = '<tr><th style="min-width:220px">SHG_Name_</th>';
+      for (const c of cols){
+        const sortable = c.type==='num' ? ' sortable' : '';
+        const arrow = c.type==='num' ? '<span class="arrow" data-k="'+c.key+'"></span>' : '';
+        html += '<th class="'+(c.type==='num'?'num':'')+sortable+'" '+(c.type==='num'?'data-k="'+c.key+'"':'')+'>'+c.label+arrow+'</th>';
+      }
+      html += '</tr>';
+      document.getElementById('thead').innerHTML = html;
+      document.querySelectorAll('#thead th.sortable').forEach(th=>
+        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
+    }
+    function renderTable(){
+      if (!lastData){ return; }
+      const rows = lastData.rows || [];
+      const total = lastData.total || {};
+      const cols = activeCols(rows, total);
+      renderHead(cols);
       const tbody = document.getElementById('tbody');
-      if (!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="text-center text-[var(--muted)] py-8">No data for this selection.</td></tr>'; return; }
+      const span = cols.length + 1;
+      if (!rows.length){ tbody.innerHTML='<tr><td colspan="'+span+'" class="text-center text-[var(--muted)] py-8">No data for this selection.</td></tr>'; return; }
       const sorted = [...rows].sort((a,b)=> (Number(b[sortKey])||0) - (Number(a[sortKey])||0));
-      let html = sorted.map(r=>
-        '<tr>'
-        + '<td class="font-semibold">'+(r.shg_name||'')+'</td>'
-        + '<td>'+(r.first_district||'')+'</td>'
-        + '<td>'+(r.first_material_type||'')+'</td>'
-        + '<td>'+(r.first_other_material_type||'')+'</td>'
-        + '<td class="num">'+num(r.qty_received)+'</td>'
-        + '<td>'+(r.first_unit||'')+'</td>'
-        + '</tr>'
-      ).join('');
+      let html='';
+      for (const r of sorted){
+        const isOpen = expanded.has(r.shg_name);
+        html += '<tr class="grp" data-shg="'+encodeURIComponent(r.shg_name)+'">'
+          + '<td><span class="toggle" data-shg="'+encodeURIComponent(r.shg_name)+'">'
+          +   '<span class="box">'+(isOpen?'−':'+')+'</span>'+(r.shg_name||'')+'</span></td>'
+          + cols.map(c=>cell(r,c)).join('')
+          + '</tr>';
+        if (isOpen){
+          const det = detailCache[r.shg_name];
+          if (!det){
+            html += '<tr class="det"><td class="det-name text-[var(--muted)]"><i class="fas fa-spinner fa-spin"></i> Loading…</td><td colspan="'+cols.length+'"></td></tr>';
+          } else if (!det.length){
+            html += '<tr class="det"><td class="det-name text-[var(--muted)]">No participants.</td><td colspan="'+cols.length+'"></td></tr>';
+          } else {
+            for (const p of det){
+              html += '<tr class="det">'
+                + '<td class="det-name">'+(p.participant_name||'')+'</td>'
+                + cols.map(c=>cell(p,c)).join('')
+                + '</tr>';
+            }
+          }
+        }
+      }
       // Total row
-      html += '<tr class="total-row">'
-        + '<td>Total</td><td></td><td></td><td></td>'
-        + '<td class="num">'+num(totalQty)+'</td><td></td></tr>';
+      html += '<tr class="total-row"><td>Total</td>'
+        + cols.map(c=>{
+            if (c.type==='num'){ const n=Number(total[c.key])||0; return '<td class="num">'+(n?num(n):'')+'</td>'; }
+            const v=total[c.key]; return '<td>'+(v==null?'':v)+'</td>';
+          }).join('')
+        + '</tr>';
       tbody.innerHTML = html;
-      document.querySelectorAll('th.sortable .arrow').forEach(a=>a.textContent='');
-      const th = document.querySelector('th.sortable[data-k="'+sortKey+'"] .arrow');
-      if (th) th.textContent = '▼';
+      // sort arrow
+      document.querySelectorAll('#thead .arrow').forEach(a=>a.textContent='');
+      const ar = document.querySelector('#thead .arrow[data-k="'+sortKey+'"]');
+      if (ar) ar.textContent='▼';
+      // toggle handlers
+      tbody.querySelectorAll('.toggle').forEach(t=>{
+        t.addEventListener('click', ()=>toggleGroup(decodeURIComponent(t.getAttribute('data-shg'))));
+      });
+    }
+
+    async function toggleGroup(shg){
+      if (expanded.has(shg)){ expanded.delete(shg); renderTable(); return; }
+      expanded.add(shg); renderTable();
+      if (!detailCache[shg]){
+        try{
+          const params = filterParams(); params.set('shg', shg);
+          const res = await fetch('/api/distribution/detail?'+params.toString());
+          const d = await res.json();
+          detailCache[shg] = d.rows || [];
+        }catch(err){ detailCache[shg] = []; }
+        renderTable();
+      }
+    }
+
+    function filterParams(){
+      const params = new URLSearchParams();
+      for (const s of SL){ const p = param(s.id); if (p) params.set(SL_PARAM[s.id], p); }
+      const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
+      const t = document.getElementById('toDate').value;   if (t) params.set('to', t);
+      return params;
     }
 
     let firstLoad = true;
     async function load(){
-      const params = new URLSearchParams();
-      const dp = param(S.dist); if (dp) params.set('districts', dp);
-      const mp = param(S.mat);  if (mp) params.set('materials', mp);
-      const up = param(S.unit); if (up) params.set('units', up);
-      const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
-      const t = document.getElementById('toDate').value;   if (t) params.set('to', t);
-      document.getElementById('tbody').innerHTML = '<tr><td colspan="6" class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
+      // filters changed -> detail cache is stale
+      detailCache = {};
+      const params = filterParams();
+      document.getElementById('tbody').innerHTML = '<tr><td class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
       try{
-        const res = await fetch('/api/distribution?' + params.toString());
+        const res = await fetch('/api/distribution?'+params.toString());
         if (!res.ok) throw new Error('HTTP '+res.status);
         const d = await res.json();
+        lastData = d;
         document.getElementById('kpiUnique').textContent = fmt(d.unique_distributees);
         document.getElementById('kpiNew').textContent    = fmt(d.new_distributees);
         document.getElementById('kpiShgs').textContent   = fmt(d.shgs_distributees);
-        // Populate slicer option lists once (they are global).
         if (firstLoad){
-          if (d.districts){ S.dist.opts = d.districts; renderSlicer('dist'); }
-          if (d.materials){ S.mat.opts  = d.materials; renderSlicer('mat'); }
-          if (d.units){     S.unit.opts = d.units;     renderSlicer('unit'); }
+          for (const s of SL){ if (d[s.optsKey]){ S[s.id].opts = d[s.optsKey]; renderSlicer(s.id); } }
           firstLoad = false;
         }
-        renderTable(d.rows || [], d.total_qty);
+        renderTable();
       }catch(err){
         document.getElementById('tbody').innerHTML =
-          '<tr><td colspan="6" class="text-center text-red-500 py-8">Failed to load: '+err.message+'</td></tr>';
+          '<tr><td class="text-center text-red-500 py-8">Failed to load: '+err.message+'</td></tr>';
       }
     }
 
@@ -261,23 +375,12 @@ export function renderDistribution(base: string): string {
       load();
     }
 
+    // init slicers
+    SL.forEach(s=>buildSlicerShell(S[s.id]));
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
-    document.getElementById('distSearch').addEventListener('input', ()=>renderSlicer('dist'));
-    document.getElementById('unitSearch').addEventListener('input', ()=>renderSlicer('unit'));
-    document.getElementById('selAllBtn').addEventListener('click', ()=>selectAll('dist'));
-    document.getElementById('clrAllBtn').addEventListener('click', ()=>selectNone('dist'));
-    document.getElementById('matAllBtn').addEventListener('click', ()=>selectAll('mat'));
-    document.getElementById('matNoneBtn').addEventListener('click', ()=>selectNone('mat'));
-    document.getElementById('unitAllBtn').addEventListener('click', ()=>selectAll('unit'));
-    document.getElementById('unitNoneBtn').addEventListener('click', ()=>selectNone('unit'));
     document.querySelectorAll('.preset').forEach(b=>
       b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
-    document.querySelectorAll('th.sortable').forEach(th=>
-      th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k');
-        const totalQty = lastRows.reduce((a,r)=>a+(Number(r.qty_received)||0),0);
-        renderTable(lastRows, totalQty); }));
-
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{
       const btn = e.currentTarget; const old = btn.innerHTML;
       btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Refreshing…';

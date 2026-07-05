@@ -8,7 +8,7 @@ import {
   backfillFilled, clusterTrainings, refreshClusterSummary,
   newYouthDash, refreshNewYouth,
   frontlinerDash, refreshFrontliners,
-  distributionDash, refreshDistribution, Env,
+  distributionDash, distributionDetail, refreshDistribution, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -424,10 +424,29 @@ app.get('/api/distribution', async (c) => {
     districts: split(q.districts),
     materials: split(q.materials),
     units: split(q.units),
+    submitters: split(q.submitters),
+    suppliers: split(q.suppliers),
     from: q.from || undefined,
     to: q.to || undefined,
   });
   return c.json(data);
+});
+
+// Per-participant detail rows for one SHG group (expandable hierarchy).
+app.get('/api/distribution/detail', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const rows = await distributionDetail(storeEnv(c), q.shg || '', {
+    districts: split(q.districts),
+    materials: split(q.materials),
+    units: split(q.units),
+    submitters: split(q.submitters),
+    suppliers: split(q.suppliers),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json({ rows });
 });
 
 // Rebuild the distribution_rows join table (run after uploads change data).
