@@ -98,8 +98,12 @@ as $$
       ) order by youth_trained desc nulls last), '[]'::jsonb),
     'districts', (select coalesce(jsonb_agg(distinct district order by district), '[]'::jsonb)
                   from public.frontliner_rows where district is not null),
-    'collectors', (select coalesce(jsonb_agg(distinct data_collector order by data_collector), '[]'::jsonb)
-                  from public.frontliner_rows where data_collector is not null)
+    -- Collector list is scoped to the SELECTED DISTRICTS (so filtering a
+    -- district narrows the Frontliner filter to that district's collectors).
+    'collectors', (select coalesce(jsonb_agg(distinct fr.data_collector order by fr.data_collector), '[]'::jsonb)
+                  from public.frontliner_rows fr, sel
+                  where fr.data_collector is not null
+                    and (sel.dl is null or fr.district = any(sel.dl)))
   ) from ranked;
 $$;
 

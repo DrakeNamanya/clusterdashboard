@@ -367,6 +367,48 @@ export async function refreshFrontliners(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+/**
+ * Distribution to Participants dashboard aggregate (calls the Postgres RPC
+ * `distribution_dash` over the compact `distribution_rows` join table).
+ */
+export async function distributionDash(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string; materials?: string[]; units?: string[] } = {}
+): Promise<any> {
+  const url = restBase(env) + '/rpc/distribution_dash';
+  const body = {
+    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+    p_from: opts.from || null,
+    p_to: opts.to || null,
+    p_materials: opts.materials && opts.materials.length ? opts.materials : null,
+    p_units: opts.units && opts.units.length ? opts.units : null,
+  };
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`distribution_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild the distribution_rows join table from records (call after uploads). */
+export async function refreshDistribution(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_distribution_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_distribution_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =

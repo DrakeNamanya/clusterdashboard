@@ -227,7 +227,22 @@ export function renderFrontliners(base: string): string {
         if (!res.ok) throw new Error('HTTP '+res.status);
         const d = await res.json();
         if (!districts.length && d.districts){ districts = d.districts; renderDistricts(); }
-        if (!collectors.length && d.collectors){ collectors = d.collectors; renderCollectors(); }
+        // Collector list is district-scoped: refresh it whenever it changes so
+        // that picking a district narrows the Frontliner filter to that district.
+        if (d.collectors){
+          const next = d.collectors;
+          const changed = next.length !== collectors.length || next.some((c,i)=>c!==collectors[i]);
+          if (changed){
+            collectors = next;
+            // Drop any selected collectors no longer in scope.
+            if (!collAll){
+              const set = new Set(collectors);
+              collSel = new Set([...collSel].filter(c=>set.has(c)));
+              if (collSel.size === 0) collAll = true;
+            }
+            renderCollectors();
+          }
+        }
         renderTable(d.rows || []);
       }catch(err){
         document.getElementById('tbody').innerHTML =

@@ -7,7 +7,8 @@ import {
   appendRecords, maxSeq, queryRecords, tableStats, clearTable,
   backfillFilled, clusterTrainings, refreshClusterSummary,
   newYouthDash, refreshNewYouth,
-  frontlinerDash, refreshFrontliners, Env,
+  frontlinerDash, refreshFrontliners,
+  distributionDash, refreshDistribution, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -16,6 +17,7 @@ import { renderPage } from './ui';
 import { renderClusterTrainings } from './cluster';
 import { renderMonthlyNewYouth } from './newyouth';
 import { renderFrontliners } from './frontliner';
+import { renderDistribution } from './distribution';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -405,6 +407,32 @@ app.get('/api/frontliners', async (c) => {
 // Rebuild the frontliner_rows table (heavy; run after uploads change data).
 app.post('/api/frontliners/refresh', async (c) => {
   const n = await refreshFrontliners(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
+// ---- Distribution to Participants dashboard -------------------------------
+
+// Page (grouped-by-SHG_Name distribution table + KPI cards).
+app.get('/distribution', (c) => c.html(renderDistribution(baseUrl(c.req.url))));
+
+// Aggregated data feed (KPIs + grouped table + slicer lists), with filters.
+app.get('/api/distribution', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await distributionDash(storeEnv(c), {
+    districts: split(q.districts),
+    materials: split(q.materials),
+    units: split(q.units),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Rebuild the distribution_rows join table (run after uploads change data).
+app.post('/api/distribution/refresh', async (c) => {
+  const n = await refreshDistribution(storeEnv(c));
   return c.json({ ok: true, rows: n });
 });
 
