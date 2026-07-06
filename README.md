@@ -102,6 +102,18 @@ All six master tables appear as selectable entity sets and refresh automatically
 - `GET  /api/export/:key.csv` — download a master table as CSV
 - `POST /api/reset/:key` — clear a master table
 
+### Dashboards (Power BI parity)
+- `GET  /cluster-trainings` — Cluster Trainings dashboard
+- `GET  /monthly-new-youth` — Monthly New Youth dashboard
+- `GET  /frontliners` — Trainings by Frontliners dashboard
+- `GET  /distribution` — **Distribution to Participants** (participants_shg ⋈ distribution_form_v2, grouped by SHG_Name, expandable to participants)
+- `GET  /shg-distribution` — **Distribution to SHGs** (shg_group ⋈ distribution_form_v2, grouped by SHG_Group_Name, expandable to individual distribution records)
+  - `GET  /api/shg-distribution` — KPIs + grouped table + slicer lists (filters: `districts,materials,units,submitters,suppliers,from,to`)
+  - `GET  /api/shg-distribution/options` — lightweight slicer option lists
+  - `GET  /api/shg-distribution/detail?shg=` — per-record detail rows for one SHG group
+  - `POST /api/shg-distribution/refresh` — rebuild `shg_distribution_rows`
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,frontliners`)
+
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document
 - `GET /odata/$metadata` — CSDL metadata (XML)

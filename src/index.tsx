@@ -8,7 +8,8 @@ import {
   backfillFilled, clusterTrainings, refreshClusterSummary,
   newYouthDash, refreshNewYouth,
   frontlinerDash, refreshFrontliners,
-  distributionDash, distributionDetail, distributionOptions, refreshDistribution, Env,
+  distributionDash, distributionDetail, distributionOptions, refreshDistribution,
+  shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -18,6 +19,7 @@ import { renderClusterTrainings } from './cluster';
 import { renderMonthlyNewYouth } from './newyouth';
 import { renderFrontliners } from './frontliner';
 import { renderDistribution } from './distribution';
+import { renderShgDistribution } from './shgdistribution';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -461,9 +463,60 @@ app.post('/api/distribution/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Distribution to SHGs dashboard (shg_group ⋈ distribution_form_v2) -----
+
+// Page (grouped-by-SHG_Group_Name distribution table + KPI cards).
+app.get('/shg-distribution', (c) => c.html(renderShgDistribution(baseUrl(c.req.url))));
+
+// Aggregated data feed (KPIs + grouped table + slicer lists), with filters.
+app.get('/api/shg-distribution', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await shgDistributionDash(storeEnv(c), {
+    districts: split(q.districts),
+    materials: split(q.materials),
+    units: split(q.units),
+    submitters: split(q.submitters),
+    suppliers: split(q.suppliers),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists (loaded independently so slicers always fill).
+app.get('/api/shg-distribution/options', async (c) => {
+  const data = await shgDistributionOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Per-record detail rows for one SHG group (expandable hierarchy).
+app.get('/api/shg-distribution/detail', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const rows = await shgDistributionDetail(storeEnv(c), q.shg || '', {
+    districts: split(q.districts),
+    materials: split(q.materials),
+    units: split(q.units),
+    submitters: split(q.submitters),
+    suppliers: split(q.suppliers),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json({ rows });
+});
+
+// Rebuild the shg_distribution_rows join table (run after uploads change data).
+app.post('/api/shg-distribution/refresh', async (c) => {
+  const n = await refreshShgDistribution(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
-// Optional ?only=cluster,newyouth,frontliners,distribution to target a subset.
+// Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution to target a subset.
 // Each summary is refreshed independently and its result/error is reported, so
 // one heavy rebuild failing (or timing out) does not block the others.
 app.post('/api/refresh-all', async (c) => {
@@ -476,6 +529,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('cluster'))      jobs.push({ key: 'cluster',      fn: () => refreshClusterSummary(env) });
   if (want('newyouth'))     jobs.push({ key: 'newyouth',     fn: () => refreshNewYouth(env) });
   if (want('distribution')) jobs.push({ key: 'distribution', fn: () => refreshDistribution(env) });
+  if (want('shgdistribution')) jobs.push({ key: 'shgdistribution', fn: () => refreshShgDistribution(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 

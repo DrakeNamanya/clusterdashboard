@@ -465,6 +465,85 @@ export async function refreshDistribution(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+// ---- Distribution to SHGs (shg_group ⋈ distribution_form_v2) --------------
+
+/** Dashboard aggregate: KPIs + grouped-by-SHG_Group table + slicer lists. */
+export async function shgDistributionDash(env: Env, opts: DistFilters = {}): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/shg_distribution_dash', {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify({
+      p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+      p_from: opts.from || null,
+      p_to: opts.to || null,
+      p_materials: opts.materials && opts.materials.length ? opts.materials : null,
+      p_units: opts.units && opts.units.length ? opts.units : null,
+      p_submitters: opts.submitters && opts.submitters.length ? opts.submitters : null,
+      p_suppliers: opts.suppliers && opts.suppliers.length ? opts.suppliers : null,
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`shg_distribution_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Lightweight slicer option lists only (for the SHG distribution page). */
+export async function shgDistributionOptions(env: Env): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/shg_distribution_options', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`shg_distribution_options failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Per-record detail rows for one SHG group (expandable hierarchy). */
+export async function shgDistributionDetail(
+  env: Env,
+  shg: string,
+  opts: DistFilters = {}
+): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/shg_distribution_detail', {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify({
+      p_shg: shg,
+      p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+      p_from: opts.from || null,
+      p_to: opts.to || null,
+      p_materials: opts.materials && opts.materials.length ? opts.materials : null,
+      p_units: opts.units && opts.units.length ? opts.units : null,
+      p_submitters: opts.submitters && opts.submitters.length ? opts.submitters : null,
+      p_suppliers: opts.suppliers && opts.suppliers.length ? opts.suppliers : null,
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`shg_distribution_detail failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild shg_distribution_rows from records (call after uploads). */
+export async function refreshShgDistribution(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_shg_distribution_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_shg_distribution_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =
