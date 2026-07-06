@@ -415,7 +415,12 @@ app.post('/api/frontliners/refresh', async (c) => {
 // ---- Distribution to Participants dashboard -------------------------------
 
 // Page (grouped-by-SHG_Name distribution table + KPI cards).
-app.get('/distribution', (c) => c.html(renderDistribution(baseUrl(c.req.url))));
+// Options are fetched server-side and embedded so the slicers always populate.
+app.get('/distribution', async (c) => {
+  let opts = {};
+  try { opts = await distributionOptions(storeEnv(c)); } catch { /* fall back to client fetch */ }
+  return c.html(renderDistribution(baseUrl(c.req.url), opts));
+});
 
 // Aggregated data feed (KPIs + grouped table + slicer lists), with filters.
 app.get('/api/distribution', async (c) => {
@@ -466,7 +471,12 @@ app.post('/api/distribution/refresh', async (c) => {
 // ---- Distribution to SHGs dashboard (shg_group ⋈ distribution_form_v2) -----
 
 // Page (grouped-by-SHG_Group_Name distribution table + KPI cards).
-app.get('/shg-distribution', (c) => c.html(renderShgDistribution(baseUrl(c.req.url))));
+// Options are fetched server-side and embedded so the slicers always populate.
+app.get('/shg-distribution', async (c) => {
+  let opts = {};
+  try { opts = await shgDistributionOptions(storeEnv(c)); } catch { /* fall back to client fetch */ }
+  return c.html(renderShgDistribution(baseUrl(c.req.url), opts));
+});
 
 // Aggregated data feed (KPIs + grouped table + slicer lists), with filters.
 app.get('/api/shg-distribution', async (c) => {

@@ -8,7 +8,14 @@
 // the screen. Data from /api/distribution (+ /api/distribution/detail).
 // ---------------------------------------------------------------------------
 
-export function renderDistribution(base: string): string {
+export function renderDistribution(base: string, opts: any = {}): string {
+  const bootOpts = JSON.stringify({
+    districts: opts.districts || [],
+    materials: opts.materials || [],
+    units: opts.units || [],
+    submitters: opts.submitters || [],
+    suppliers: opts.suppliers || [],
+  }).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -124,6 +131,9 @@ export function renderDistribution(base: string): string {
   </div>
 
   <script>
+    // Slicer option lists embedded server-side so the slicers ALWAYS populate
+    // synchronously on first paint (no dependency on any client fetch).
+    window.__OPTS__ = ${bootOpts};
     const fmt = (n) => (n ?? 0).toLocaleString('en-US');
     const num = (v) => { const n = Number(v); return (n||0).toLocaleString('en-US',{maximumFractionDigits:2}); };
 
@@ -405,8 +415,16 @@ export function renderDistribution(base: string): string {
       load();
     }
 
-    // init slicers
+    // init slicers — build shells, then fill options from the server-embedded
+    // lists so checkboxes appear on first paint (fetch fallbacks refresh later).
     SL.forEach(s=>buildSlicerShell(S[s.id]));
+    (function seedFromBoot(){
+      const boot = window.__OPTS__ || {};
+      for (const s of SL){
+        const list = boot[s.optsKey];
+        if (list && list.length){ S[s.id].opts = list; renderSlicer(s.id); }
+      }
+    })();
     document.getElementById('fromDate').addEventListener('change', load);
     document.getElementById('toDate').addEventListener('change', load);
     // Default to a recent month so the first load is fast & reliable (avoids
