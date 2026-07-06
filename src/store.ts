@@ -404,6 +404,24 @@ export async function distributionDash(env: Env, opts: DistFilters = {}): Promis
   return r.json();
 }
 
+/**
+ * Lightweight slicer option lists only (districts/materials/units/submitters/
+ * suppliers). Fetched independently by the page so the slicers always populate
+ * fast, regardless of how long the heavy dashboard query takes.
+ */
+export async function distributionOptions(env: Env): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/distribution_options', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`distribution_options failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
 /** Per-participant detail rows for one SHG group (expandable hierarchy). */
 export async function distributionDetail(
   env: Env,

@@ -339,6 +339,25 @@ export function renderDistribution(base: string): string {
       return params;
     }
 
+    // Fill the slicer option lists from the lightweight, dedicated endpoint.
+    // Runs independently of the heavy dashboard load so the District /
+    // Material_Type / Unit / Submitted_By / Other_Supplier slicers always
+    // populate quickly, even if the main query is slow.
+    async function loadOptions(){
+      try{
+        const res = await fetch('/api/distribution/options');
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const d = await res.json();
+        for (const s of SL){
+          const list = d[s.optsKey];
+          if (list && list.length){
+            S[s.id].opts = list;
+            renderSlicer(s.id);
+          }
+        }
+      }catch(err){ /* slicers stay as All; retry happens via load() fallback */ }
+    }
+
     let firstLoad = true;
     async function load(){
       // filters changed -> detail cache is stale
@@ -405,6 +424,7 @@ export function renderDistribution(base: string): string {
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
 
+    loadOptions();   // fill slicers immediately (independent of the heavy query)
     load();
   </script>
 </body>

@@ -296,6 +296,31 @@ $$;
 alter function public.distribution_dash(text[],date,date,text[],text[],text[],text[],int) set statement_timeout='40000';
 grant execute on function public.distribution_dash(text[],date,date,text[],text[],text[],text[],int) to anon, service_role;
 
+-- Lightweight slicer option lists ONLY (no heavy KPI / row aggregation).
+-- Fetched independently by the frontend on page open so the District /
+-- Material_Type / Unit / Submitted_By / Other_Supplier slicers always populate,
+-- even if the full dashboard query is slow. Option lists are GLOBAL (unfiltered).
+create or replace function public.distribution_options()
+returns jsonb
+language sql
+stable
+as $$
+  select jsonb_build_object(
+    'districts', (select coalesce(jsonb_agg(distinct district order by district), '[]'::jsonb)
+                  from public.distribution_rows where district is not null),
+    'materials', (select coalesce(jsonb_agg(distinct material_type order by material_type), '[]'::jsonb)
+                  from public.distribution_rows where material_type is not null),
+    'units', (select coalesce(jsonb_agg(distinct unit order by unit), '[]'::jsonb)
+                  from public.distribution_rows where unit is not null),
+    'submitters', (select coalesce(jsonb_agg(distinct submitted_by order by submitted_by), '[]'::jsonb)
+                  from public.distribution_rows where submitted_by is not null),
+    'suppliers', (select coalesce(jsonb_agg(distinct other_supplier order by other_supplier), '[]'::jsonb)
+                  from public.distribution_rows where other_supplier is not null)
+  );
+$$;
+alter function public.distribution_options() set statement_timeout='20000';
+grant execute on function public.distribution_options() to anon, service_role;
+
 -- Per-participant detail rows for one SHG (for the expandable hierarchy).
 create or replace function public.distribution_detail(
   p_shg       text,

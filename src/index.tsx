@@ -8,7 +8,7 @@ import {
   backfillFilled, clusterTrainings, refreshClusterSummary,
   newYouthDash, refreshNewYouth,
   frontlinerDash, refreshFrontliners,
-  distributionDash, distributionDetail, refreshDistribution, Env,
+  distributionDash, distributionDetail, distributionOptions, refreshDistribution, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -429,6 +429,12 @@ app.get('/api/distribution', async (c) => {
     from: q.from || undefined,
     to: q.to || undefined,
   });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists (loaded independently so slicers always fill).
+app.get('/api/distribution/options', async (c) => {
+  const data = await distributionOptions(storeEnv(c));
   return c.json(data);
 });
 
