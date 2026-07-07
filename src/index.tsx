@@ -14,6 +14,7 @@ import {
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
 } from './odata';
+import { ODATA_SOURCES, fetchOdataPage, resolveSource } from './odataimport';
 import { renderPage } from './ui';
 import { renderClusterTrainings } from './cluster';
 import { renderMonthlyNewYouth } from './newyouth';
@@ -185,6 +186,66 @@ app.post('/api/append', async (c) => {
       503
     );
   }
+});
+
+// ---- Import FROM an external OData feed (paginated, one page per request) ---
+// The browser drives the loop: POST with { skip } and repeat with the returned
+// `nextSkip` until `done` is true. Credentials live in Worker secrets.
+
+app.post('/api/import-odata/:key', async (c) => {
+  const schema = SCHEMA_BY_KEY[c.req.param('key')];
+  if (!schema) return c.json({ error: 'Unknown table' }, 404);
+  if (!ODATA_SOURCES[schema.key]) {
+    return c.json({ error: `No OData source configured for '${schema.key}'.` }, 400);
+  }
+
+  let body: { skip?: number; top?: number; startSeq?: number } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // empty body is fine — treat as first page
+  }
+
+  const src = resolveSource(schema, c.env as any);
+  if (!src) return c.json({ error: 'No OData source configured.' }, 400);
+
+  const skip = typeof body.skip === 'number' && body.skip >= 0 ? body.skip : 0;
+  const top = typeof body.top === 'number' && body.top > 0 ? Math.min(body.top, 500) : 500;
+
+  const page = await fetchOdataPage(src, skip, top);
+
+  // Continue the `No` sequence across pages when caller does not supply it.
+  const startSeq = typeof body.startSeq === 'number'
+    ? body.startSeq
+    : (await maxSeq(storeEnv(c), schema)) + 1;
+
+  let result = { inserted: 0, skippedDuplicates: 0, received: 0 } as any;
+  if (page.rows.length > 0) {
+    const { cleaned } = cleanRecords(schema, page.headers, page.rows, startSeq);
+    result = await appendRecords(storeEnv(c), schema, cleaned, `odata:${schema.key}`);
+  }
+
+  const fetched = page.rows.length;
+  const nextSkip = skip + fetched;
+  const nextSeq = startSeq + fetched;
+
+  return c.json({
+    ok: true,
+    schemaKey: schema.key,
+    skip,
+    fetched,
+    total: page.total,
+    result,
+    done: page.done || fetched === 0,
+    nextSkip,
+    nextSeq,
+    odataFeed: `${baseUrl(c.req.url)}/odata/${entitySetName(schema)}`,
+  });
+});
+
+// Report which schemas have an external OData source (for the UI).
+app.get('/api/odata-sources', (c) => {
+  return c.json({ keys: Object.keys(ODATA_SOURCES) });
 });
 
 // Lightweight: return the current maxSeq so the client can continue numbering.

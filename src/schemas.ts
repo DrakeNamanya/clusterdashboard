@@ -182,6 +182,24 @@ export const SCHEMAS: SheetSchema[] = [
       { docId: '__Submissions-id' }
     ),
   },
+  {
+    key: 'shg_profiling_form',
+    label: 'shg_profiling_form',
+    filenameHints: ['shg_profiling_form', 'shg profiling', 'profiling_form', 'profiling'],
+    dedupKey: 'docId',
+    columns: cols(
+      'instructions,Participation_interview,shg_name,subcounty,subcounties_view_refID,subcounties_view__id,subcounty_refID,district,district_refID,Parish_name,Village_name,Assessment_date,contactperson,primay_contact,secondary_contact,Group_type,Grouptype_other,Group_registration,Registration_date,registration_level,group_owned_items,Meeting_frqy,Offered_services,offered_services_others,Group_enterprises,group_enterprise_other,Level_experience,sell_type,group_sells,group_sells_others,localseed_business,Major_owned_resources,Block_farming_potential,Org_support,NGO_Name,Needed_support,Profilers_name,Profilers_title,partner,profiling_date,Cluster_name,Corhort,agrihub,agrihub_registration_form_refID,agrihub_registration_form__id,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        Assessment_date: 'date',
+        Registration_date: 'date',
+        profiling_date: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+        primay_contact: 'phone',
+        secondary_contact: 'phone',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(

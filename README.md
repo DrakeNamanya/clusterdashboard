@@ -34,7 +34,7 @@ Run `supabase/schema.sql` once in **Supabase → SQL Editor** to create the
 cannot be run from the sandbox (the Supabase DB password is separate from the
 service key and the direct DB host is IPv6-only).
 
-## Supported Templates (6)
+## Supported Templates (7)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
 fixed output schema and a master table.
 
@@ -46,6 +46,26 @@ fixed output schema and a master table.
 | `distribution_form_v2` | Sheet 4: distribution_form_v2 (61 cols) | `_id` | |
 | `participants_shg`     | Sheet 5: participant_shg    | `_id` | repairs Excel scientific-notation phones |
 | `shg_group`            | Sheet 6: shg_group          | `_id` | |
+| `shg_profiling_form`   | shg_profiling_form (50 cols) | `docId` | pulled from an **external OData feed** (not uploaded) |
+
+## Importing from an external OData feed (`shg_profiling_form`)
+`shg_profiling_form` is populated by **pulling** from an external OData v4 feed
+(Heifer SAYE gateway) rather than by file upload:
+
+- **Feed**: `https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/shg_profiling_form_odata_view`
+  (nested data entity set `.../shg_profiling_form_odata_view`).
+- **Auth**: HTTP Basic. Credentials are stored as Cloudflare Pages secrets
+  `ODATA_PROFILING_USER` / `ODATA_PROFILING_PASS` (never in code; local dev uses
+  `.dev.vars`, gitignored).
+- **How**: click **Import shg_profiling_form** on the home page. The browser
+  drives a **paginated loop** — it calls `POST /api/import-odata/shg_profiling_form`
+  one page at a time (`$top`/`$skip`, 500 rows/page), each page is cleaned and
+  appended (append-only dedup on `docId`), and progress is shown live. Re-running
+  is safe: existing rows are skipped as duplicates.
+- **Source registry**: `src/odataimport.ts` maps a schema key → feed URL + which
+  env vars hold its credentials. Additional OData sources can be added there.
+- The imported table appears automatically in `/api/stats`, the served OData feed
+  (`/odata/shg_profiling_form`) and CSV export, exactly like the upload templates.
 
 ## Cleaning Rules Applied
 - **Column mapping**: source headers are matched to the target schema (case /

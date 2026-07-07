@@ -383,6 +383,50 @@ async function rebuildDashboards(opts){
 const rebuildDashBtn=$('rebuildDashBtn');
 if(rebuildDashBtn) rebuildDashBtn.addEventListener('click',()=>rebuildDashboards());
 
+// ---- Import from external OData feed (paginated loop) ----------------------
+const importOdataBtn=$('importOdataBtn');
+if(importOdataBtn) importOdataBtn.addEventListener('click',async()=>{
+  const key=importOdataBtn.dataset.key;
+  const box=$('importOdataStatus');
+  importOdataBtn.disabled=true; const orig=importOdataBtn.innerHTML;
+  importOdataBtn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>Importing…';
+  box.classList.remove('hidden');
+  box.className='mb-3 text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3';
+  let skip=0, startSeq=undefined, totalInserted=0, totalDup=0, totalFetched=0, total=null, done=false, pages=0;
+  try{
+    while(!done){
+      const res=await fetch('/api/import-odata/'+key,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({skip,startSeq})
+      });
+      const d=await res.json();
+      if(!res.ok||d.error) throw new Error(d.error||('HTTP '+res.status));
+      pages++;
+      totalFetched+=d.fetched||0;
+      totalInserted+=(d.result&&d.result.inserted)||0;
+      totalDup+=(d.result&&d.result.skippedDuplicates)||0;
+      if(d.total!=null) total=d.total;
+      skip=d.nextSkip; startSeq=d.nextSeq; done=d.done;
+      const pct=total?Math.min(100,Math.round(totalFetched/total*100)):null;
+      box.innerHTML='<i class="fas fa-cloud-arrow-down text-sky-600 mr-1"></i>Fetched '
+        +totalFetched.toLocaleString()+(total?(' / '+total.toLocaleString()):'')
+        +(pct!=null?(' ('+pct+'%)'):'')+' — inserted '+totalInserted.toLocaleString()
+        +', duplicates skipped '+totalDup.toLocaleString()+'.';
+      if(d.fetched===0) break;
+    }
+    box.className='mb-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3';
+    box.innerHTML='<i class="fas fa-circle-check mr-1"></i>Import complete: '
+      +totalInserted.toLocaleString()+' new rows inserted, '
+      +totalDup.toLocaleString()+' duplicates skipped ('+totalFetched.toLocaleString()+' fetched over '+pages+' pages).';
+    await loadStats();
+  }catch(err){
+    box.className='mb-3 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg p-3';
+    box.innerHTML='<i class="fas fa-triangle-exclamation mr-1"></i>Import failed: '+esc(err.message||String(err));
+  }finally{
+    importOdataBtn.disabled=false; importOdataBtn.innerHTML=orig;
+  }
+});
+
 async function previewTable(key,label){
   const res=await fetch('/api/data/'+key+'?top=100'); const data=await res.json();
   $('previewSection').classList.remove('hidden');
