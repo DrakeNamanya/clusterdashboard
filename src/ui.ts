@@ -44,6 +44,9 @@ export function renderPage(base: string): string {
         <a href="/isla" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold">
           <i class="fas fa-piggy-bank"></i> ISLA Savings
         </a>
+        <a href="/production" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-lime-600 hover:bg-lime-500 text-white text-sm font-semibold">
+          <i class="fas fa-seedling"></i> Production (Horticulture)
+        </a>
       </div>
     </div>
   </header>

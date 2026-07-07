@@ -71,6 +71,14 @@ export const ODATA_SOURCES: Record<
     userEnv: 'ODATA_PROFILING_USER',
     passEnv: 'ODATA_PROFILING_PASS',
   },
+  // production & marketing master — same Heifer gateway/credentials.
+  production_and_marketing_tool: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'production_and_marketing_tool_odata_view/production_and_marketing_tool_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
 };
 
 function basicAuth(user: string, pass: string): string {

@@ -287,6 +287,44 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  {
+    // production_and_marketing_tool: master feed for the production &
+    // marketing dashboards (Horticulture / Oil seeds / Poultry).
+    key: 'production_and_marketing_tool',
+    label: 'production_and_marketing_tool',
+    filenameHints: ['production_and_marketing_tool', 'production and marketing', 'production_marketing'],
+    dedupKey: 'refID',
+    columns: cols(
+      'instructions,ip_name,title_datacollector,other_title_datacollector,participant_type,participant_name,shg_participant_id,sme_participant,sme_participant_id,incubatee_participant,incubatee_participant_id,activity_date,district_name,subcounty_name,parish,village,value_chain,poultry,other_poultry,horticulture,other_horticulture,dairy,other_dairy,beef,other_beef,oil_seeds,other_oil_seeds,pdn_level,year,season,livestock_received,date_livestock_received,livestock_received_pic,livestock_received_gps,planting_status,acres,qty_seed,qty_seed_measure,date_received,qty_planted,qty_planted_measure,planting_date,germination_rate,estimate_yield,estimate_yield_measure,harvest_date,garden_gps,garden_pic,input_cost,other_input,land_hire,ploughing,seed,planting,fertilizers,weeding,harvest,agro_chemicals,other_input_cost,total_planting_production_cost,qty_harvested,qty_harvested_measure,qty_consumed,qty_wasted,qty_sold,sale,avg_price,total_planting_value,net_planting,cycle,qty_produced,poultry_sold,poultry_inputs,other_poultry_inputs,poultry_house,chicks,poultry_feeds,vaccination,disease_treatment,other,total_poultry_production_cost,poultry_consumed,poultry_wasted,avg_bird_price,total_poultry_value,net_poultry,milking_cows,milk_produced,milk_consumed,milk_wasted,milk_sold,dairy_inputs,other_dairy_inputs,cow_shelter,dairy_feeds,dairy_vaccinations,dairy_disease_treatment,dairy_other,total_dairy_production_cost,avg_dairy_price,total_dairy_value,net_dairy,animals_received,date_animals_received,animals_kept,meat_produced,meat_consumed,meat_wasted,meat_sold,beef_inputs,other_beef_inputs,beef_cow_shelter,beef_feeds,beef_vaccinations,beef_disease_treatment,beef_other,total_beef_production_cost,avg_beef_price,total_beef_value,net_beef,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        activity_date: 'date',
+        year: 'date',
+        planting_date: 'date',
+        harvest_date: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+        acres: 'number',
+        qty_seed: 'int',
+        qty_planted: 'int',
+        total_planting_production_cost: 'int',
+        qty_harvested: 'int',
+        qty_consumed: 'int',
+        qty_wasted: 'int',
+        qty_sold: 'int',
+        avg_price: 'int',
+        total_planting_value: 'int',
+        net_planting: 'int',
+        qty_produced: 'int',
+        poultry_sold: 'int',
+        total_poultry_production_cost: 'int',
+        poultry_consumed: 'int',
+        poultry_wasted: 'int',
+        avg_bird_price: 'int',
+        total_poultry_value: 'int',
+        net_poultry: 'int',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(

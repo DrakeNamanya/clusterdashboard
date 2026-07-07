@@ -664,6 +664,64 @@ export async function refreshIsla(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+// --------------------------------------------------------------------------
+// Youth in Production (Mainly Horticulture) — production_and_marketing_tool
+// filtered pdn_level='production', joined to participants + shg profiling.
+// --------------------------------------------------------------------------
+export interface ProductionFilters {
+  districts?: string[];
+  valuechains?: string[];
+  from?: string;
+  to?: string;
+}
+
+/** Dashboard aggregate: 3 KPIs + table (grouped by shg_name) + slicers. */
+export async function productionDash(env: Env, opts: ProductionFilters = {}): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/production_dash', {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify({
+      p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+      p_valuechains: opts.valuechains && opts.valuechains.length ? opts.valuechains : null,
+      p_from: opts.from || null,
+      p_to: opts.to || null,
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`production_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Lightweight slicer option lists only (district_name + value_chain). */
+export async function productionOptions(env: Env): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/production_options', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`production_options failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild production_rows from records (call after uploads). */
+export async function refreshProduction(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_production_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_production_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =
