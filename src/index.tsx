@@ -10,7 +10,8 @@ import {
   frontlinerDash, refreshFrontliners,
   distributionDash, distributionDetail, distributionOptions, refreshDistribution,
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
-  shgProfilingDash, shgProfilingOptions, refreshShgProfiling, Env,
+  shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
+  islaDash, islaOptions, refreshIsla, Env,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -23,6 +24,7 @@ import { renderFrontliners } from './frontliner';
 import { renderDistribution } from './distribution';
 import { renderShgDistribution } from './shgdistribution';
 import { renderShgProfiling } from './shgprofiling';
+import { renderIsla } from './isla';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -628,9 +630,42 @@ app.post('/api/shg-profiling/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- ISLA (SHGs SAVING IN A CLUSTER) --------------------------------------
+app.get('/isla', async (c) => {
+  let opts = {};
+  try { opts = await islaOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderIsla(baseUrl(c.req.url), opts));
+});
+
+// Aggregated data feed (SHG_Saving KPI + table grouped by shg_name + slicers).
+app.get('/api/isla', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await islaDash(storeEnv(c), {
+    districts: split(q.districts),
+    profilers: split(q.profilers),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists.
+app.get('/api/isla/options', async (c) => {
+  const data = await islaOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Rebuild the isla_final_rows table (run after uploads / imports change data).
+app.post('/api/isla/refresh', async (c) => {
+  const n = await refreshIsla(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
-// Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling to target a subset.
+// Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
 // Each summary is refreshed independently and its result/error is reported, so
 // one heavy rebuild failing (or timing out) does not block the others.
 app.post('/api/refresh-all', async (c) => {
@@ -645,6 +680,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('distribution')) jobs.push({ key: 'distribution', fn: () => refreshDistribution(env) });
   if (want('shgdistribution')) jobs.push({ key: 'shgdistribution', fn: () => refreshShgDistribution(env) });
   if (want('shgprofiling')) jobs.push({ key: 'shgprofiling', fn: () => refreshShgProfiling(env) });
+  if (want('isla'))         jobs.push({ key: 'isla',         fn: () => refreshIsla(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 

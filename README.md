@@ -34,7 +34,7 @@ Run `supabase/schema.sql` once in **Supabase → SQL Editor** to create the
 cannot be run from the sandbox (the Supabase DB password is separate from the
 service key and the direct DB host is IPv6-only).
 
-## Supported Templates (7)
+## Supported Templates (11)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
 fixed output schema and a master table.
 
@@ -47,6 +47,10 @@ fixed output schema and a master table.
 | `participants_shg`     | Sheet 5: participant_shg    | `_id` | repairs Excel scientific-notation phones |
 | `shg_group`            | Sheet 6: shg_group          | `_id` | |
 | `shg_profiling_form`   | shg_profiling_form (50 cols) | `docId` | pulled from an **external OData feed** (not uploaded) |
+| `isla_form`            | ISLA_DATA (isla_form_odata_view) | `refID` | ISLA savings fact; **external OData feed** |
+| `isla_participants`    | isla_form.shg_participants_odata_view | `refID` | **external OData feed** |
+| `participants`         | Profile (participants_odata_view) | `refID` | source for `Dim_Profile`; **external OData feed** |
+| `youth_profiling`      | youth_profiling_form_odata_view (79 cols) | `refID` | **external OData feed** |
 
 ## Importing from an external OData feed (`shg_profiling_form`)
 `shg_profiling_form` is populated by **pulling** from an external OData v4 feed
@@ -139,7 +143,16 @@ All six master tables appear as selectable entity sets and refresh automatically
   - `GET  /api/shg-profiling` — KPIs + table + slicer lists (filters: `districts,profilers,from,to,totalMin,totalMax`)
   - `GET  /api/shg-profiling/options` — lightweight slicer option lists + total range bounds
   - `POST /api/shg-profiling/refresh` — rebuild `shg_profiling_rows`
-- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,frontliners`)
+- `GET  /isla` — **SHGs SAVING IN A CLUSTER (ISLA)** (isla_form ⋈ SHG_ISLA). Table grouped by `shg_name`, enriched with profiler + district from `shg_profiling_form`.
+  - **ISLA FINAL** = `isla_form` LEFT JOIN `shg_profiling_form` on `isla_form[shg_id] = shg_profiling_form[refID]` (filtered to `shg_id <> ''`); `Profilers_name`/`District_SHG` = RELATED profiling columns. Materialized as `isla_final_rows`.
+  - KPI: **SHG_Saving** = `DISTINCTCOUNT(isla_final[shg_id])` over the filtered rows.
+  - Table columns: shg_name, Sum of savings_value, Sum of youth_group_saving, Sum of youth_loans_value_given, Sum of total_fund, Sum of loans, First Profilers_name, First District_SHG (+ grand-total row).
+  - Slicers: **District_SHG** (list, incl. `(Blank)`), **Profilers_name** (list); Date range on `activity_date`.
+  - `GET  /api/isla` — KPI + grouped table + slicer lists (filters: `districts,profilers,from,to`)
+  - `GET  /api/isla/options` — lightweight slicer option lists
+  - `POST /api/isla/refresh` — rebuild `isla_final_rows`
+- **Dim_Profile** — `SUMMARIZE(participants filtered to name_ip='HEIFER', participant_id, MAX(...))`; materialized as `dim_profile` (RPC `refresh_dim_profile()`). Participant dimension (full_name, district, sex, disability, shg_name) for profiling analysis.
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,frontliners`)
 
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document

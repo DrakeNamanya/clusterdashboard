@@ -42,6 +42,35 @@ export const ODATA_SOURCES: Record<
     userEnv: 'ODATA_PROFILING_USER',
     passEnv: 'ODATA_PROFILING_PASS',
   },
+  // ISLA masters — same Heifer OData gateway, same basic-auth credentials.
+  isla_form: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'isla_form_odata_view/isla_form_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
+  isla_participants: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'isla_form.shg_participants_odata_view/isla_form.shg_participants_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
+  participants: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'participants_odata_view/participants_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
+  youth_profiling: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'youth_profiling_form_odata_view/youth_profiling_form_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
 };
 
 function basicAuth(user: string, pass: string): string {

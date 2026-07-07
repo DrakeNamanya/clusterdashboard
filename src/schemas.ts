@@ -200,6 +200,93 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  // -------------------------------------------------------------------------
+  // ISLA (SHGs SAVING IN A CLUSTER) master sheets. Imported from OData feeds.
+  // -------------------------------------------------------------------------
+  {
+    // ISLA_DATA: the ISLA savings fact table.
+    key: 'isla_form',
+    label: 'isla_form',
+    filenameHints: ['isla_form', 'isla form', 'isla_data', 'isla'],
+    dedupKey: 'refID',
+    columns: cols(
+      'instructions,shg_name,registered_shgs_view_refID,registered_shgs_view__id,shg_id,shg_total,shg_total_females,shg_total_males,shg_total_pwds,group_saving,youth_group_saving,savings_value,youth_savings_value,total_fund,loans,loans_value_given,youth_loans_value_given,loans_value_repaid,outstanding_loan,loans_value_outstanding,social_fund,other_funds,balance,prepared,prepared_sign,certified,Certified_sign,reviewed,reviewed_sign,activity_date,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        shg_total: 'int',
+        shg_total_females: 'int',
+        shg_total_males: 'int',
+        shg_total_pwds: 'int',
+        group_saving: 'int',
+        youth_group_saving: 'int',
+        savings_value: 'int',
+        youth_savings_value: 'int',
+        total_fund: 'int',
+        loans: 'int',
+        loans_value_given: 'int',
+        youth_loans_value_given: 'int',
+        loans_value_repaid: 'int',
+        loans_value_outstanding: 'int',
+        social_fund: 'int',
+        other_funds: 'int',
+        balance: 'int',
+        activity_date: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+      }
+    ),
+  },
+  {
+    // ISLA_PARTICIPANTS: shg participants captured under the ISLA form.
+    key: 'isla_participants',
+    label: 'isla_form.shg_participants',
+    filenameHints: ['isla_participants', 'isla_form.shg_participants', 'shg_participants'],
+    dedupKey: 'refID',
+    columns: cols(
+      'participant_name,shg_members_view_refID,shg_members_view__id,shg_participant_id,sex,shg_disability,__Submissions-id,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        dateCreated: 'date',
+        lastUpdated: 'date',
+      },
+      { docId: '__Submissions-id' }
+    ),
+  },
+  {
+    // Profile: individual participant profiles (used for Dim_Profile).
+    key: 'participants',
+    label: 'participants',
+    filenameHints: ['participants_odata', 'participant_profile', 'participants profile'],
+    dedupKey: 'refID',
+    columns: cols(
+      'refID,First_name,Surname,district_name,Subcounty_name,Parish_name,Village_name,Disability_status,Cohort,Sex,tel_contact,name_ip,DOB,sme_name,mse_group_profiling_tool_refID,mse_group_profiling_tool__id,sme_id,shg_name,shg_profiling_form_refID,shg_profiling_form__id,shg_id,incubation_center,incubation_centers_refID,incubation_centers__id,incubation_center_id,createdBy,docId,deactivation_reason,dateCreated,lastUpdated',
+      {
+        DOB: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+        tel_contact: 'phone',
+      }
+    ),
+  },
+  {
+    // youth profiling: youth profiling form (raw import, no transforms).
+    key: 'youth_profiling',
+    label: 'youth_profiling_form',
+    filenameHints: ['youth_profiling', 'youth profiling', 'youth_profiling_form'],
+    dedupKey: 'refID',
+    columns: cols(
+      'Informed_Consent,Youthwillingness_participate,profiles,name_ip,participant_type,district_name,Subcounty_name,shg_name,shg_id,group_does_following,sme_name,sme_id,incubation_center,incubation_center_id,datacollectors_Name,Title_datacollector,Date_profiliing,Student_status,active_students,Date_start,First_name,Middle_name,Surname,Preferred_name,Parish_name,Village_name,tel_contact,tel_contact2,Email,Sex,DOB,document,nin_no,Photo,Refugee_status,IDP_status,Youth_maritalstatus,Religion,hh_head,hh_head_Sex,hh_head_tel_contact,hh_head_DOB,Relationship_head_HH,No_female_HHmembers,No_male_HHmembers,Disability_status,Impairments,level_education,Participation_YAWs,Other_Participation_YAWs,Do_for_living,other_specify,Employment_status,Employment_type,Employment_sector,Land_ownership,Land_ownership_type,Agri_Enterprise_choices,others-specify,Business_idea,Businessidea_details,Products_idea,Operation_ideas,Resources_invest,Other_resources,Non_Agri_enterprise_choices,monthly_incomeestimate,saving,mode_saving,others_specify,consent_form_no,recommendation,reason,Cohort,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        Date_profiliing: 'date',
+        Date_start: 'date',
+        DOB: 'date',
+        hh_head_DOB: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+        tel_contact: 'phone',
+        tel_contact2: 'phone',
+        hh_head_tel_contact: 'phone',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(

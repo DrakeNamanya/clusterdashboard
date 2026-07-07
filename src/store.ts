@@ -607,6 +607,63 @@ export async function refreshShgProfiling(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+// --------------------------------------------------------------------------
+// ISLA (SHGs SAVING IN A CLUSTER) dashboard
+// --------------------------------------------------------------------------
+export interface IslaFilters {
+  districts?: string[];
+  profilers?: string[];
+  from?: string;
+  to?: string;
+}
+
+/** Dashboard aggregate: SHG_Saving KPI + table (grouped by shg_name) + slicers. */
+export async function islaDash(env: Env, opts: IslaFilters = {}): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/isla_dash', {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify({
+      p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+      p_profilers: opts.profilers && opts.profilers.length ? opts.profilers : null,
+      p_from: opts.from || null,
+      p_to: opts.to || null,
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`isla_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Lightweight slicer option lists only (District_SHG + Profilers_name). */
+export async function islaOptions(env: Env): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/isla_options', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`isla_options failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild isla_final_rows from records (call after uploads). */
+export async function refreshIsla(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_isla_final_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_isla_final_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =
