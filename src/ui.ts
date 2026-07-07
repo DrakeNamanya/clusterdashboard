@@ -38,6 +38,9 @@ export function renderPage(base: string): string {
         <a href="/shg-distribution" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-800 hover:bg-teal-700 text-white text-sm font-semibold">
           <i class="fas fa-people-group"></i> Distribution to SHGs
         </a>
+        <a href="/shg-profiling" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold">
+          <i class="fas fa-address-card"></i> SHG Profiling
+        </a>
       </div>
     </div>
   </header>

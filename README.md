@@ -132,7 +132,14 @@ All six master tables appear as selectable entity sets and refresh automatically
   - `GET  /api/shg-distribution/options` — lightweight slicer option lists
   - `GET  /api/shg-distribution/detail?shg=` — per-record detail rows for one SHG group
   - `POST /api/shg-distribution/refresh` — rebuild `shg_distribution_rows`
-- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,frontliners`)
+- `GET  /shg-profiling` — **SHG Profiling and Group Statistics** (shg_groups_view ⋈ Dim_SHG). One flat row per SHG group, enriched with the profiler pulled from `shg_profiling_form`. VS KPI cards (NewSHGs_Profiles vs Monthly_SHGs).
+  - `Dim_SHG` = SUMMARIZE(shg_profiling_form, refID, shg_name, MAX(Profilers_name)); join `shg_groups_view[SHG ID] = Dim_SHG[refID]`; `First profiler = RELATED(Dim_SHG[profilers_name])`.
+  - Table columns: SHG Name, First district, Sum of Male, Sum of Female, Sum of PWD, Sum of Participants Trained, Sum of Total, First profiler, First trainings.
+  - Slicers: **District** (list), **profiler_name** (list), Date range (dateCreated), numeric range on Sum of Total.
+  - `GET  /api/shg-profiling` — KPIs + table + slicer lists (filters: `districts,profilers,from,to,totalMin,totalMax`)
+  - `GET  /api/shg-profiling/options` — lightweight slicer option lists + total range bounds
+  - `POST /api/shg-profiling/refresh` — rebuild `shg_profiling_rows`
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,frontliners`)
 
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document

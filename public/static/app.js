@@ -349,7 +349,7 @@ if(backfillBtn) backfillBtn.addEventListener('click',async()=>{
 
 // Rebuild all dashboard summary tables (cluster / newyouth / distribution / frontliners)
 // so the dashboard pages reflect the latest master data.
-const DASH_LABELS={cluster:'Cluster Trainings',newyouth:'Monthly New Youth',distribution:'Distribution to Participants',shgdistribution:'Distribution to SHGs',frontliners:'Trainings by Frontliners'};
+const DASH_LABELS={cluster:'Cluster Trainings',newyouth:'Monthly New Youth',distribution:'Distribution to Participants',shgdistribution:'Distribution to SHGs',shgprofiling:'SHG Profiling',frontliners:'Trainings by Frontliners'};
 async function rebuildDashboards(opts){
   opts=opts||{};
   const btn=$('rebuildDashBtn');

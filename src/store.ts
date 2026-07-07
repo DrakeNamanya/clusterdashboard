@@ -544,6 +544,66 @@ export async function refreshShgDistribution(env: Env): Promise<number> {
   return Number(await r.json());
 }
 
+// ---- SHG Profiling (shg_groups_view ⋈ Dim_SHG[shg_profiling_form]) ----------
+
+export interface ProfilingFilters {
+  districts?: string[];
+  profilers?: string[];
+  from?: string;
+  to?: string;
+  totalMin?: number;
+  totalMax?: number;
+}
+
+/** Dashboard aggregate: VS KPIs + one-row-per-SHG table + slicer lists. */
+export async function shgProfilingDash(env: Env, opts: ProfilingFilters = {}): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/shg_profiling_dash', {
+    method: 'POST',
+    headers: headers(env),
+    body: JSON.stringify({
+      p_districts: opts.districts && opts.districts.length ? opts.districts : null,
+      p_profilers: opts.profilers && opts.profilers.length ? opts.profilers : null,
+      p_from: opts.from || null,
+      p_to: opts.to || null,
+      p_total_min: typeof opts.totalMin === 'number' ? opts.totalMin : null,
+      p_total_max: typeof opts.totalMax === 'number' ? opts.totalMax : null,
+    }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`shg_profiling_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Lightweight slicer option lists only (District + profiler + total range). */
+export async function shgProfilingOptions(env: Env): Promise<any> {
+  const r = await fetch(restBase(env) + '/rpc/shg_profiling_options', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`shg_profiling_options failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return r.json();
+}
+
+/** Rebuild shg_profiling_rows from records (call after uploads). */
+export async function refreshShgProfiling(env: Env): Promise<number> {
+  const r = await fetch(restBase(env) + '/rpc/refresh_shg_profiling_rows', {
+    method: 'POST',
+    headers: headers(env),
+    body: '{}',
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`refresh_shg_profiling_rows failed (${r.status}): ${t.slice(0, 200)}`);
+  }
+  return Number(await r.json());
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   const url =
