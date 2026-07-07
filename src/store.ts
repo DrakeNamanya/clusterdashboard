@@ -553,6 +553,8 @@ export interface ProfilingFilters {
   to?: string;
   totalMin?: number;
   totalMax?: number;
+  /** Monthly_SHGs target (MAX(Targets[Monthly_SHGs])); not affected by filters. */
+  monthlyTarget?: number;
 }
 
 /** Dashboard aggregate: VS KPIs + one-row-per-SHG table + slicer lists. */
@@ -567,6 +569,7 @@ export async function shgProfilingDash(env: Env, opts: ProfilingFilters = {}): P
       p_to: opts.to || null,
       p_total_min: typeof opts.totalMin === 'number' ? opts.totalMin : null,
       p_total_max: typeof opts.totalMax === 'number' ? opts.totalMax : null,
+      p_monthly_target: typeof opts.monthlyTarget === 'number' ? opts.monthlyTarget : 29,
     }),
   });
   if (!r.ok) {

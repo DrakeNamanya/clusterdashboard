@@ -193,7 +193,7 @@ export function renderShgDistribution(base: string, opts: any = {}): string {
     const SL_PARAM = { dist:'districts', mat:'materials', unit:'units', sub:'submitters', sup:'suppliers' };
 
     const S = {};
-    SL.forEach(s => S[s.id] = { opts:[], sel:new Set(), all:true, cfg:s });
+    SL.forEach(s => S[s.id] = { id:s.id, opts:[], sel:new Set(), all:true, cfg:s });
 
     let sortKey = 'qty_received';
     let lastData = null;

@@ -157,7 +157,7 @@ export function renderShgProfiling(base: string, opts: any = {}): string {
     const SL_PARAM = { dist:'districts', prof:'profilers' };
 
     const S = {};
-    SL.forEach(s => S[s.id] = { opts:[], sel:new Set(), all:true, cfg:s });
+    SL.forEach(s => S[s.id] = { id:s.id, opts:[], sel:new Set(), all:true, cfg:s });
 
     let sortKey = 'total';
     let lastData = null;

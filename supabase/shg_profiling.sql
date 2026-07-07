@@ -102,6 +102,7 @@ create or replace function public.shg_profiling_dash(
   p_to        date   default null,
   p_total_min int    default null,
   p_total_max int    default null,
+  p_monthly_target int default 29,
   p_limit     int    default 5000
 )
 returns jsonb
@@ -126,8 +127,13 @@ as $$
   )
   select jsonb_build_object(
     -- KPI cards (VS)
-    'monthly_shgs',     (select count(*) from f),                                  -- SHG groups in window
-    'new_shgs_profiles',(select count(*) from f where profiler_name is not null),  -- profiled groups in window
+    --   NewSHGs_Profiles = DISTINCTCOUNT('shg_groups_statistics'[SHG ID]) over the
+    --     filtered rows (distinct SHG IDs actually present in the selection).
+    --   Monthly_SHGs = MAX(Targets[Monthly_SHGs]) — a target/goal value that is
+    --     NOT affected by the row filters (there is no Targets table in the data,
+    --     so it is supplied via p_monthly_target; default 29 as per the report).
+    'new_shgs_profiles',(select count(distinct shg_id) from f where shg_id is not null),
+    'monthly_shgs',     coalesce(p_monthly_target, 29),
     -- Table rows (one per SHG group)
     'rows', (select coalesce(jsonb_agg(jsonb_build_object(
         'shg_name', shg_name,
@@ -163,8 +169,8 @@ as $$
     'total_max', (select coalesce(max(total),0) from public.shg_profiling_rows)
   );
 $$;
-alter function public.shg_profiling_dash(text[],text[],date,date,int,int,int) set statement_timeout='40000';
-grant execute on function public.shg_profiling_dash(text[],text[],date,date,int,int,int) to anon, service_role;
+alter function public.shg_profiling_dash(text[],text[],date,date,int,int,int,int) set statement_timeout='40000';
+grant execute on function public.shg_profiling_dash(text[],text[],date,date,int,int,int,int) to anon, service_role;
 
 -- ---- Lightweight slicer option lists only ----------------------------------
 create or replace function public.shg_profiling_options()
