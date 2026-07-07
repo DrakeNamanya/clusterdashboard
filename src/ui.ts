@@ -47,6 +47,9 @@ export function renderPage(base: string): string {
         <a href="/production" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-lime-600 hover:bg-lime-500 text-white text-sm font-semibold">
           <i class="fas fa-seedling"></i> Production (Horticulture)
         </a>
+        <a href="/sales" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold">
+          <i class="fas fa-sack-dollar"></i> Sales (Horticulture/Oilseeds)
+        </a>
       </div>
     </div>
   </header>
