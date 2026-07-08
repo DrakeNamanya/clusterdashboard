@@ -40,7 +40,12 @@ function storeEnv(c: any): Env {
   if (!url || !key) {
     throw new Error('Supabase is not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing).');
   }
-  return { SUPABASE_URL: url, SUPABASE_SERVICE_KEY: key };
+  return {
+    SUPABASE_URL: url,
+    SUPABASE_SERVICE_KEY: key,
+    // Neon serves the Cluster-2 dashboards (Production/Sales/ISLA/SHG/Distribution).
+    NEON_DATABASE_URL: c.env.NEON_DATABASE_URL,
+  };
 }
 
 const app = new Hono<{ Bindings: Bindings }>();

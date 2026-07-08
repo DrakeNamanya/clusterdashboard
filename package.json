@@ -12,7 +12,9 @@
     "test": "curl http://localhost:3000/health"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "hono": "^4.12.26",
+    "pg": "^8.22.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
