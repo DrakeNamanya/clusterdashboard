@@ -95,13 +95,43 @@ function neonSql(env: Env) {
   if (!env.NEON_DATABASE_URL) {
     throw new Error('NEON_DATABASE_URL is not configured');
   }
+  // fetchConnectionCache keeps the HTTP connection warm across queries in a
+  // single request; fullResults=false returns plain row arrays from .query().
   return neon(env.NEON_DATABASE_URL);
+}
+
+/**
+ * Run a Neon query with retry/backoff. Neon's free tier scales the compute to
+ * zero when idle, so the first query after idle can fail or time out while the
+ * instance wakes (~1-5s). Retrying with backoff turns those transient failures
+ * into a successful (if slightly slow) response instead of an HTTP 503.
+ */
+async function neonQuery(
+  env: Env,
+  text: string,
+  params: any[] = [],
+  tries = 5
+): Promise<any[]> {
+  const sql = neonSql(env);
+  let last: unknown;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      return (await sql.query(text, params)) as any[];
+    } catch (e) {
+      last = e;
+      // Backoff: 0.4s, 0.8s, 1.6s, 3.2s — enough for a cold Neon compute to wake.
+      if (i < tries) {
+        await new Promise((r) => setTimeout(r, 400 * Math.pow(2, i - 1)));
+      }
+    }
+  }
+  throw last instanceof Error ? last : new Error('Neon query failed');
 }
 
 /**
  * Call a jsonb-returning Postgres function on Neon and return the parsed value.
  * Mirrors the PostgREST `/rpc/<fn>` behaviour used for Supabase. Positional
- * params are passed via `sql.query(text, params)` so array/date args bind
+ * params are passed via `neonQuery(text, params)` so array/date args bind
  * correctly (text[] via $n::text[]).
  */
 async function neonRpcJson(
@@ -110,9 +140,8 @@ async function neonRpcJson(
   argSql: string,
   params: any[]
 ): Promise<any> {
-  const sql = neonSql(env);
   const text = `select ${fn}(${argSql}) as result`;
-  const rows = (await sql.query(text, params)) as any[];
+  const rows = await neonQuery(env, text, params);
   const val = rows && rows.length ? rows[0].result : null;
   // Neon returns jsonb already parsed to JS objects.
   return val;
@@ -125,9 +154,8 @@ async function neonRpcScalar(
   argSql = '',
   params: any[] = []
 ): Promise<number> {
-  const sql = neonSql(env);
   const text = `select ${fn}(${argSql}) as result`;
-  const rows = (await sql.query(text, params)) as any[];
+  const rows = await neonQuery(env, text, params);
   return rows && rows.length ? Number(rows[0].result) : 0;
 }
 
