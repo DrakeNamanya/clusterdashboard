@@ -83,6 +83,7 @@ const NEON_TEMPLATES = new Set<string>([
   'shg_groups_view',
   'shg_group',
   'participants_shg',
+  'distribution_form_v2',
 ]);
 
 /** True when this template's records should be stored/queried on Neon. */
