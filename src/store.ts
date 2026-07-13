@@ -391,13 +391,14 @@ async function appendRecordsD1(
     return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
   }
 
-  // Count existing keys to report an accurate inserted count (INSERT OR IGNORE
-  // does not return that directly). We compare row-count before/after.
-  const before = await d1Count(db);
+  // IMPORTANT: do NOT COUNT(*) the whole table per batch — at ~500k+ rows that
+  // O(n) scan is what made huge uploads slow down and eventually 503. Instead we
+  // read the exact number of rows inserted from each statement's meta.changes
+  // (INSERT OR IGNORE reports 0 for skipped duplicates).
   const COLS = 13;
-  const CHUNK = 50; // 50 * 13 = 650 bound params, safely under D1's 100-var? -> actually use bound params per stmt <= 100 -> reduce
-  // D1 allows up to 100 bound parameters per statement; 13 cols => max 7 rows.
-  const MAX_ROWS = 7;
+  // Multi-row insert: 30 rows * 13 cols = 390 bound params per statement, well
+  // within D1's per-statement variable limit and far fewer statements overall.
+  const MAX_ROWS = 30;
   const stmts: D1PreparedStatement[] = [];
   for (let i = 0; i < rows.length; i += MAX_ROWS) {
     const chunk = rows.slice(i, i + MAX_ROWS);
@@ -416,14 +417,14 @@ async function appendRecordsD1(
     }
     stmts.push(db.prepare(sql).bind(...params));
   }
-  // batch() runs all statements in a single implicit transaction.
-  // Chunk the batch itself to avoid overly large single calls.
-  const BATCH = 40;
+  // batch() runs all statements in a single implicit transaction and returns a
+  // result per statement; sum meta.changes for the exact inserted count.
+  let inserted = 0;
+  const BATCH = 20;
   for (let i = 0; i < stmts.length; i += BATCH) {
-    await db.batch(stmts.slice(i, i + BATCH));
+    const res = await db.batch(stmts.slice(i, i + BATCH));
+    for (const r of res as any[]) inserted += Number(r?.meta?.changes ?? 0);
   }
-  const after = await d1Count(db);
-  const inserted = Math.max(0, after - before);
   const dup = records.length - inserted;
   return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
 }
