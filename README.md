@@ -7,32 +7,51 @@
   to a master table **without duplicating** previously saved rows, and publish
   the master data through an **OData v4 feed** so Power BI can connect and refresh
   automatically.
-- **Tech Stack**: Hono + TypeScript on Cloudflare Pages/Workers, **Supabase
-  (Postgres) via PostgREST** for storage, SheetJS for in-browser parsing,
-  Tailwind CSS UI.
+- **Tech Stack**: Hono + TypeScript on Cloudflare Pages/Workers, a **three-backend
+  storage split** (Neon Postgres + Cloudflare D1 + Supabase), SheetJS for
+  in-browser parsing, Tailwind CSS UI.
 
-## Storage Architecture (Supabase)
-Storage was migrated from Cloudflare D1 to **Supabase Postgres** to eliminate the
-per-request statement/parameter limits that were causing `HTTP 503` on large
-uploads (Postgres has no such limits, so bulk inserts go through in one request).
+## Storage Architecture (three backends, routed by template)
+The dashboards form **two disconnected clusters** (no cross-cluster joins), so each
+cluster is stored where it runs best. A per-template router in `src/store.ts`
+(`usesD1()` / `usesNeon()`) decides where each upload and each dashboard query goes.
 
-- **One table `public.records`**: `(id, template, dedup_key, seq, source_file,
-  ingested_at, data JSONB)` with `UNIQUE (template, dedup_key)`.
-- **Append-only de-dup**: inserts use PostgREST upsert with
-  `Prefer: resolution=ignore-duplicates` — re-uploading the same rows never
-  duplicates; the response body returns only actually-inserted rows for an exact
-  count.
-- **6 flattened views** (`shg_groups_view`, `all_trainees_view`, `agrihubs`,
-  `distribution_form_v2`, `participants_shg`, `shg_group`) expose the JSONB as
-  clean, exact-named typed columns for Power BI / OData / CSV export.
-- **Credentials** are stored as Cloudflare Pages secrets `SUPABASE_URL` and
-  `SUPABASE_SERVICE_KEY` (never in code). Local dev uses `.dev.vars` (gitignored).
+### 1. Neon (Postgres) — Cluster-2 dashboards
+Serves the join-heavy dashboards: **Production, Sales, ISLA, SHG Profiling,
+Distribution to Participants, Distribution to SHGs**. These tables JOIN together
+(`participants`, `production_and_marketing_tool`, `shg_profiling_form`, `isla_form`,
+`shg_groups_view`, `shg_group`, `participants_shg`, `distribution_form_v2`,
+`agrihubs`). Neon keeps all Postgres logic (30 PL/pgSQL functions + JSONB) unchanged.
+- Accessed via `@neondatabase/serverless` HTTP driver (works on Workers).
+- `neonQuery()` wraps queries with retry/backoff to survive free-tier **cold starts**
+  (compute scales to zero → first request after idle can take ~15s).
+- Secret: `NEON_DATABASE_URL`.
+
+### 2. Cloudflare D1 (SQLite) — Frontliner cluster
+Serves the **Frontliners, Cluster Trainings, and New Youth** dashboards, all sourced
+from `all_trainees_view` (~728k rows) plus `reach_targets`. This cluster was moved
+off Supabase because 728k rows exhausted the 0.5GB-RAM free tier and crashed it.
+D1 gives **5GB storage, no RAM ceiling, no cold-start, no pausing**.
+- D1 has no PL/pgSQL, so records are **flattened at INSERT time** into `at_rows`
+  (participant-grain), and the three dashboards aggregate over that one table in
+  **TypeScript** (`clusterTrainings`, `frontlinerDash`, `newYouthDash` in `store.ts`).
+- Schema: `migrations/0001_frontliner_d1.sql` (`at_rows`, `reach_targets`).
+- Binding: `DB` (database `shg-data-cleaner-production`, id `7c5c130e-…`).
+
+### 3. Supabase (Postgres) — overflow / spare
+Kept as overflow for any new tables or spills from Neon. Project
+`lhejscsnnbygomdmnfmq`. Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
+
+### Common storage pattern
+- Neon/Supabase: one table `public.records` `(id, template, dedup_key, seq,
+  source_file, ingested_at, data JSONB)`, `UNIQUE (template, dedup_key)`, upsert
+  with ignore-duplicates. Flattened **views** expose typed columns for OData/CSV.
+- D1: `at_rows` + `reach_targets`, `INSERT OR IGNORE` on the `dedup_key` PRIMARY KEY.
+- Re-uploading the same rows never duplicates in any backend.
 
 ### One-time setup
-Run `supabase/schema.sql` once in **Supabase → SQL Editor** to create the
-`records` table + indexes + the 6 views. This is the only manual step; DDL
-cannot be run from the sandbox (the Supabase DB password is separate from the
-service key and the direct DB host is IPv6-only).
+- Neon: SQL in `supabase/*.sql` already applied (records table, views, functions).
+- D1: `npx wrangler d1 execute shg-data-cleaner-production --remote --file=./migrations/0001_frontliner_d1.sql`.
 
 ## Supported Templates (11)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
