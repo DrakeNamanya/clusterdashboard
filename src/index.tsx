@@ -45,6 +45,8 @@ function storeEnv(c: any): Env {
     SUPABASE_SERVICE_KEY: key,
     // Neon serves the Cluster-2 dashboards (Production/Sales/ISLA/SHG/Distribution).
     NEON_DATABASE_URL: c.env.NEON_DATABASE_URL,
+    // D1 serves the Frontliner cluster (all_trainees_view: Frontliners/Cluster/New Youth).
+    DB: c.env.DB,
   };
 }
 

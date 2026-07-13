@@ -5,8 +5,17 @@
   "pages_build_output_dir": "./dist",
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  // Storage:
+  //   - Neon (Postgres) for Cluster-2 dashboards (NEON_DATABASE_URL secret)
+  //   - D1 (SQLite) for the heavy Frontliner cluster (all_trainees_view, agrihubs-free)
+  //   - Supabase kept as overflow (SUPABASE_URL, SUPABASE_SERVICE_KEY secrets)
+  // Local dev reads secrets from .dev.vars; production from `wrangler pages secret put`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shg-data-cleaner-production",
+      "database_id": "7c5c130e-c9fb-4f06-ac16-e41ffd0ea290"
+    }
   ]
-  // Storage is now Supabase (Postgres). Credentials are provided as secrets:
-  //   SUPABASE_URL, SUPABASE_SERVICE_KEY
-  // Local dev reads them from .dev.vars; production from `wrangler pages secret put`.
 }

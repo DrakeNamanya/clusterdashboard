@@ -21,6 +21,19 @@ export interface Env {
   // stays on Supabase. Splitting the heavy JOIN work off Supabase stops the
   // nano-instance crashes.
   NEON_DATABASE_URL?: string;
+  // Cloudflare D1 (SQLite) — serves the heavy Frontliner cluster
+  // (all_trainees_view: Frontliners / Cluster Trainings / New Youth). Moved off
+  // Supabase because ~728k rows exhausted the 0.5GB RAM nano tier. D1 gives 5GB
+  // storage and no RAM ceiling, so it never crashes on this dataset.
+  DB?: D1Database;
+}
+
+/** Templates whose records live in Cloudflare D1 (the Frontliner cluster). */
+const D1_TEMPLATES = new Set<string>(['all_trainees_view', 'reach_targets']);
+
+/** True when this template's records should be stored/queried on D1. */
+function usesD1(env: Env, template: string): boolean {
+  return !!env.DB && D1_TEMPLATES.has(template);
 }
 
 /** Fast, stable string hash (FNV-1a, 32-bit hex) for composite dedup keys. */
@@ -194,7 +207,11 @@ export async function appendRecords(
 ): Promise<AppendResult> {
   if (!records.length) return { inserted: 0, duplicatesSkipped: 0, total: 0 };
 
-  // Route Cluster-2 templates to Neon; Frontliners cluster stays on Supabase.
+  // Route Cluster-2 templates to Neon; Frontliner cluster (all_trainees_view,
+  // reach_targets) to Cloudflare D1; anything else to Supabase.
+  if (usesD1(env, schema.key)) {
+    return appendRecordsD1(env, schema, records, sourceFile);
+  }
   if (usesNeon(env, schema.key)) {
     return appendRecordsNeon(env, schema, records, sourceFile);
   }
@@ -308,6 +325,158 @@ async function appendRecordsNeon(
   }
   const dup = records.length - inserted;
   return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
+}
+
+// ===========================================================================
+// Cloudflare D1 (SQLite) layer — Frontliner cluster (all_trainees_view).
+// Records are flattened to participant-grain rows at INSERT time (D1 has no
+// stored functions), and all three dashboards aggregate over `at_rows` in TS.
+// ===========================================================================
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+
+/** Parse a YYYY-MM-DD (or longer ISO) string to 'YYYY-MM-DD', else null. */
+function toDay(v: string | undefined | null): string | null {
+  const s = (v ?? '').trim();
+  return DATE_RE.test(s) ? s.slice(0, 10) : null;
+}
+
+/** Flatten one all_trainees_view record into an at_rows row (mirrors refresh_* SQL). */
+function flattenTrainee(rec: Record<string, string>, dedupKey: string, sourceFile: string) {
+  const t = (k: string) => (rec[k] ?? '').trim() || null;
+  const activity = (rec['activity_date'] ?? '').trim();
+  return {
+    dedup_key: dedupKey,
+    data_collector: t('data_collector'),
+    participant_id: t('participant_id'),
+    group_id: t('group_id'),
+    group_name: t('group_name'),
+    training_type: t('training_type'),
+    district: (t('district') || '')?.toUpperCase() || null,
+    day: toDay(activity),
+    sex: t('sex'),
+    is_pwd: (rec['Disability_status'] ?? '').trim().toLowerCase() === 'yes' ? 1 : 0,
+    is_farming: (rec['Do_for_living'] ?? '').trim() === 'Farming' ? 1 : 0,
+    has_date: DATE_RE.test(activity) ? 1 : 0,
+    source_file: sourceFile,
+  };
+}
+
+/**
+ * D1 variant of appendRecords for all_trainees_view: flatten + INSERT OR IGNORE
+ * into at_rows (dedup_key PRIMARY KEY makes re-uploads idempotent). Batched to
+ * stay under D1's ~100-bound / statement limits.
+ */
+async function appendRecordsD1(
+  env: Env,
+  schema: SheetSchema,
+  records: Record<string, string>[],
+  sourceFile: string
+): Promise<AppendResult> {
+  const db = env.DB!;
+  // reach_targets is handled by its own dedicated path (see appendTargetsD1).
+  if (schema.key === 'reach_targets') {
+    return appendTargetsD1(env, records);
+  }
+
+  const seen = new Set<string>();
+  const rows = [] as ReturnType<typeof flattenTrainee>[];
+  for (const rec of records) {
+    const dk = dedupKeyFor(schema, rec);
+    if (seen.has(dk)) continue;
+    seen.add(dk);
+    rows.push(flattenTrainee(rec, dk, sourceFile));
+  }
+  if (!rows.length) {
+    return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
+  }
+
+  // Count existing keys to report an accurate inserted count (INSERT OR IGNORE
+  // does not return that directly). We compare row-count before/after.
+  const before = await d1Count(db);
+  const COLS = 13;
+  const CHUNK = 50; // 50 * 13 = 650 bound params, safely under D1's 100-var? -> actually use bound params per stmt <= 100 -> reduce
+  // D1 allows up to 100 bound parameters per statement; 13 cols => max 7 rows.
+  const MAX_ROWS = 7;
+  const stmts: D1PreparedStatement[] = [];
+  for (let i = 0; i < rows.length; i += MAX_ROWS) {
+    const chunk = rows.slice(i, i + MAX_ROWS);
+    const ph = chunk.map(() => `(${Array(COLS).fill('?').join(',')})`).join(',');
+    const sql =
+      `INSERT OR IGNORE INTO at_rows
+       (dedup_key,data_collector,participant_id,group_id,group_name,training_type,
+        district,day,sex,is_pwd,is_farming,has_date,source_file) VALUES ` + ph;
+    const params: any[] = [];
+    for (const r of chunk) {
+      params.push(
+        r.dedup_key, r.data_collector, r.participant_id, r.group_id, r.group_name,
+        r.training_type, r.district, r.day, r.sex, r.is_pwd, r.is_farming, r.has_date,
+        r.source_file
+      );
+    }
+    stmts.push(db.prepare(sql).bind(...params));
+  }
+  // batch() runs all statements in a single implicit transaction.
+  // Chunk the batch itself to avoid overly large single calls.
+  const BATCH = 40;
+  for (let i = 0; i < stmts.length; i += BATCH) {
+    await db.batch(stmts.slice(i, i + BATCH));
+  }
+  const after = await d1Count(db);
+  const inserted = Math.max(0, after - before);
+  const dup = records.length - inserted;
+  return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
+}
+
+async function d1Count(db: D1Database): Promise<number> {
+  const r = await db.prepare('SELECT COUNT(*) AS c FROM at_rows').first<{ c: number }>();
+  return Number(r?.c ?? 0);
+}
+
+/** reach_targets upload: replace all rows (targets are a full authoritative set). */
+async function appendTargetsD1(
+  env: Env,
+  records: Record<string, string>[]
+): Promise<AppendResult> {
+  const db = env.DB!;
+  const num = (v: string | undefined) => {
+    const s = (v ?? '').replace(/[^0-9.\-]/g, '').trim();
+    return s === '' ? null : Number(s);
+  };
+  const monthOf = (v: string | undefined) => {
+    const s = (v ?? '').trim();
+    if (DATE_RE.test(s)) return s.slice(0, 8) + '01';
+    return null;
+  };
+  const rows = records
+    .map((rec) => ({
+      district: (rec['district'] ?? '').trim().toUpperCase() || null,
+      month: monthOf(rec['month']),
+      target: num(rec['target']),
+      target_shgs: num(rec['target_shgs']),
+      target_yiw: num(rec['target_yiw']),
+      target_female: num(rec['target_female']),
+      target_pwds: num(rec['target_pwds']),
+    }))
+    .filter((r) => r.district && r.month);
+  if (!rows.length) return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
+  const stmts: D1PreparedStatement[] = [db.prepare('DELETE FROM reach_targets')];
+  for (const r of rows) {
+    stmts.push(
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO reach_targets
+           (district,month,target,target_shgs,target_yiw,target_female,target_pwds)
+           VALUES (?,?,?,?,?,?,?)`
+        )
+        .bind(r.district, r.month, r.target, r.target_shgs, r.target_yiw, r.target_female, r.target_pwds)
+    );
+  }
+  const BATCH = 60;
+  for (let i = 0; i < stmts.length; i += BATCH) {
+    await db.batch(stmts.slice(i, i + BATCH));
+  }
+  return { inserted: rows.length, duplicatesSkipped: 0, total: records.length };
 }
 
 /** Max value of the seq (`No`) column so appends continue the sequence. */
@@ -434,6 +603,22 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
     let count = 0;
     let lastIngest: string | null = null;
 
+    // Frontliner cluster lives on D1 (flattened rows in at_rows).
+    if (usesD1(env, s.key)) {
+      try {
+        if (s.key === 'reach_targets') {
+          const r = await env.DB!.prepare('SELECT COUNT(*) AS c FROM reach_targets').first<{ c: number }>();
+          count = Number(r?.c ?? 0);
+        } else {
+          count = await d1Count(env.DB!);
+        }
+      } catch {
+        /* ignore per-table errors */
+      }
+      out.push({ key: s.key, label: s.label, count, lastIngest });
+      continue;
+    }
+
     // Cluster-2 templates live on Neon.
     if (usesNeon(env, s.key)) {
       try {
@@ -481,125 +666,352 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Frontliner cluster dashboards — served from Cloudflare D1 (SQLite).
+// `at_rows` is participant-grain (flattened at insert). WHERE clauses honour
+// district (UPPER) + date range; string_agg-style lists are built in TS.
+// ---------------------------------------------------------------------------
+
+/** Build the shared WHERE clause + bound params for at_rows filters. */
+function atWhere(opts: { districts?: string[]; from?: string; to?: string }): {
+  clause: string;
+  params: any[];
+} {
+  const parts: string[] = [];
+  const params: any[] = [];
+  const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
+  if (dl.length) {
+    parts.push(`district IN (${dl.map(() => '?').join(',')})`);
+    params.push(...dl);
+  }
+  if (opts.from) {
+    parts.push(`day >= ?`);
+    params.push(opts.from);
+  }
+  if (opts.to) {
+    parts.push(`day <= ?`);
+    params.push(opts.to);
+  }
+  return { clause: parts.length ? 'WHERE ' + parts.join(' AND ') : '', params };
+}
+
 /**
- * Cluster Trainings dashboard aggregate (calls the Postgres RPC
- * `cluster_trainings` over the compact `cluster_summary` table).
+ * Cluster Trainings dashboard aggregate. All KPIs are COUNT(DISTINCT
+ * participant_id) matching the Power BI DAX. Reads `at_rows` in D1.
  */
 export async function clusterTrainings(
   env: Env,
   opts: { districts?: string[]; from?: string; to?: string } = {}
 ): Promise<any> {
-  const url = restBase(env) + '/rpc/cluster_trainings';
-  const body = {
-    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
-    p_from: opts.from || null,
-    p_to: opts.to || null,
+  const db = env.DB!;
+  const { clause, params } = atWhere(opts);
+
+  const kpi = await db
+    .prepare(
+      `SELECT
+         COUNT(DISTINCT CASE WHEN has_date=1 AND participant_id IS NOT NULL THEN participant_id END) AS total_trained,
+         COUNT(DISTINCT training_type)  AS training_types,
+         COUNT(DISTINCT group_id)       AS groups_reached,
+         COUNT(DISTINCT CASE WHEN sex='Female' THEN participant_id END) AS female_reached,
+         COUNT(DISTINCT CASE WHEN is_pwd=1 THEN participant_id END)     AS pwds_trained,
+         COUNT(DISTINCT CASE WHEN is_pwd=1 AND sex='Female' THEN participant_id END) AS female_pwds
+       FROM at_rows ${clause}`
+    )
+    .bind(...params)
+    .first<any>();
+
+  const bars = await db
+    .prepare(
+      `SELECT COALESCE(training_type,'(blank)') AS label,
+              COUNT(DISTINCT participant_id) AS value
+       FROM at_rows ${clause}
+       ${clause ? 'AND' : 'WHERE'} participant_id IS NOT NULL
+       GROUP BY label ORDER BY value DESC`
+    )
+    .bind(...params)
+    .all<{ label: string; value: number }>();
+
+  const districts = await db
+    .prepare(`SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL ORDER BY district`)
+    .all<{ district: string }>();
+
+  return {
+    total_trained: Number(kpi?.total_trained ?? 0),
+    training_types: Number(kpi?.training_types ?? 0),
+    groups_reached: Number(kpi?.groups_reached ?? 0),
+    female_reached: Number(kpi?.female_reached ?? 0),
+    pwds_trained: Number(kpi?.pwds_trained ?? 0),
+    female_pwds: Number(kpi?.female_pwds ?? 0),
+    by_training_type: (bars.results || []).map((b) => ({ label: b.label, value: Number(b.value) })),
+    districts: (districts.results || []).map((d) => d.district),
   };
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: headers(env),
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`cluster_trainings failed (${r.status}): ${t.slice(0, 200)}`);
-  }
-  return r.json();
 }
 
-/** Rebuild the cluster_summary table from records (call after new uploads). */
+/** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshClusterSummary(env: Env): Promise<number> {
-  const r = await fetch(restBase(env) + '/rpc/refresh_cluster_summary', {
-    method: 'POST',
-    headers: headers(env),
-    body: '{}',
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`refresh_cluster_summary failed (${r.status}): ${t.slice(0, 200)}`);
-  }
-  return Number(await r.json());
+  return d1Count(env.DB!);
 }
 
 /**
- * Monthly New Youth Reached dashboard aggregate (calls the Postgres RPC
- * `new_youth_dash` over the compact `new_youth` first-touch table).
+ * Monthly New Youth Reached — "first touch" model. A participant is counted on
+ * their FIRST-EVER activity_date; flags come from that first-date row(s).
+ * Computed in TS from at_rows (D1 lacks window functions we'd want here).
  */
 export async function newYouthDash(
   env: Env,
-  opts: { districts?: string[]; from?: string; to?: string } = {}
+  opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
 ): Promise<any> {
-  const url = restBase(env) + '/rpc/new_youth_dash';
-  const body = {
-    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
-    p_from: opts.from || null,
-    p_to: opts.to || null,
-  };
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: headers(env),
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`new_youth_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  const db = env.DB!;
+  const pTarget = opts.target ?? 726;
+
+  // Pull all dated, id-bearing rows (district filter applied later on the
+  // first-date row so we match the DAX ALLEXCEPT(participant_id) semantics).
+  const rows = await db
+    .prepare(
+      `SELECT participant_id AS pid, day, district, sex, is_pwd, is_farming
+       FROM at_rows
+       WHERE participant_id IS NOT NULL AND has_date=1 AND day IS NOT NULL`
+    )
+    .all<{ pid: string; day: string; district: string | null; sex: string | null; is_pwd: number; is_farming: number }>();
+
+  // firsts: min day per participant
+  const firstDay = new Map<string, string>();
+  for (const r of rows.results || []) {
+    const cur = firstDay.get(r.pid);
+    if (!cur || r.day < cur) firstDay.set(r.pid, r.day);
   }
-  return r.json();
+  // aggregate flags over the participant's first-date row(s)
+  type NY = {
+    first_date: string;
+    district: string | null;
+    is_female: boolean;
+    is_pwd: boolean;
+    is_farming: boolean;
+    female_pwd: boolean;
+    farming_female: boolean;
+    farming_pwd: boolean;
+    farming_fpwd: boolean;
+  };
+  const ny = new Map<string, NY>();
+  for (const r of rows.results || []) {
+    if (r.day !== firstDay.get(r.pid)) continue;
+    const f = r.sex === 'Female';
+    const p = r.is_pwd === 1;
+    const w = r.is_farming === 1;
+    const prev = ny.get(r.pid);
+    const merged: NY = {
+      first_date: r.day,
+      district: prev?.district ?? null,
+      is_female: (prev?.is_female ?? false) || f,
+      is_pwd: (prev?.is_pwd ?? false) || p,
+      is_farming: (prev?.is_farming ?? false) || w,
+      female_pwd: (prev?.female_pwd ?? false) || (f && p),
+      farming_female: (prev?.farming_female ?? false) || (w && f),
+      farming_pwd: (prev?.farming_pwd ?? false) || (w && p),
+      farming_fpwd: (prev?.farming_fpwd ?? false) || (w && p && f),
+    };
+    // deterministic district pick: max() like the SQL (keep the larger string)
+    if (r.district && (!merged.district || r.district > merged.district)) merged.district = r.district;
+    ny.set(r.pid, merged);
+  }
+
+  const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
+  const inSel = (v: NY) =>
+    (dl.length === 0 || (v.district != null && dl.includes(v.district))) &&
+    (!opts.from || v.first_date >= opts.from) &&
+    (!opts.to || v.first_date <= opts.to);
+
+  let total = 0, female = 0, pwd = 0, fpwd = 0, work = 0, fwork = 0, pwork = 0, fpwork = 0;
+  const series = new Map<string, number>();
+  for (const v of ny.values()) {
+    if (!inSel(v)) continue;
+    total++;
+    if (v.is_female) female++;
+    if (v.is_pwd) pwd++;
+    if (v.female_pwd) fpwd++;
+    if (v.is_farming) work++;
+    if (v.farming_female) fwork++;
+    if (v.farming_pwd) pwork++;
+    if (v.farming_fpwd) fpwork++;
+    series.set(v.first_date, (series.get(v.first_date) || 0) + 1);
+  }
+
+  // targets: sum over selected districts whose month intersects the range
+  const trows = await db.prepare(`SELECT district, month, target FROM reach_targets`).all<{
+    district: string;
+    month: string;
+    target: number | null;
+  }>();
+  let periodTotal = 0;
+  const months = new Set<string>();
+  const tdistricts = new Set<string>();
+  for (const t of trows.results || []) {
+    if (dl.length && !dl.includes(t.district)) continue;
+    // month window [month, month+1mo); intersects [from,to]
+    const mStart = t.month;
+    const mEndDate = monthEnd(t.month);
+    if (opts.to && mStart > opts.to) continue;
+    if (opts.from && mEndDate < opts.from) continue;
+    periodTotal += Number(t.target || 0);
+    months.add(t.month);
+    tdistricts.add(t.district);
+  }
+  const nMonths = months.size;
+
+  const byDate = [...series.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([date, value]) => ({ date, value }));
+
+  // district slicer = union of at_rows districts and target districts
+  const dd = await db
+    .prepare(`SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL`)
+    .all<{ district: string }>();
+  const distSet = new Set<string>((dd.results || []).map((x) => x.district));
+  for (const t of trows.results || []) if (t.district) distSet.add(t.district);
+
+  return {
+    new_total_reach: total,
+    target_selected_period: Math.round(periodTotal),
+    monthly_target: nMonths > 0 ? Math.round(periodTotal / nMonths) : pTarget,
+    new_female_reach: female,
+    new_pwds_reach: pwd,
+    new_female_pwds_reach: fpwd,
+    new_youth_in_work: work,
+    new_female_youth_in_work: fwork,
+    new_pwds_in_work: pwork,
+    new_female_pwds_in_work: fpwork,
+    by_date: byDate,
+    districts: [...distSet].sort(),
+  };
 }
 
-/** Rebuild the new_youth first-touch table from records (call after new uploads). */
+/** Last calendar day of the month whose first day is `firstOfMonth` ('YYYY-MM-01'). */
+function monthEnd(firstOfMonth: string): string {
+  const y = Number(firstOfMonth.slice(0, 4));
+  const m = Number(firstOfMonth.slice(5, 7));
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of next month = last day
+  return `${firstOfMonth.slice(0, 7)}-${String(last).padStart(2, '0')}`;
+}
+
+/** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshNewYouth(env: Env): Promise<number> {
-  const r = await fetch(restBase(env) + '/rpc/refresh_new_youth', {
-    method: 'POST',
-    headers: headers(env),
-    body: '{}',
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`refresh_new_youth failed (${r.status}): ${t.slice(0, 200)}`);
-  }
-  return Number(await r.json());
+  return d1Count(env.DB!);
 }
 
 /**
- * Trainings by Frontliners dashboard aggregate (calls the Postgres RPC
- * `frontliner_dash` over the compact `frontliner_rows` table).
+ * Trainings by Frontliners — per data_collector summary. KPIs are plain COUNT
+ * (attendance-based, per the SQL note). Reads `at_rows` in D1.
  */
 export async function frontlinerDash(
   env: Env,
-  opts: { districts?: string[]; from?: string; to?: string; collectors?: string[] } = {}
+  opts: { districts?: string[]; from?: string; to?: string; collectors?: string[] } = {},
+  limit = 1000
 ): Promise<any> {
-  const url = restBase(env) + '/rpc/frontliner_dash';
-  const body = {
-    p_districts: opts.districts && opts.districts.length ? opts.districts : null,
-    p_from: opts.from || null,
-    p_to: opts.to || null,
-    p_collectors: opts.collectors && opts.collectors.length ? opts.collectors : null,
-  };
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: headers(env),
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`frontliner_dash failed (${r.status}): ${t.slice(0, 200)}`);
+  const db = env.DB!;
+  const parts: string[] = ['data_collector IS NOT NULL'];
+  const params: any[] = [];
+  const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
+  if (dl.length) {
+    parts.push(`district IN (${dl.map(() => '?').join(',')})`);
+    params.push(...dl);
   }
-  return r.json();
+  const cl = (opts.collectors || []).filter(Boolean);
+  if (cl.length) {
+    parts.push(`data_collector IN (${cl.map(() => '?').join(',')})`);
+    params.push(...cl);
+  }
+  if (opts.from) { parts.push(`day >= ?`); params.push(opts.from); }
+  if (opts.to) { parts.push(`day <= ?`); params.push(opts.to); }
+  const where = 'WHERE ' + parts.join(' AND ');
+
+  // Per-collector numeric KPIs + min district (aggregatable in SQL).
+  const agg = await db
+    .prepare(
+      `SELECT data_collector,
+              SUM(CASE WHEN has_date=1 THEN 1 ELSE 0 END) AS youth_trained,
+              SUM(CASE WHEN sex='Female' THEN 1 ELSE 0 END) AS female_reached,
+              SUM(CASE WHEN is_pwd=1 THEN 1 ELSE 0 END) AS pwds_trained,
+              COUNT(DISTINCT group_id) AS groups_reached,
+              MIN(district) AS first_district
+       FROM at_rows ${where}
+       GROUP BY data_collector
+       ORDER BY youth_trained DESC
+       LIMIT ?`
+    )
+    .bind(...params, limit)
+    .all<any>();
+
+  const collectors = (agg.results || []).map((r) => r.data_collector);
+
+  // distinct training_type + group_name lists per collector (built in TS).
+  const ttMap = new Map<string, Set<string>>();
+  const gnMap = new Map<string, Set<string>>();
+  if (collectors.length) {
+    // fetch distinct pairs only for the returned collectors, honouring filters
+    const listParts = parts.slice();
+    const listParams = params.slice();
+    listParts.push(`data_collector IN (${collectors.map(() => '?').join(',')})`);
+    listParams.push(...collectors);
+    const lists = await db
+      .prepare(
+        `SELECT DISTINCT data_collector, training_type, group_name
+         FROM at_rows WHERE ${listParts.join(' AND ')}`
+      )
+      .bind(...listParams)
+      .all<{ data_collector: string; training_type: string | null; group_name: string | null }>();
+    for (const r of lists.results || []) {
+      if (r.training_type) {
+        if (!ttMap.has(r.data_collector)) ttMap.set(r.data_collector, new Set());
+        ttMap.get(r.data_collector)!.add(r.training_type);
+      }
+      if (r.group_name) {
+        if (!gnMap.has(r.data_collector)) gnMap.set(r.data_collector, new Set());
+        gnMap.get(r.data_collector)!.add(r.group_name);
+      }
+    }
+  }
+
+  const rowsOut = (agg.results || []).map((r) => {
+    const tt = [...(ttMap.get(r.data_collector) || [])].sort().join(', ') || null;
+    const gnAll = [...(gnMap.get(r.data_collector) || [])].sort().join(', ');
+    const gn = gnAll.length > 100 ? gnAll.slice(0, 100) + '...' : gnAll || null;
+    return {
+      data_collector: r.data_collector,
+      pwds_trained: Number(r.pwds_trained || 0),
+      female_reached: Number(r.female_reached || 0),
+      youth_trained: Number(r.youth_trained || 0),
+      groups_reached: Number(r.groups_reached || 0),
+      training_types: tt,
+      group_names: gn,
+      first_district: r.first_district ?? null,
+    };
+  });
+
+  // slicers
+  const dd = await db
+    .prepare(`SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL ORDER BY district`)
+    .all<{ district: string }>();
+  // collector list scoped to selected districts + date range (not collector filter)
+  const cParts: string[] = ['data_collector IS NOT NULL'];
+  const cParams: any[] = [];
+  if (dl.length) { cParts.push(`district IN (${dl.map(() => '?').join(',')})`); cParams.push(...dl); }
+  if (opts.from) { cParts.push(`day >= ?`); cParams.push(opts.from); }
+  if (opts.to) { cParts.push(`day <= ?`); cParams.push(opts.to); }
+  const cc = await db
+    .prepare(`SELECT DISTINCT data_collector FROM at_rows WHERE ${cParts.join(' AND ')} ORDER BY data_collector`)
+    .bind(...cParams)
+    .all<{ data_collector: string }>();
+
+  return {
+    rows: rowsOut,
+    districts: (dd.results || []).map((d) => d.district),
+    collectors: (cc.results || []).map((c) => c.data_collector),
+  };
 }
 
-/** Rebuild the frontliner_rows table from records (heavy; call after uploads). */
+/** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshFrontliners(env: Env): Promise<number> {
-  const r = await fetch(restBase(env) + '/rpc/refresh_frontliner_rows', {
-    method: 'POST',
-    headers: headers(env),
-    body: '{}',
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`refresh_frontliner_rows failed (${r.status}): ${t.slice(0, 200)}`);
-  }
-  return Number(await r.json());
+  return d1Count(env.DB!);
 }
 
 /**
