@@ -93,6 +93,8 @@ const NEON_TEMPLATES = new Set<string>([
   'production_and_marketing_tool',
   'shg_profiling_form',
   'isla_form',
+  'isla_participants',
+  'youth_profiling',
   'shg_groups_view',
   'shg_group',
   'participants_shg',
