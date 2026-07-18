@@ -43,7 +43,10 @@ function storeEnv(c: any): Env {
   return {
     SUPABASE_URL: url,
     SUPABASE_SERVICE_KEY: key,
-    // Neon serves the Cluster-2 dashboards (Production/Sales/ISLA/SHG/Distribution).
+    // CockroachDB serves the Cluster-2 dashboards (Production/Sales/ISLA/SHG/
+    // Distribution). Migrated off Neon after its 512 MB free tier filled up.
+    COCKROACH_DATABASE_URL: c.env.COCKROACH_DATABASE_URL,
+    // NEON_DATABASE_URL kept as a fallback for backward compatibility.
     NEON_DATABASE_URL: c.env.NEON_DATABASE_URL,
     // D1 serves the Frontliner cluster (all_trainees_view: Frontliners/Cluster/New Youth).
     DB: c.env.DB,

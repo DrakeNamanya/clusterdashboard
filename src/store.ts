@@ -10,22 +10,34 @@
 // ---------------------------------------------------------------------------
 
 import { SheetSchema } from './schemas';
-import { neon } from '@neondatabase/serverless';
+import { Client } from 'pg';
 
 export interface Env {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
-  // Neon (Postgres) — serves Cluster-2 dashboards (Production, Sales, ISLA,
-  // SHG Profiling, Distribution, SHG Distribution). These tables JOIN together
-  // and are disconnected from the Frontliners cluster (all_trainees_view), which
-  // stays on Supabase. Splitting the heavy JOIN work off Supabase stops the
-  // nano-instance crashes.
+  // CockroachDB Serverless (Postgres-wire compatible) — serves Cluster-2
+  // dashboards (Production, Sales, ISLA, SHG Profiling, Distribution, SHG
+  // Distribution). These tables JOIN together and are disconnected from the
+  // Frontliners cluster (all_trainees_view), which stays on Supabase.
+  //
+  // MIGRATION NOTE: This layer previously used Neon's serverless HTTP driver,
+  // but Neon's 512 MB free-tier storage was exhausted (~430k rows). CockroachDB
+  // Serverless gives 10 GiB free, so all Cluster-2 data moved here. We connect
+  // with node-postgres (`pg`) over TCP sockets, which runs on Cloudflare Workers
+  // thanks to `nodejs_compat`. NEON_DATABASE_URL is still accepted for backward
+  // compatibility but COCKROACH_DATABASE_URL takes precedence.
+  COCKROACH_DATABASE_URL?: string;
   NEON_DATABASE_URL?: string;
   // Cloudflare D1 (SQLite) — serves the heavy Frontliner cluster
   // (all_trainees_view: Frontliners / Cluster Trainings / New Youth). Moved off
   // Supabase because ~728k rows exhausted the 0.5GB RAM nano tier. D1 gives 5GB
   // storage and no RAM ceiling, so it never crashes on this dataset.
   DB?: D1Database;
+}
+
+/** Resolve the Cluster-2 Postgres connection string (CockroachDB preferred). */
+function clusterDbUrl(env: Env): string | undefined {
+  return env.COCKROACH_DATABASE_URL || env.NEON_DATABASE_URL;
 }
 
 /** Templates whose records live in Cloudflare D1 (the Frontliner cluster). */
@@ -102,26 +114,63 @@ const NEON_TEMPLATES = new Set<string>([
   'agrihubs',
 ]);
 
-/** True when this template's records should be stored/queried on Neon. */
+/** True when this template's records should be stored/queried on the Cluster-2
+ *  Postgres backend (CockroachDB, formerly Neon). */
 function usesNeon(env: Env, template: string): boolean {
-  return !!env.NEON_DATABASE_URL && NEON_TEMPLATES.has(template);
-}
-
-/** Returns a tagged-template SQL runner bound to the Neon connection. */
-function neonSql(env: Env) {
-  if (!env.NEON_DATABASE_URL) {
-    throw new Error('NEON_DATABASE_URL is not configured');
-  }
-  // fetchConnectionCache keeps the HTTP connection warm across queries in a
-  // single request; fullResults=false returns plain row arrays from .query().
-  return neon(env.NEON_DATABASE_URL);
+  return !!clusterDbUrl(env) && NEON_TEMPLATES.has(template);
 }
 
 /**
- * Run a Neon query with retry/backoff. Neon's free tier scales the compute to
- * zero when idle, so the first query after idle can fail or time out while the
- * instance wakes (~1-5s). Retrying with backoff turns those transient failures
- * into a successful (if slightly slow) response instead of an HTTP 503.
+ * Open a fresh node-postgres Client to the Cluster-2 backend (CockroachDB).
+ * Cloudflare Workers has no connection pooling across requests, so we open one
+ * short-lived connection per logical operation and close it in a `finally`.
+ * TCP sockets are provided by the Workers runtime under `nodejs_compat`.
+ */
+function newClusterClient(env: Env): Client {
+  const url = clusterDbUrl(env);
+  if (!url) {
+    throw new Error('COCKROACH_DATABASE_URL (or NEON_DATABASE_URL) is not configured');
+  }
+  return new Client({
+    connectionString: url,
+    // CockroachDB Cloud terminates TLS; the Workers socket layer verifies it.
+    ssl: { rejectUnauthorized: false },
+  });
+}
+
+/**
+ * Lightweight adapter that mimics the old Neon `sql.query(text, params)`
+ * contract (returns a plain row array) on top of a node-postgres Client.
+ * Lazily connects on first query; the caller MUST call `.close()` when done
+ * (Workers has no cross-request pooling, so leaving a socket open leaks it).
+ * Use this when a code path issues several queries on one logical connection.
+ */
+function clusterSql(env: Env): { query: (text: string, params?: any[]) => Promise<any[]>; close: () => Promise<void> } {
+  let client: Client | null = null;
+  return {
+    async query(text: string, params: any[] = []): Promise<any[]> {
+      if (!client) {
+        client = newClusterClient(env);
+        await client.connect();
+      }
+      const res = await client.query(text, params);
+      return res.rows as any[];
+    },
+    async close(): Promise<void> {
+      if (client) {
+        try { await client.end(); } catch { /* ignore */ }
+        client = null;
+      }
+    },
+  };
+}
+
+/**
+ * Run a single query against CockroachDB with connect/close bookkeeping and
+ * retry/backoff. CockroachDB Serverless can cold-start (~1-3s) after idle, so
+ * a transient connect error is retried rather than surfaced as an HTTP 503.
+ * Returns the plain row array (mirrors the previous Neon `.query()` contract,
+ * which returned rows directly rather than pg's `{rows}` wrapper).
  */
 async function neonQuery(
   env: Env,
@@ -129,20 +178,25 @@ async function neonQuery(
   params: any[] = [],
   tries = 5
 ): Promise<any[]> {
-  const sql = neonSql(env);
   let last: unknown;
   for (let i = 1; i <= tries; i++) {
+    const client = newClusterClient(env);
     try {
-      return (await sql.query(text, params)) as any[];
+      await client.connect();
+      const res = await client.query(text, params);
+      return res.rows as any[];
     } catch (e) {
       last = e;
-      // Backoff: 0.4s, 0.8s, 1.6s, 3.2s — enough for a cold Neon compute to wake.
+      // Backoff: 0.4s, 0.8s, 1.6s, 3.2s — enough for a cold compute to wake.
       if (i < tries) {
         await new Promise((r) => setTimeout(r, 400 * Math.pow(2, i - 1)));
       }
+    } finally {
+      // Always release the socket; ignore close errors on a failed connection.
+      try { await client.end(); } catch { /* ignore */ }
     }
   }
-  throw last instanceof Error ? last : new Error('Neon query failed');
+  throw last instanceof Error ? last : new Error('CockroachDB query failed');
 }
 
 /**
@@ -305,25 +359,31 @@ async function appendRecordsNeon(
     return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
   }
 
-  const sql = neonSql(env);
-  // Insert in chunks to stay under parameter limits (5 params/row).
+  // Insert in chunks to stay under parameter limits (5 params/row). One pg
+  // connection is opened for the whole append and closed in `finally`.
   const CHUNK = 400;
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK);
-    const values: string[] = [];
-    const params: any[] = [];
-    chunk.forEach((row, idx) => {
-      const b = idx * 5;
-      values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}::jsonb)`);
-      params.push(row.template, row.dedup_key, row.seq, row.source_file, row.data);
-    });
-    const text =
-      `insert into public.records (template, dedup_key, seq, source_file, data) values ` +
-      values.join(', ') +
-      ` on conflict (template, dedup_key) do nothing returning 1`;
-    const res = (await sql.query(text, params)) as any[];
-    inserted += Array.isArray(res) ? res.length : 0;
+  const client = newClusterClient(env);
+  try {
+    await client.connect();
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const values: string[] = [];
+      const params: any[] = [];
+      chunk.forEach((row, idx) => {
+        const b = idx * 5;
+        values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}::jsonb)`);
+        params.push(row.template, row.dedup_key, row.seq, row.source_file, row.data);
+      });
+      const text =
+        `insert into public.records (template, dedup_key, seq, source_file, data) values ` +
+        values.join(', ') +
+        ` on conflict (template, dedup_key) do nothing returning 1`;
+      const res = await client.query(text, params);
+      inserted += Array.isArray(res.rows) ? res.rows.length : 0;
+    }
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
   }
   const dup = records.length - inserted;
   return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
@@ -487,15 +547,19 @@ export async function maxSeq(env: Env, schema: SheetSchema): Promise<number> {
   const seqIdx = schema.columns.findIndex((c) => c.type === 'seq');
   if (seqIdx < 0) return 0;
 
-  // Route to Neon for Cluster-2 templates.
+  // Route to CockroachDB (Cluster-2 templates).
   if (usesNeon(env, schema.key)) {
-    const sql = neonSql(env);
-    const rows = (await sql.query(
-      `select max(seq) as m from public.records where template = $1`,
-      [schema.key]
-    )) as any[];
-    const m = rows && rows.length ? rows[0].m : null;
-    return m ? Number(m) : 0;
+    const sql = clusterSql(env);
+    try {
+      const rows = await sql.query(
+        `select max(seq) as m from public.records where template = $1`,
+        [schema.key]
+      );
+      const m = rows && rows.length ? rows[0].m : null;
+      return m ? Number(m) : 0;
+    } finally {
+      await sql.close();
+    }
   }
 
   const url =
@@ -528,34 +592,38 @@ export async function queryRecords(
   let order = seqIdx >= 0 ? 'seq' : 'id';
   let dir = opts.desc ? 'desc' : 'asc';
 
-  // Route Cluster-2 templates to Neon.
+  // Route Cluster-2 templates to CockroachDB.
   if (usesNeon(env, schema.key)) {
-    const sql = neonSql(env);
-    let orderExpr: string;
-    if (opts.orderBy && schema.columns.some((c) => c.name === opts.orderBy)) {
-      // orderBy is validated against schema column names above (no injection).
-      orderExpr = `data->>'${opts.orderBy.replace(/'/g, "''")}'`;
-    } else {
-      orderExpr = order; // 'seq' or 'id'
+    const sql = clusterSql(env);
+    try {
+      let orderExpr: string;
+      if (opts.orderBy && schema.columns.some((c) => c.name === opts.orderBy)) {
+        // orderBy is validated against schema column names above (no injection).
+        orderExpr = `data->>'${opts.orderBy.replace(/'/g, "''")}'`;
+      } else {
+        orderExpr = order; // 'seq' or 'id'
+      }
+      const dirSql = dir === 'desc' ? 'desc nulls last' : 'asc';
+      const dataRows = await sql.query(
+        `select data from public.records where template = $1 ` +
+          `order by ${orderExpr} ${dirSql} limit $2 offset $3`,
+        [schema.key, top, skip]
+      );
+      const cntRows = await sql.query(
+        `select count(*)::int as c from public.records where template = $1`,
+        [schema.key]
+      );
+      const count = cntRows && cntRows.length ? Number(cntRows[0].c) : 0;
+      const rows = (dataRows || []).map((b: any) => {
+        const d = b.data || {};
+        const out: Record<string, string> = {};
+        for (const c of schema.columns) out[c.name] = d[c.name] ?? '';
+        return out;
+      });
+      return { rows, count };
+    } finally {
+      await sql.close();
     }
-    const dirSql = dir === 'desc' ? 'desc nulls last' : 'asc';
-    const dataRows = (await sql.query(
-      `select data from public.records where template = $1 ` +
-        `order by ${orderExpr} ${dirSql} limit $2 offset $3`,
-      [schema.key, top, skip]
-    )) as any[];
-    const cntRows = (await sql.query(
-      `select count(*)::int as c from public.records where template = $1`,
-      [schema.key]
-    )) as any[];
-    const count = cntRows && cntRows.length ? Number(cntRows[0].c) : 0;
-    const rows = (dataRows || []).map((b: any) => {
-      const d = b.data || {};
-      const out: Record<string, string> = {};
-      for (const c of schema.columns) out[c.name] = d[c.name] ?? '';
-      return out;
-    });
-    return { rows, count };
   }
 
   // Custom orderby by a data column -> order by data->>col
@@ -622,20 +690,22 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
       continue;
     }
 
-    // Cluster-2 templates live on Neon.
+    // Cluster-2 templates live on CockroachDB.
     if (usesNeon(env, s.key)) {
+      const sql = clusterSql(env);
       try {
-        const sql = neonSql(env);
-        const rows = (await sql.query(
+        const rows = await sql.query(
           `select count(*)::int as c, max(ingested_at) as last from public.records where template = $1`,
           [s.key]
-        )) as any[];
+        );
         if (rows && rows.length) {
           count = Number(rows[0].c) || 0;
           lastIngest = rows[0].last ? String(rows[0].last) : null;
         }
       } catch {
         /* ignore per-table errors */
+      } finally {
+        await sql.close();
       }
       out.push({ key: s.key, label: s.label, count, lastIngest });
       continue;
@@ -1300,8 +1370,12 @@ export async function refreshSales(env: Env): Promise<number> {
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   if (usesNeon(env, schema.key)) {
-    const sql = neonSql(env);
-    await sql.query(`delete from public.records where template = $1`, [schema.key]);
+    const sql = clusterSql(env);
+    try {
+      await sql.query(`delete from public.records where template = $1`, [schema.key]);
+    } finally {
+      await sql.close();
+    }
     return;
   }
   const url =
@@ -1328,20 +1402,24 @@ export async function backfillFilled(
   // Neon: do the whole backfill in one UPDATE per fill column (set target from
   // source where target is empty). Column names come from the trusted schema.
   if (usesNeon(env, schema.key)) {
-    const sql = neonSql(env);
+    const sql = clusterSql(env);
     let updated = 0;
-    for (const col of fillCols) {
-      const tgt = col.name.replace(/'/g, "''");
-      const src = (col.fillFrom as string).replace(/'/g, "''");
-      const res = (await sql.query(
-        `update public.records ` +
-          `set data = jsonb_set(data, $2, to_jsonb(data->>$3), true) ` +
-          `where template = $1 ` +
-          `and coalesce(data->>$4, '') = '' ` +
-          `and coalesce(data->>$3, '') <> '' returning 1`,
-        [schema.key, `{${tgt}}`, src, tgt]
-      )) as any[];
-      updated += Array.isArray(res) ? res.length : 0;
+    try {
+      for (const col of fillCols) {
+        const tgt = col.name.replace(/'/g, "''");
+        const src = (col.fillFrom as string).replace(/'/g, "''");
+        const res = await sql.query(
+          `update public.records ` +
+            `set data = jsonb_set(data, $2, to_jsonb(data->>$3), true) ` +
+            `where template = $1 ` +
+            `and coalesce(data->>$4, '') = '' ` +
+            `and coalesce(data->>$3, '') <> '' returning 1`,
+          [schema.key, `{${tgt}}`, src, tgt]
+        );
+        updated += Array.isArray(res) ? res.length : 0;
+      }
+    } finally {
+      await sql.close();
     }
     const pairs = fillCols.map((c) => `${c.name}<-${c.fillFrom}`);
     return { updated, pairs };
