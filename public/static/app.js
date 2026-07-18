@@ -358,9 +358,23 @@ async function rebuildDashboards(opts){
   if(btn){ btn.disabled=true; orig=btn.innerHTML; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…'; }
   if(s){ s.classList.remove('hidden'); s.className='mb-3 text-sm text-slate-500'; s.textContent='Rebuilding dashboard summaries from the master data… this can take up to a minute.'; }
   try{
-    const res=await fetch('/api/refresh-all',{method:'POST'});
-    const d=await res.json().catch(()=>({}));
-    if(!res.ok && !d.results){ throw new Error(d.error||('HTTP '+res.status)); }
+    // Refresh each cluster in its OWN request. CockroachDB's free tier is slow
+    // (each refresh can take 30-90s); running all of them in a single request
+    // would exceed the Worker time limit and leave the dashboards stale. One
+    // request per cluster keeps every call well within limits.
+    const CLUSTERS=['distribution','shgdistribution','shgprofiling','isla','production','sales','cluster','newyouth','frontliners'];
+    const results={};
+    for(const k of CLUSTERS){
+      if(s){ s.textContent=`Rebuilding ${DASH_LABELS[k]||k}… (${Object.keys(results).length+1}/${CLUSTERS.length})`; }
+      try{
+        const r=await fetch('/api/refresh-all?only='+encodeURIComponent(k),{method:'POST'});
+        const dd=await r.json().catch(()=>({}));
+        if(dd&&dd.results&&dd.results[k]){ results[k]=dd.results[k]; }
+        else if(!r.ok){ results[k]={ok:false,error:'HTTP '+r.status}; }
+        else { results[k]={ok:true,rows:0}; }
+      }catch(e){ results[k]={ok:false,error:(e&&e.message)||String(e)}; }
+    }
+    const d={ok:Object.values(results).every(v=>v.ok),results};
     const parts=Object.entries(d.results||{}).map(([k,v])=>{
       const name=DASH_LABELS[k]||k;
       return v.ok

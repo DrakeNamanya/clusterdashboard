@@ -218,6 +218,104 @@ async function neonRpcJson(
   return val;
 }
 
+// ---------------------------------------------------------------------------
+// CockroachDB-as-D1 adapter.
+//
+// The Frontliner cluster (all_trainees_view / reach_targets) was originally on
+// Cloudflare D1. To move it onto CockroachDB *without* rewriting every dashboard
+// query, this adapter exposes the small slice of the D1 API those functions use
+// (`prepare(sql).bind(...).all()/.first()/.run()`) on top of a node-postgres
+// client. It rewrites `?` placeholders to `$1,$2,...` and keeps ONE connection
+// open per logical operation; callers MUST `await d1.close()` in a finally.
+// ---------------------------------------------------------------------------
+
+/** Rewrite anonymous `?` placeholders (D1/SQLite) to `$1,$2,...` (Postgres). */
+function qmarkToDollar(sql: string): string {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
+
+interface D1Like {
+  prepare(sql: string): {
+    bind(...params: any[]): {
+      all<T = any>(): Promise<{ results: T[] }>;
+      first<T = any>(): Promise<T | null>;
+      run(): Promise<{ meta: { changes: number } }>;
+    };
+    all<T = any>(): Promise<{ results: T[] }>;
+    first<T = any>(): Promise<T | null>;
+    run(): Promise<{ meta: { changes: number } }>;
+  };
+  batch(stmts: { __sql: string; __params: any[] }[]): Promise<{ meta: { changes: number } }[]>;
+  close(): Promise<void>;
+}
+
+/**
+ * Build a D1-compatible facade backed by a single CockroachDB connection.
+ * `at_rows` / `reach_targets` live in the `public` schema on CockroachDB.
+ */
+function crdbAsD1(env: Env): D1Like {
+  let client: Client | null = null;
+  async function conn(): Promise<Client> {
+    if (!client) {
+      client = newClusterClient(env);
+      await client.connect();
+    }
+    return client;
+  }
+  function stmt(sql: string, boundParams: any[] = []) {
+    const text = qmarkToDollar(sql);
+    return {
+      async all<T = any>(): Promise<{ results: T[] }> {
+        const c = await conn();
+        const r = await c.query(text, boundParams);
+        return { results: r.rows as T[] };
+      },
+      async first<T = any>(): Promise<T | null> {
+        const c = await conn();
+        const r = await c.query(text, boundParams);
+        return (r.rows.length ? (r.rows[0] as T) : null);
+      },
+      async run(): Promise<{ meta: { changes: number } }> {
+        const c = await conn();
+        const r = await c.query(text, boundParams);
+        return { meta: { changes: r.rowCount ?? 0 } };
+      },
+    };
+  }
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...params: any[]) {
+          return stmt(sql, params);
+        },
+        ...stmt(sql, []),
+      };
+    },
+    async batch(stmts: { __sql: string; __params: any[] }[]) {
+      const c = await conn();
+      const out: { meta: { changes: number } }[] = [];
+      // CockroachDB implicit txn per statement is fine here; run sequentially.
+      for (const s of stmts) {
+        const r = await c.query(qmarkToDollar(s.__sql), s.__params);
+        out.push({ meta: { changes: r.rowCount ?? 0 } });
+      }
+      return out;
+    },
+    async close() {
+      if (client) {
+        try { await client.end(); } catch { /* ignore */ }
+        client = null;
+      }
+    },
+  };
+}
+
+/** True when the Frontliner cluster should live on CockroachDB (preferred). */
+function frontlinerOnCrdb(env: Env): boolean {
+  return !!clusterDbUrl(env);
+}
+
 /** Call a scalar-returning Neon function (e.g. refresh_* returns integer). */
 async function neonRpcScalar(
   env: Env,
@@ -263,10 +361,16 @@ export async function appendRecords(
 ): Promise<AppendResult> {
   if (!records.length) return { inserted: 0, duplicatesSkipped: 0, total: 0 };
 
-  // Route Cluster-2 templates to Neon; Frontliner cluster (all_trainees_view,
-  // reach_targets) to Cloudflare D1; anything else to Supabase.
-  if (usesD1(env, schema.key)) {
-    return appendRecordsD1(env, schema, records, sourceFile);
+  // Route Cluster-2 templates to CockroachDB; Frontliner cluster
+  // (all_trainees_view, reach_targets) to CockroachDB when configured (falls
+  // back to Cloudflare D1 only if no CockroachDB URL); anything else to Supabase.
+  if (D1_TEMPLATES.has(schema.key)) {
+    if (frontlinerOnCrdb(env)) {
+      return appendFrontlinerCrdb(env, schema, records, sourceFile);
+    }
+    if (usesD1(env, schema.key)) {
+      return appendRecordsD1(env, schema, records, sourceFile);
+    }
   }
   if (usesNeon(env, schema.key)) {
     return appendRecordsNeon(env, schema, records, sourceFile);
@@ -496,6 +600,15 @@ async function d1Count(db: D1Database): Promise<number> {
   return Number(r?.c ?? 0);
 }
 
+/** at_rows row count on whichever backend holds the Frontliner cluster. */
+async function frontlinerCount(env: Env): Promise<number> {
+  if (frontlinerOnCrdb(env)) {
+    const rows = await neonQuery(env, 'SELECT COUNT(*)::int AS c FROM public.at_rows');
+    return Number(rows?.[0]?.c ?? 0);
+  }
+  return d1Count(env.DB!);
+}
+
 /** reach_targets upload: replace all rows (targets are a full authoritative set). */
 async function appendTargetsD1(
   env: Env,
@@ -538,6 +651,135 @@ async function appendTargetsD1(
   const BATCH = 60;
   for (let i = 0; i < stmts.length; i += BATCH) {
     await db.batch(stmts.slice(i, i + BATCH));
+  }
+  return { inserted: rows.length, duplicatesSkipped: 0, total: records.length };
+}
+
+// ---------------------------------------------------------------------------
+// CockroachDB variant of the Frontliner cluster append (all_trainees_view /
+// reach_targets). Mirrors appendRecordsD1/appendTargetsD1 but talks to
+// CockroachDB via node-postgres. Large uploads (all_trainees_view is hundreds
+// of thousands of rows) are chunked into multi-row INSERTs; ON CONFLICT DO
+// NOTHING makes re-uploads idempotent on the dedup_key primary key.
+// ---------------------------------------------------------------------------
+
+async function appendFrontlinerCrdb(
+  env: Env,
+  schema: SheetSchema,
+  records: Record<string, string>[],
+  sourceFile: string
+): Promise<AppendResult> {
+  if (schema.key === 'reach_targets') {
+    return appendTargetsCrdb(env, records);
+  }
+
+  // Flatten + de-dupe within this batch (dedup_key PK rejects intra-batch dups).
+  const seen = new Set<string>();
+  const rows = [] as ReturnType<typeof flattenTrainee>[];
+  for (const rec of records) {
+    const dk = dedupKeyFor(schema, rec);
+    if (seen.has(dk)) continue;
+    seen.add(dk);
+    rows.push(flattenTrainee(rec, dk, sourceFile));
+  }
+  if (!rows.length) {
+    return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
+  }
+
+  const client = newClusterClient(env);
+  let inserted = 0;
+  try {
+    await client.connect();
+    const COLS = 13;
+    // 300 rows * 13 cols = 3900 bound params/statement — safe for Postgres
+    // (65535 param ceiling) and keeps the statement count low for big uploads.
+    const CHUNK = 300;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const ph: string[] = [];
+      const params: any[] = [];
+      chunk.forEach((r, j) => {
+        const b = j * COLS;
+        ph.push(
+          `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13})`
+        );
+        params.push(
+          r.dedup_key, r.data_collector, r.participant_id, r.group_id, r.group_name,
+          r.training_type, r.district, r.day, r.sex, r.is_pwd, r.is_farming, r.has_date,
+          r.source_file
+        );
+      });
+      const sql =
+        `INSERT INTO public.at_rows
+         (dedup_key,data_collector,participant_id,group_id,group_name,training_type,
+          district,day,sex,is_pwd,is_farming,has_date,source_file)
+         VALUES ${ph.join(',')}
+         ON CONFLICT (dedup_key) DO NOTHING`;
+      const res = await client.query(sql, params);
+      inserted += res.rowCount ?? 0;
+    }
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+  const dup = records.length - inserted;
+  return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
+}
+
+/** reach_targets upload to CockroachDB: replace all rows (authoritative set). */
+async function appendTargetsCrdb(
+  env: Env,
+  records: Record<string, string>[]
+): Promise<AppendResult> {
+  const num = (v: string | undefined) => {
+    const s = (v ?? '').replace(/[^0-9.\-]/g, '').trim();
+    return s === '' ? null : Number(s);
+  };
+  const monthOf = (v: string | undefined) => {
+    const s = (v ?? '').trim();
+    if (DATE_RE.test(s)) return s.slice(0, 8) + '01';
+    return null;
+  };
+  const rows = records
+    .map((rec) => ({
+      district: (rec['district'] ?? '').trim().toUpperCase() || null,
+      month: monthOf(rec['month']),
+      target: num(rec['target']),
+      target_shgs: num(rec['target_shgs']),
+      target_yiw: num(rec['target_yiw']),
+      target_female: num(rec['target_female']),
+      target_pwds: num(rec['target_pwds']),
+    }))
+    .filter((r) => r.district && r.month);
+  if (!rows.length) return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
+
+  const client = newClusterClient(env);
+  try {
+    await client.connect();
+    await client.query('DELETE FROM public.reach_targets');
+    const COLS = 7;
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const ph: string[] = [];
+      const params: any[] = [];
+      chunk.forEach((r, j) => {
+        const b = j * COLS;
+        ph.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7})`);
+        params.push(r.district, r.month, r.target, r.target_shgs, r.target_yiw, r.target_female, r.target_pwds);
+      });
+      await client.query(
+        `INSERT INTO public.reach_targets
+         (district,month,target,target_shgs,target_yiw,target_female,target_pwds)
+         VALUES ${ph.join(',')}
+         ON CONFLICT (district,month) DO UPDATE SET
+           target=excluded.target, target_shgs=excluded.target_shgs,
+           target_yiw=excluded.target_yiw, target_female=excluded.target_female,
+           target_pwds=excluded.target_pwds`,
+        params
+      );
+    }
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
   }
   return { inserted: rows.length, duplicatesSkipped: 0, total: records.length };
 }
@@ -676,10 +918,14 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
     let count = 0;
     let lastIngest: string | null = null;
 
-    // Frontliner cluster lives on D1 (flattened rows in at_rows).
-    if (usesD1(env, s.key)) {
+    // Frontliner cluster: CockroachDB when configured, else Cloudflare D1.
+    if (D1_TEMPLATES.has(s.key)) {
       try {
-        if (s.key === 'reach_targets') {
+        if (frontlinerOnCrdb(env)) {
+          const tbl = s.key === 'reach_targets' ? 'public.reach_targets' : 'public.at_rows';
+          const rows = await neonQuery(env, `SELECT COUNT(*)::int AS c FROM ${tbl}`);
+          count = Number(rows?.[0]?.c ?? 0);
+        } else if (s.key === 'reach_targets') {
           const r = await env.DB!.prepare('SELECT COUNT(*) AS c FROM reach_targets').first<{ c: number }>();
           count = Number(r?.c ?? 0);
         } else {
@@ -779,7 +1025,9 @@ export async function clusterTrainings(
   env: Env,
   opts: { districts?: string[]; from?: string; to?: string } = {}
 ): Promise<any> {
-  const db = env.DB!;
+  const onCrdb = frontlinerOnCrdb(env);
+  const db: any = onCrdb ? crdbAsD1(env) : env.DB!;
+  try {
   const { clause, params } = atWhere(opts);
 
   const kpi = await db
@@ -821,11 +1069,14 @@ export async function clusterTrainings(
     by_training_type: (bars.results || []).map((b) => ({ label: b.label, value: Number(b.value) })),
     districts: (districts.results || []).map((d) => d.district),
   };
+  } finally {
+    if (onCrdb && db.close) await db.close();
+  }
 }
 
 /** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshClusterSummary(env: Env): Promise<number> {
-  return d1Count(env.DB!);
+  return frontlinerCount(env);
 }
 
 /**
@@ -837,7 +1088,9 @@ export async function newYouthDash(
   env: Env,
   opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
 ): Promise<any> {
-  const db = env.DB!;
+  const onCrdb = frontlinerOnCrdb(env);
+  const db: any = onCrdb ? crdbAsD1(env) : env.DB!;
+  try {
   const pTarget = opts.target ?? 726;
 
   // Pull all dated, id-bearing rows (district filter applied later on the
@@ -959,6 +1212,9 @@ export async function newYouthDash(
     by_date: byDate,
     districts: [...distSet].sort(),
   };
+  } finally {
+    if (onCrdb && db.close) await db.close();
+  }
 }
 
 /** Last calendar day of the month whose first day is `firstOfMonth` ('YYYY-MM-01'). */
@@ -971,7 +1227,7 @@ function monthEnd(firstOfMonth: string): string {
 
 /** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshNewYouth(env: Env): Promise<number> {
-  return d1Count(env.DB!);
+  return frontlinerCount(env);
 }
 
 /**
@@ -983,7 +1239,9 @@ export async function frontlinerDash(
   opts: { districts?: string[]; from?: string; to?: string; collectors?: string[] } = {},
   limit = 1000
 ): Promise<any> {
-  const db = env.DB!;
+  const onCrdb = frontlinerOnCrdb(env);
+  const db: any = onCrdb ? crdbAsD1(env) : env.DB!;
+  try {
   const parts: string[] = ['data_collector IS NOT NULL'];
   const params: any[] = [];
   const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
@@ -1085,11 +1343,14 @@ export async function frontlinerDash(
     districts: (dd.results || []).map((d) => d.district),
     collectors: (cc.results || []).map((c) => c.data_collector),
   };
+  } finally {
+    if (onCrdb && db.close) await db.close();
+  }
 }
 
 /** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
 export async function refreshFrontliners(env: Env): Promise<number> {
-  return d1Count(env.DB!);
+  return frontlinerCount(env);
 }
 
 /**
