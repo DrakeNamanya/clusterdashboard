@@ -601,7 +601,9 @@ export async function queryRecords(
         // orderBy is validated against schema column names above (no injection).
         orderExpr = `data->>'${opts.orderBy.replace(/'/g, "''")}'`;
       } else {
-        orderExpr = order; // 'seq' or 'id'
+        // CockroachDB's records table has no `id` column (it uses seq +
+        // created_at); fall back to created_at for ingest order there.
+        orderExpr = seqIdx >= 0 ? 'seq' : 'created_at';
       }
       const dirSql = dir === 'desc' ? 'desc nulls last' : 'asc';
       const dataRows = await sql.query(
@@ -695,7 +697,8 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
       const sql = clusterSql(env);
       try {
         const rows = await sql.query(
-          `select count(*)::int as c, max(ingested_at) as last from public.records where template = $1`,
+          // CockroachDB records table uses created_at (no ingested_at column).
+          `select count(*)::int as c, max(created_at) as last from public.records where template = $1`,
           [s.key]
         );
         if (rows && rows.length) {
@@ -1020,19 +1023,21 @@ export async function frontlinerDash(
   const ttMap = new Map<string, Set<string>>();
   const gnMap = new Map<string, Set<string>>();
   if (collectors.length) {
-    // fetch distinct pairs only for the returned collectors, honouring filters
-    const listParts = parts.slice();
-    const listParams = params.slice();
-    listParts.push(`data_collector IN (${collectors.map(() => '?').join(',')})`);
-    listParams.push(...collectors);
+    // Fetch distinct pairs honouring the base filters, then keep only the
+    // collectors that survived the LIMIT. We deliberately DO NOT add a
+    // `data_collector IN (...)` clause here: with up to `limit` (1000)
+    // collectors that would exceed D1/SQLite's bound-variable ceiling
+    // ("too many SQL variables"). Instead we scope in TS via `keep`.
+    const keep = new Set(collectors);
     const lists = await db
       .prepare(
         `SELECT DISTINCT data_collector, training_type, group_name
-         FROM at_rows WHERE ${listParts.join(' AND ')}`
+         FROM at_rows WHERE ${parts.join(' AND ')}`
       )
-      .bind(...listParams)
+      .bind(...params)
       .all<{ data_collector: string; training_type: string | null; group_name: string | null }>();
     for (const r of lists.results || []) {
+      if (!keep.has(r.data_collector)) continue;
       if (r.training_type) {
         if (!ttMap.has(r.data_collector)) ttMap.set(r.data_collector, new Set());
         ttMap.get(r.data_collector)!.add(r.training_type);
