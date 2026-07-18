@@ -11,47 +11,58 @@
   storage split** (Neon Postgres + Cloudflare D1 + Supabase), SheetJS for
   in-browser parsing, Tailwind CSS UI.
 
-## Storage Architecture (three backends, routed by template)
-The dashboards form **two disconnected clusters** (no cross-cluster joins), so each
-cluster is stored where it runs best. A per-template router in `src/store.ts`
-(`usesD1()` / `usesNeon()`) decides where each upload and each dashboard query goes.
+## Storage Architecture (CockroachDB — single backend)
+**All data now lives on CockroachDB Serverless** (`riled-colugo-29765` /
+`defaultdb`). Neon (512 MB, filled up) and Cloudflare D1 (used for the Frontliner
+cluster, then lost API authorization) have both been **retired**. A per-template
+router in `src/store.ts` (`usesNeon()` = Cluster-2, `frontlinerOnCrdb()` =
+Frontliner) still exists but every branch resolves to CockroachDB when
+`COCKROACH_DATABASE_URL` is set (which it always is in production).
 
-### 1. Neon (Postgres) — Cluster-2 dashboards
-Serves the join-heavy dashboards: **Production, Sales, ISLA, SHG Profiling,
-Distribution to Participants, Distribution to SHGs**. These tables JOIN together
-(`participants`, `production_and_marketing_tool`, `shg_profiling_form`, `isla_form`,
-`shg_groups_view`, `shg_group`, `participants_shg`, `distribution_form_v2`,
-`agrihubs`). Neon keeps all Postgres logic (30 PL/pgSQL functions + JSONB) unchanged.
-- Accessed via `@neondatabase/serverless` HTTP driver (works on Workers).
-- `neonQuery()` wraps queries with retry/backoff to survive free-tier **cold starts**
-  (compute scales to zero → first request after idle can take ~15s).
-- Secret: `NEON_DATABASE_URL`.
+### 1. Cluster-2 dashboards (join-heavy)
+**Production, Sales, ISLA, SHG Profiling, Distribution to Participants,
+Distribution to SHGs**. Templates: `participants`,
+`production_and_marketing_tool`, `shg_profiling_form`, `isla_form`,
+`isla_participants`, `youth_profiling`, `shg_groups_view`, `shg_group`,
+`participants_shg`, `distribution_form_v2`, `agrihubs`. Stored as JSONB in
+`public.records`; 23 PL/pgSQL functions build materialized `*_rows` fact tables
+that the dashboards read.
+- Accessed via the `pg` (node-postgres) driver over `cloudflare:sockets`.
+- `neonQuery()` wraps queries with retry/backoff to survive free-tier cold starts.
 
-### 2. Cloudflare D1 (SQLite) — Frontliner cluster
-Serves the **Frontliners, Cluster Trainings, and New Youth** dashboards, all sourced
-from `all_trainees_view` (~728k rows) plus `reach_targets`. This cluster was moved
-off Supabase because 728k rows exhausted the 0.5GB-RAM free tier and crashed it.
-D1 gives **5GB storage, no RAM ceiling, no cold-start, no pausing**.
-- D1 has no PL/pgSQL, so records are **flattened at INSERT time** into `at_rows`
-  (participant-grain), and the three dashboards aggregate over that one table in
-  **TypeScript** (`clusterTrainings`, `frontlinerDash`, `newYouthDash` in `store.ts`).
-- Schema: `migrations/0001_frontliner_d1.sql` (`at_rows`, `reach_targets`).
-- Binding: `DB` (database `shg-data-cleaner-production`, id `7c5c130e-…`).
+### 2. Frontliner cluster
+**Frontliners, Cluster Trainings, New Youth** dashboards, sourced from
+`all_trainees_view` + `reach_targets`. Records are **flattened at INSERT time**
+into `public.at_rows` (participant-grain); the three dashboards aggregate over
+that one table in TypeScript (`clusterTrainings`, `frontlinerDash`,
+`newYouthDash`). The `crdbAsD1()` adapter in `store.ts` runs the original
+D1/SQLite `at_rows` queries against CockroachDB unchanged (rewrites `?`→`$n`).
+- `appendFrontlinerCrdb` / `appendTargetsCrdb` do chunked multi-row `INSERT …
+  ON CONFLICT`, so `all_trainees_view` (hundreds of thousands of rows) uploads
+  without the old D1 HTTP-503.
 
 ### 3. Supabase (Postgres) — overflow / spare
-Kept as overflow for any new tables or spills from Neon. Project
-`lhejscsnnbygomdmnfmq`. Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
+Still configured (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`) as a fallback for any
+template not routed to CockroachDB; not used by the live dashboards.
 
 ### Common storage pattern
-- Neon/Supabase: one table `public.records` `(id, template, dedup_key, seq,
-  source_file, ingested_at, data JSONB)`, `UNIQUE (template, dedup_key)`, upsert
-  with ignore-duplicates. Flattened **views** expose typed columns for OData/CSV.
-- D1: `at_rows` + `reach_targets`, `INSERT OR IGNORE` on the `dedup_key` PRIMARY KEY.
-- Re-uploading the same rows never duplicates in any backend.
+- `public.records` `(template, dedup_key, seq, source_file, data JSONB,
+  created_at)`, `UNIQUE (template, dedup_key)`, upsert with ignore-duplicates.
+- `public.at_rows` + `public.reach_targets`, `ON CONFLICT DO NOTHING` on the
+  `dedup_key` primary key.
+- Re-uploading the same rows never duplicates.
 
-### One-time setup
-- Neon: SQL in `supabase/*.sql` already applied (records table, views, functions).
-- D1: `npx wrangler d1 execute shg-data-cleaner-production --remote --file=./migrations/0001_frontliner_d1.sql`.
+### Refresh model (important)
+Uploading to a master sheet does **not** auto-update the dashboards — the
+materialized `*_rows` fact tables must be rebuilt. After an upload the web UI
+calls `/api/refresh-all?only=<cluster>` **once per cluster** (CockroachDB's slow
+free tier means one refresh per request keeps each call within the Worker time
+limit). You can also click **Rebuild dashboards** on the home page any time.
+
+### CockroachDB free-tier limit
+CockroachDB Serverless free tier = **50M Request Units/month**. Heavy migrations
++ frequent refreshes can exhaust it, after which the cluster is disabled until
+the cycle resets or a spend limit is raised in the CockroachDB Cloud console.
 
 ## Supported Templates (11)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
