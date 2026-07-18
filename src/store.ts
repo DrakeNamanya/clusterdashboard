@@ -1105,9 +1105,9 @@ export async function distributionDash(env: Env, opts: DistFilters = {}): Promis
   return neonRpcJson(
     env,
     'distribution_dash',
-    'p_districts := $1::text[], p_from := $2::date, p_to := $3::date, ' +
-      'p_materials := $4::text[], p_units := $5::text[], ' +
-      'p_submitters := $6::text[], p_suppliers := $7::text[]',
+    '$1::text[], $2::date, $3::date, ' +
+      '$4::text[], $5::text[], ' +
+      '$6::text[], $7::text[]',
     [
       opts.districts && opts.districts.length ? opts.districts : null,
       opts.from || null,
@@ -1138,9 +1138,9 @@ export async function distributionDetail(
   return neonRpcJson(
     env,
     'distribution_detail',
-    'p_shg := $1, p_districts := $2::text[], p_from := $3::date, p_to := $4::date, ' +
-      'p_materials := $5::text[], p_units := $6::text[], ' +
-      'p_submitters := $7::text[], p_suppliers := $8::text[]',
+    '$1, $2::text[], $3::date, $4::date, ' +
+      '$5::text[], $6::text[], ' +
+      '$7::text[], $8::text[]',
     [
       shg,
       opts.districts && opts.districts.length ? opts.districts : null,
@@ -1166,9 +1166,9 @@ export async function shgDistributionDash(env: Env, opts: DistFilters = {}): Pro
   return neonRpcJson(
     env,
     'shg_distribution_dash',
-    'p_districts := $1::text[], p_from := $2::date, p_to := $3::date, ' +
-      'p_materials := $4::text[], p_units := $5::text[], ' +
-      'p_submitters := $6::text[], p_suppliers := $7::text[]',
+    '$1::text[], $2::date, $3::date, ' +
+      '$4::text[], $5::text[], ' +
+      '$6::text[], $7::text[]',
     [
       opts.districts && opts.districts.length ? opts.districts : null,
       opts.from || null,
@@ -1195,9 +1195,9 @@ export async function shgDistributionDetail(
   return neonRpcJson(
     env,
     'shg_distribution_detail',
-    'p_shg := $1, p_districts := $2::text[], p_from := $3::date, p_to := $4::date, ' +
-      'p_materials := $5::text[], p_units := $6::text[], ' +
-      'p_submitters := $7::text[], p_suppliers := $8::text[]',
+    '$1, $2::text[], $3::date, $4::date, ' +
+      '$5::text[], $6::text[], ' +
+      '$7::text[], $8::text[]',
     [
       shg,
       opts.districts && opts.districts.length ? opts.districts : null,
@@ -1234,9 +1234,9 @@ export async function shgProfilingDash(env: Env, opts: ProfilingFilters = {}): P
   return neonRpcJson(
     env,
     'shg_profiling_dash',
-    'p_districts := $1::text[], p_profilers := $2::text[], ' +
-      'p_from := $3::date, p_to := $4::date, ' +
-      'p_total_min := $5::int, p_total_max := $6::int, p_monthly_target := $7::int',
+    '$1::text[], $2::text[], ' +
+      '$3::date, $4::date, ' +
+      '$5::int, $6::int, $7::int',
     [
       opts.districts && opts.districts.length ? opts.districts : null,
       opts.profilers && opts.profilers.length ? opts.profilers : null,
@@ -1274,8 +1274,8 @@ export async function islaDash(env: Env, opts: IslaFilters = {}): Promise<any> {
   return neonRpcJson(
     env,
     'isla_dash',
-    'p_districts := $1::text[], p_profilers := $2::text[], ' +
-      'p_from := $3::date, p_to := $4::date',
+    '$1::text[], $2::text[], ' +
+      '$3::date, $4::date',
     [
       opts.districts && opts.districts.length ? opts.districts : null,
       opts.profilers && opts.profilers.length ? opts.profilers : null,
