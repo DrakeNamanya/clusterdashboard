@@ -213,12 +213,17 @@ $('confirmBtn').addEventListener('click', async ()=>{
     if(!rows.length) return true;
     const payload=JSON.stringify({ schemaKey:schema.key, headers, rows, sourceFile:file.name, startSeq:seq });
     let lastErr;
-    for(let attempt=1; attempt<=5; attempt++){
+    // CockroachDB Serverless scales to zero when idle; the FIRST batch after an
+    // idle period can wait 15-20s for the cluster to wake. Retry generously with
+    // longer backoff so a cold start never surfaces as "Upload failed".
+    const MAX_ATTEMPTS=8;
+    for(let attempt=1; attempt<=MAX_ATTEMPTS; attempt++){
       try{
         const res=await fetch('/api/append',{ method:'POST', headers:{'Content-Type':'application/json'}, body:payload });
         if(res.status===503 || res.status===429 || res.status>=500){
           lastErr=new Error('HTTP '+res.status+' (server busy)');
-          await new Promise(r=>setTimeout(r, 400*attempt)); continue;
+          // 1s,2s,4s,8s,10s,10s,10s → ~55s total, covers a cold-start wake-up.
+          await new Promise(r=>setTimeout(r, Math.min(10000, 1000*Math.pow(2,attempt-1)))); continue;
         }
         if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||('HTTP '+res.status)); }
         const d=await res.json();
@@ -228,8 +233,8 @@ $('confirmBtn').addEventListener('click', async ()=>{
         return true;
       }catch(err){
         lastErr=err;
-        if(attempt>=5) break;
-        await new Promise(r=>setTimeout(r, 400*attempt));
+        if(attempt>=MAX_ATTEMPTS) break;
+        await new Promise(r=>setTimeout(r, Math.min(10000, 1000*Math.pow(2,attempt-1))));
       }
     }
     throw lastErr||new Error('Upload failed');
@@ -418,7 +423,7 @@ if(importOdataBtn) importOdataBtn.addEventListener('click',async()=>{
       pages++;
       totalFetched+=d.fetched||0;
       totalInserted+=(d.result&&d.result.inserted)||0;
-      totalDup+=(d.result&&d.result.skippedDuplicates)||0;
+      totalDup+=(d.result&&(d.result.duplicatesSkipped||d.result.skippedDuplicates))||0;
       if(d.total!=null) total=d.total;
       skip=d.nextSkip; startSeq=d.nextSeq; done=d.done;
       const pct=total?Math.min(100,Math.round(totalFetched/total*100)):null;
@@ -433,6 +438,13 @@ if(importOdataBtn) importOdataBtn.addEventListener('click',async()=>{
       +totalInserted.toLocaleString()+' new rows inserted, '
       +totalDup.toLocaleString()+' duplicates skipped ('+totalFetched.toLocaleString()+' fetched over '+pages+' pages).';
     await loadStats();
+    // Master data changed via OData → rebuild the dashboard fact tables so the
+    // dashboards reflect the imported data (previously this step was missing,
+    // so OData-fed dashboards never refreshed).
+    if(totalInserted>0){
+      box.innerHTML+=' <span class="text-slate-500">Rebuilding dashboards…</span>';
+      await rebuildDashboards();
+    }
   }catch(err){
     box.className='mb-3 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg p-3';
     box.innerHTML='<i class="fas fa-triangle-exclamation mr-1"></i>Import failed: '+esc(err.message||String(err));

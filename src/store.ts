@@ -135,7 +135,34 @@ function newClusterClient(env: Env): Client {
     connectionString: url,
     // CockroachDB Cloud terminates TLS; the Workers socket layer verifies it.
     ssl: { rejectUnauthorized: false },
+    // CockroachDB Serverless scales compute to zero when idle; the FIRST
+    // connection after that can take 15-20s. Give it room so a cold start does
+    // not surface as a spurious HTTP 503 on the first upload batch.
+    connectionTimeoutMillis: 30000,
+    query_timeout: 55000,
+    statement_timeout: 55000,
   });
+}
+
+/**
+ * Open a connected CockroachDB client, retrying transient connect failures with
+ * backoff (cold-start wake-ups look like connect errors). Mirrors neonQuery's
+ * resilience so bulk-insert paths don't 503 on the first batch after idle.
+ */
+async function connectClusterWithRetry(env: Env, tries = 5): Promise<Client> {
+  let last: unknown;
+  for (let i = 1; i <= tries; i++) {
+    const client = newClusterClient(env);
+    try {
+      await client.connect();
+      return client;
+    } catch (e) {
+      last = e;
+      try { await client.end(); } catch { /* ignore */ }
+      if (i < tries) await new Promise((r) => setTimeout(r, 500 * Math.pow(2, i - 1)));
+    }
+  }
+  throw last instanceof Error ? last : new Error('CockroachDB connect failed');
 }
 
 /**
@@ -686,10 +713,9 @@ async function appendFrontlinerCrdb(
     return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
   }
 
-  const client = newClusterClient(env);
+  const client = await connectClusterWithRetry(env);
   let inserted = 0;
   try {
-    await client.connect();
     const COLS = 13;
     // 300 rows * 13 cols = 3900 bound params/statement — safe for Postgres
     // (65535 param ceiling) and keeps the statement count low for big uploads.
@@ -752,9 +778,8 @@ async function appendTargetsCrdb(
     .filter((r) => r.district && r.month);
   if (!rows.length) return { inserted: 0, duplicatesSkipped: records.length, total: records.length };
 
-  const client = newClusterClient(env);
+  const client = await connectClusterWithRetry(env);
   try {
-    await client.connect();
     await client.query('DELETE FROM public.reach_targets');
     const COLS = 7;
     const CHUNK = 500;

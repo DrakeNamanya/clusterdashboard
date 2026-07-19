@@ -2,6 +2,11 @@
 // Frontend HTML (single page). Uses Tailwind + Font Awesome via CDN.
 // ---------------------------------------------------------------------------
 
+// Cache-busting token for /static/app.js. Bump this whenever app.js changes so
+// browsers (and the Cloudflare edge cache) fetch the new version instead of a
+// stale one — a stale app.js was still hitting the retired D1 upload path.
+const ASSET_VERSION = '20260718b';
+
 export function renderPage(base: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -123,10 +128,10 @@ export function renderPage(base: string): string {
     </section>
   </main>
 
-  <footer class="text-center text-xs text-slate-400 py-6">SHG Data Cleaner &bull; Cloudflare Pages + Hono + D1 &bull; OData v4 feed for Power BI</footer>
+  <footer class="text-center text-xs text-slate-400 py-6">SHG Data Cleaner &bull; Cloudflare Pages + Hono + CockroachDB &bull; OData v4 feed for Power BI</footer>
 
   <script>window.__BASE__ = ${JSON.stringify(base)};</script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=${ASSET_VERSION}"></script>
 </body>
 </html>`;
 }
