@@ -1127,9 +1127,15 @@ export async function newYouthDash(
 
   // Pull all dated, id-bearing rows (district filter applied later on the
   // first-date row so we match the DAX ALLEXCEPT(participant_id) semantics).
+  // NOTE: on the Postgres backend (Oracle VM / CockroachDB) the `pg` driver
+  // returns bigint columns as JS strings ("1"/"0"), which broke the strict
+  // `is_pwd === 1` checks below (they silently evaluated false, zeroing the
+  // PWD / in-work cards). Cast to int in SQL so both D1 and pg return numbers.
   const rows = await db
     .prepare(
-      `SELECT participant_id AS pid, day, district, sex, is_pwd, is_farming
+      `SELECT participant_id AS pid, day, district, sex,
+              CAST(is_pwd AS INTEGER) AS is_pwd,
+              CAST(is_farming AS INTEGER) AS is_farming
        FROM at_rows
        WHERE participant_id IS NOT NULL AND has_date=1 AND day IS NOT NULL`
     )
@@ -1157,8 +1163,9 @@ export async function newYouthDash(
   for (const r of rows.results || []) {
     if (r.day !== firstDay.get(r.pid)) continue;
     const f = r.sex === 'Female';
-    const p = r.is_pwd === 1;
-    const w = r.is_farming === 1;
+    // Tolerate string "1" / number 1 (pg bigint arrives as string).
+    const p = Number(r.is_pwd) === 1;
+    const w = Number(r.is_farming) === 1;
     const prev = ny.get(r.pid);
     const merged: NY = {
       first_date: r.day,

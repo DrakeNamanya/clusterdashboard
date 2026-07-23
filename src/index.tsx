@@ -358,6 +358,10 @@ function odataJson(c: any, obj: unknown) {
     'Content-Type': ODATA_JSON,
     'OData-Version': '4.0',
     'Access-Control-Allow-Origin': '*',
+    // Master sheets (Excel / Power BI) should never serve data older than 5 min.
+    // max-age caps any downstream/edge caching; must-revalidate forbids stale
+    // reuse, so a refresh after 5 min always re-fetches live rows from Oracle.
+    'Cache-Control': 'public, max-age=300, must-revalidate',
   });
 }
 
@@ -369,6 +373,7 @@ app.get('/odata/$metadata', (c) =>
     'Content-Type': 'application/xml;charset=utf-8',
     'OData-Version': '4.0',
     'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=300, must-revalidate',
   })
 );
 
