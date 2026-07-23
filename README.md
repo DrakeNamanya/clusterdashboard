@@ -142,9 +142,23 @@ Power BI Desktop → **Get Data → OData feed** → paste the **Service URL**:
 ```
 All six master tables appear as selectable entity sets and refresh automatically.
 
+## Navigation & Home overview
+- **Right-side sidebar** (Heifer-style): a fixed, collapsible navigation panel on the
+  right edge of every page. Each menu item is a normal link, so clicking it opens that
+  dashboard **in the same window**. The active dashboard is highlighted (navy edge bar +
+  tint). Toggle it with the hamburger; the open/closed state is remembered per browser.
+- **Home** (`GET /`): a KPI **overview dashboard** that summarises the headline numbers
+  from every dashboard in one screen (Cluster Trainings, Monthly New Youth, Frontliners,
+  Distribution to Participants, Distribution to SHGs, SHG Profiling, ISLA, Production,
+  Sales). Each panel fetches that dashboard's own API in the browser, so the figures always
+  match the source dashboard, and every panel links through to the full dashboard.
+- **Data Tools & OData** (`GET /tools`, alias `/upload`): the sheet-upload, OData-import,
+  Fill-docId, Rebuild-dashboards and Power BI feed tools (formerly the site root).
+
 ## Functional URIs
 ### Web / API
-- `GET  /` — web dashboard
+- `GET  /` — **Home** KPI overview dashboard (all dashboards summarised)
+- `GET  /tools` (alias `GET /upload`) — Data Tools: upload / OData import / rebuild / feed
 - `GET  /health` — health check
 - `GET  /api/schemas` — schema definitions (drives client detection)
 - `POST /api/detect` (multipart `file`) — detect template + cleaned preview (no save)
