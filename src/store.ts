@@ -866,6 +866,56 @@ export async function queryRecords(
   let order = seqIdx >= 0 ? 'seq' : 'id';
   let dir = opts.desc ? 'desc' : 'asc';
 
+  // The Frontliner cluster (all_trainees_view) is stored FLATTENED in `at_rows`
+  // on the cluster backend (Oracle VM / CockroachDB), never in `records` and no
+  // longer in Supabase (that project is decommissioned). Serve its OData feed
+  // directly from at_rows. The flatten step is lossy (subcounty/Parish/Village/
+  // Employment_* are not retained; Disability_status/Do_for_living/activity_date
+  // are reconstructed from the boolean flags + day), so those columns come back
+  // empty or derived — but the feed stays live instead of 503-ing on Supabase.
+  if (schema.key === 'all_trainees_view' && frontlinerOnCrdb(env)) {
+    const db = crdbAsD1(env);
+    try {
+      const rowsRes = await db
+        .prepare(
+          `SELECT dedup_key, participant_id, group_id, group_name, training_type,
+                  data_collector, sex, district, day,
+                  CAST(is_pwd AS INTEGER) AS is_pwd,
+                  CAST(is_farming AS INTEGER) AS is_farming
+           FROM at_rows
+           ORDER BY day ${dir === 'desc' ? 'DESC NULLS LAST' : 'ASC'}, dedup_key
+           LIMIT ${top} OFFSET ${skip}`
+        )
+        .all<any>();
+      const cntRes = await db
+        .prepare(`SELECT COUNT(*)::int AS c FROM at_rows`)
+        .first<{ c: number }>();
+      const count = cntRes ? Number(cntRes.c) : 0;
+      const rows = (rowsRes.results || []).map((r: any) => ({
+        _id: r.dedup_key ?? '',
+        participant_name: '',
+        participant_id: r.participant_id ?? '',
+        group_id: r.group_id ?? '',
+        training_type: r.training_type ?? '',
+        activity_date: r.day ?? '',
+        data_collector: r.data_collector ?? '',
+        group_name: r.group_name ?? '',
+        sex: r.sex ?? '',
+        district: r.district ?? '',
+        subcounty: '',
+        Parish: '',
+        Village: '',
+        Disability_status: Number(r.is_pwd) === 1 ? 'Yes' : 'No',
+        Employment_status: '',
+        Employment_sector: '',
+        Do_for_living: Number(r.is_farming) === 1 ? 'Farming' : '',
+      }));
+      return { rows, count };
+    } finally {
+      if ((db as any).close) await (db as any).close();
+    }
+  }
+
   // Route Cluster-2 templates to CockroachDB.
   if (usesNeon(env, schema.key)) {
     const sql = clusterSql(env);
