@@ -2,10 +2,12 @@
 // Frontend HTML (single page). Uses Tailwind + Font Awesome via CDN.
 // ---------------------------------------------------------------------------
 
+import { navSidebar } from './nav';
+
 // Cache-busting token for /static/app.js. Bump this whenever app.js changes so
 // browsers (and the Cloudflare edge cache) fetch the new version instead of a
 // stale one — a stale app.js was still hitting the retired D1 upload path.
-const ASSET_VERSION = '20260718b';
+const ASSET_VERSION = '20260723a';
 
 export function renderPage(base: string): string {
   return `<!DOCTYPE html>
@@ -20,6 +22,7 @@ export function renderPage(base: string): string {
   <link href="/static/style.css" rel="stylesheet" />
 </head>
 <body class="bg-slate-100 text-slate-800">
+${navSidebar('tools')}
   <header class="bg-slate-900 text-white">
     <div class="max-w-7xl mx-auto px-6 py-5 flex items-center gap-3">
       <i class="fas fa-broom text-2xl text-emerald-400"></i>
@@ -27,35 +30,9 @@ export function renderPage(base: string): string {
         <h1 class="text-xl font-bold">SHG Data Cleaner &amp; Consolidator</h1>
         <p class="text-slate-300 text-sm">Clean &amp; standardize sheets, append to master tables, publish an OData feed for Power BI.</p>
       </div>
-      <div class="ml-auto flex items-center gap-2">
-        <a href="/cluster-trainings" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold">
-          <i class="fas fa-chart-simple"></i> Cluster Trainings
-        </a>
-        <a href="/monthly-new-youth" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-semibold">
-          <i class="fas fa-user-plus"></i> Monthly New Youth
-        </a>
-        <a href="/frontliners" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold">
-          <i class="fas fa-table"></i> Trainings by Frontliners
-        </a>
-        <a href="/distribution" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold">
-          <i class="fas fa-boxes-stacked"></i> Distribution to Participants
-        </a>
-        <a href="/shg-distribution" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-800 hover:bg-teal-700 text-white text-sm font-semibold">
-          <i class="fas fa-people-group"></i> Distribution to SHGs
-        </a>
-        <a href="/shg-profiling" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold">
-          <i class="fas fa-address-card"></i> SHG Profiling
-        </a>
-        <a href="/isla" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold">
-          <i class="fas fa-piggy-bank"></i> ISLA Savings
-        </a>
-        <a href="/production" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-lime-600 hover:bg-lime-500 text-white text-sm font-semibold">
-          <i class="fas fa-seedling"></i> Production (Horticulture)
-        </a>
-        <a href="/sales" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold">
-          <i class="fas fa-sack-dollar"></i> Sales (Horticulture/Oilseeds)
-        </a>
-      </div>
+      <a href="/" class="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold">
+        <i class="fas fa-gauge-high"></i> Dashboards Home
+      </a>
     </div>
   </header>
 

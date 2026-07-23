@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "Monthly New Youth Reached" — Power BI-style dashboard for all_trainees_view.
 // "First touch" model: each participant is counted only on their FIRST-EVER
@@ -38,12 +39,13 @@ export function renderMonthlyNewYouth(base: string): string {
   </style>
 </head>
 <body>
+${navSidebar('newyouth')}
   <div class="max-w-[1200px] mx-auto p-4 md:p-6">
 
     <!-- Title bar -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+        <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
       </div>
       <h1 class="text-xl md:text-3xl font-extrabold tracking-tight text-center flex-1">NEW YOUTH REACHED BY MONTH</h1>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--peach-soft)] text-[var(--muted)]">

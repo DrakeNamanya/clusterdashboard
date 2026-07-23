@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "Distribution to Participants" — participants_shg ⋈ distribution_form_v2
 // (join on participants_shg[__Submissions-id] = distribution_form_v2[_id]).
@@ -65,11 +66,12 @@ export function renderDistribution(base: string, opts: any = {}): string {
   </style>
 </head>
 <body>
+${navSidebar('distribution')}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <!-- Title + top toolbar -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
       <div class="ttl px-4 py-1.5"><h1 class="text-lg md:text-xl font-extrabold tracking-tight">DISTRIBUTION TO PARTICIPANTS</h1></div>
 
       <div class="flex items-center gap-1.5 card px-3 py-1.5">

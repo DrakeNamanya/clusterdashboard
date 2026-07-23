@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "SALES IN HORTICULTURE/OILSEEDS"
 //   Marketing_Table = production_and_marketing_tool filtered pdn_level='marketing'
@@ -56,10 +57,11 @@ export function renderSales(base: string, opts: any = {}): string {
   </style>
 </head>
 <body>
+${navSidebar('sales')}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
 
       <div class="card kpi px-4 py-2">
         <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">Unique Participants (Sales)</div>

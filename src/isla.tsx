@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "SHGs SAVING IN A CLUSTER (ISLA)" — isla_form ⋈ Dim_SHG_ISLA
 //   ISLA FINAL = isla_form LEFT JOIN shg_profiling_form on shg_id = refID
@@ -56,11 +57,12 @@ export function renderIsla(base: string, opts: any = {}): string {
   </style>
 </head>
 <body>
+${navSidebar('isla')}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <!-- Title + top toolbar -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
 
       <!-- KPI: SHG_Saving -->
       <div class="card kpi px-4 py-2">

@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "SHG PROFILING AND GROUP STATISTICS" — shg_groups_view ⋈ Dim_SHG
 //   Dim_SHG = SUMMARIZE(shg_profiling_form, refID, shg_name, MAX(Profilers_name))
@@ -59,11 +60,12 @@ export function renderShgProfiling(base: string, opts: any = {}): string {
   </style>
 </head>
 <body>
+${navSidebar('shgprofiling')}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <!-- Title + top toolbar -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
       <div class="ttl px-4 py-1.5"><h1 class="text-lg md:text-xl font-extrabold tracking-tight">SHG PROFILING AND GROUP STATISTICS</h1></div>
 
       <div class="flex items-center gap-1.5 card px-3 py-1.5">

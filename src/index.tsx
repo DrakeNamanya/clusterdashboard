@@ -20,6 +20,7 @@ import {
 } from './odata';
 import { ODATA_SOURCES, fetchOdataPage, resolveSource } from './odataimport';
 import { renderPage } from './ui';
+import { renderHome } from './home';
 import { renderClusterTrainings } from './cluster';
 import { renderMonthlyNewYouth } from './newyouth';
 import { renderFrontliners } from './frontliner';
@@ -406,7 +407,11 @@ app.get('/odata/:set', async (c) => {
 
 // ---- Frontend --------------------------------------------------------------
 
-app.get('/', (c) => c.html(renderPage(baseUrl(c.req.url))));
+// Home is now the KPI overview dashboard. The upload / OData tools page moved
+// to /tools (with /upload kept as a friendly alias).
+app.get('/', (c) => c.html(renderHome(baseUrl(c.req.url))));
+app.get('/tools', (c) => c.html(renderPage(baseUrl(c.req.url))));
+app.get('/upload', (c) => c.html(renderPage(baseUrl(c.req.url))));
 
 // ---- Cluster Trainings dashboard ------------------------------------------
 

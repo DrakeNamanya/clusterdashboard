@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "Cluster Trainings" — Power BI-style dashboard for all_trainees_view.
 // Cream theme, green horizontal bar chart, district checkbox filter, date range.
@@ -34,12 +35,13 @@ export function renderClusterTrainings(base: string): string {
   </style>
 </head>
 <body>
+${navSidebar('cluster')}
   <div class="max-w-[1200px] mx-auto p-4 md:p-6">
 
     <!-- Title bar -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+        <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
         <h1 class="text-xl md:text-2xl font-extrabold tracking-tight">Cluster Trainings</h1>
       </div>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">

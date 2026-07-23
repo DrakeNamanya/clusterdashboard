@@ -1,3 +1,4 @@
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // "Trainings by Frontliners" — Power BI-style TRAININGS table for
 // all_trainees_view, grouped by data_collector.
@@ -43,11 +44,12 @@ export function renderFrontliners(base: string): string {
   </style>
 </head>
 <body>
+${navSidebar('frontliners')}
   <div class="max-w-[1300px] mx-auto p-4 md:p-6">
 
     <!-- Title + top toolbar (date range moved to top) -->
     <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to app"><i class="fas fa-arrow-left"></i></a>
+      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
       <div class="ttl px-5 py-1.5"><h1 class="text-xl md:text-2xl font-extrabold tracking-tight">TRAININGS</h1></div>
 
       <!-- Compact date range slicer -->
