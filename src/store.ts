@@ -26,6 +26,13 @@ export interface Env {
   // with node-postgres (`pg`) over TCP sockets, which runs on Cloudflare Workers
   // thanks to `nodejs_compat`. NEON_DATABASE_URL is still accepted for backward
   // compatibility but COCKROACH_DATABASE_URL takes precedence.
+  //
+  // MIGRATION NOTE (Oracle): all Cluster-2 data has been migrated to a
+  // PostgreSQL 16 instance running on an Oracle Cloud compute VM (long-term
+  // home). ORACLE_DATABASE_URL now takes precedence over everything else;
+  // COCKROACH_DATABASE_URL is kept only as a fallback until the CockroachDB
+  // instance is decommissioned.
+  ORACLE_DATABASE_URL?: string;
   COCKROACH_DATABASE_URL?: string;
   NEON_DATABASE_URL?: string;
   // Cloudflare D1 (SQLite) — serves the heavy Frontliner cluster
@@ -35,9 +42,9 @@ export interface Env {
   DB?: D1Database;
 }
 
-/** Resolve the Cluster-2 Postgres connection string (CockroachDB preferred). */
+/** Resolve the Cluster-2 Postgres connection string (Oracle VM preferred). */
 function clusterDbUrl(env: Env): string | undefined {
-  return env.COCKROACH_DATABASE_URL || env.NEON_DATABASE_URL;
+  return env.ORACLE_DATABASE_URL || env.COCKROACH_DATABASE_URL || env.NEON_DATABASE_URL;
 }
 
 /** Templates whose records live in Cloudflare D1 (the Frontliner cluster). */
