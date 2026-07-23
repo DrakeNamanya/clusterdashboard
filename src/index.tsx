@@ -14,6 +14,7 @@ import {
   islaDash, islaOptions, refreshIsla,
   productionDash, productionOptions, refreshProduction,
   salesDash, salesOptions, refreshSales, Env,
+  misSyncSlice, misSyncStatus,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -36,21 +37,23 @@ type Bindings = Env;
 
 // Build the store Env from the request context (validates configuration).
 function storeEnv(c: any): Env {
-  const url = c.env.SUPABASE_URL;
-  const key = c.env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) {
-    throw new Error('Supabase is not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing).');
-  }
+  // Supabase is decommissioned; keep the fields populated when present but do
+  // NOT hard-fail — Cluster data now lives on the Oracle VM Postgres and
+  // all_trainees_view is synced from the MIS.
   return {
-    SUPABASE_URL: url,
-    SUPABASE_SERVICE_KEY: key,
-    // CockroachDB serves the Cluster-2 dashboards (Production/Sales/ISLA/SHG/
-    // Distribution). Migrated off Neon after its 512 MB free tier filled up.
+    SUPABASE_URL: c.env.SUPABASE_URL || '',
+    SUPABASE_SERVICE_KEY: c.env.SUPABASE_SERVICE_KEY || '',
+    // Oracle VM Postgres is the long-term home for all Cluster + at_rows data.
+    ORACLE_DATABASE_URL: c.env.ORACLE_DATABASE_URL,
+    // CockroachDB / Neon kept only as fallbacks until fully decommissioned.
     COCKROACH_DATABASE_URL: c.env.COCKROACH_DATABASE_URL,
-    // NEON_DATABASE_URL kept as a fallback for backward compatibility.
     NEON_DATABASE_URL: c.env.NEON_DATABASE_URL,
-    // D1 serves the Frontliner cluster (all_trainees_view: Frontliners/Cluster/New Youth).
+    // D1 serves the Frontliner cluster only when no cluster Postgres is set.
     DB: c.env.DB,
+    // Heifer SAYE MIS credentials for the direct all_trainees_view sync.
+    MIS_BASE_URL: c.env.MIS_BASE_URL,
+    MIS_USERNAME: c.env.MIS_USERNAME,
+    MIS_PASSWORD: c.env.MIS_PASSWORD,
   };
 }
 
@@ -813,4 +816,53 @@ app.get('/favicon.ico', (c) =>
 
 app.get('/health', (c) => c.json({ ok: true, schemas: SCHEMAS.map((s) => s.key) }));
 
-export default app;
+// ---------------------------------------------------------------------------
+// Heifer SAYE MIS sync — pull all_trainees_view straight from the MIS.
+// Replaces the failing 76MB manual upload. Runs in slices (Cloudflare CPU
+// limits) and is idempotent by dedup_key. A Cron trigger advances the cursor.
+// ---------------------------------------------------------------------------
+
+// Read-only progress: rows in at_rows, cursor, last run, cycles.
+app.get('/api/mis-sync/status', async (c) => {
+  try {
+    const st = await misSyncStatus(storeEnv(c));
+    return c.json(st);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Run ONE sync slice on demand. Optional query params:
+//   ?pageSize=2000&maxPages=3   — tune batch size
+//   ?startPage=50               — override cursor (parallel backfill helper)
+// Protected by the same optional token used for OData if configured.
+app.all('/api/mis-sync/run', async (c) => {
+  try {
+    const q = c.req.query();
+    const pageSize = q.pageSize ? parseInt(q.pageSize, 10) : undefined;
+    const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
+    const startPage = q.startPage ? parseInt(q.startPage, 10) : undefined;
+    const res = await misSyncSlice(storeEnv(c), { pageSize, maxPages, startPage });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Cloudflare Cron entry point: advance the sync cursor by one slice.
+async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  ctx.waitUntil(
+    (async () => {
+      try {
+        await misSyncSlice(env, { pageSize: 2000, maxPages: 3 });
+      } catch (e) {
+        console.error('MIS cron sync failed:', e);
+      }
+    })()
+  );
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled,
+};

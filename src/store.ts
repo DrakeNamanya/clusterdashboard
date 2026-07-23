@@ -9,7 +9,7 @@
 // bulk inserts go through in a single request — fixing the HTTP 503 problems.
 // ---------------------------------------------------------------------------
 
-import { SheetSchema } from './schemas';
+import { SheetSchema, SCHEMA_BY_KEY } from './schemas';
 import { Client } from 'pg';
 
 export interface Env {
@@ -35,6 +35,14 @@ export interface Env {
   ORACLE_DATABASE_URL?: string;
   COCKROACH_DATABASE_URL?: string;
   NEON_DATABASE_URL?: string;
+  // Heifer SAYE MIS (source of truth for all_trainees_view). The app logs in
+  // with these credentials to pull fresh trainee data directly from the MIS,
+  // replacing the manual 76MB spreadsheet upload (which 503'd on volume).
+  //   MIS_BASE_URL   e.g. https://azure.saye-ug.heifer.org/gateway/api/v1
+  //   MIS_USERNAME / MIS_PASSWORD  — stored as encrypted Cloudflare secrets.
+  MIS_BASE_URL?: string;
+  MIS_USERNAME?: string;
+  MIS_PASSWORD?: string;
   // Cloudflare D1 (SQLite) — serves the heavy Frontliner cluster
   // (all_trainees_view: Frontliners / Cluster Trainings / New Youth). Moved off
   // Supabase because ~728k rows exhausted the 0.5GB RAM nano tier. D1 gives 5GB
@@ -138,9 +146,15 @@ function newClusterClient(env: Env): Client {
   if (!url) {
     throw new Error('COCKROACH_DATABASE_URL (or NEON_DATABASE_URL) is not configured');
   }
+  // IMPORTANT: newer pg-connection-string treats `sslmode=require` (and
+  // `prefer`/`verify-ca`) as `verify-full`, which REJECTS the Oracle VM's
+  // self-signed cert and makes every cluster query fail with "self-signed
+  // certificate" / "Connection terminated". Strip any sslmode from the URL so
+  // our explicit `ssl: { rejectUnauthorized: false }` governs instead.
+  const cleanUrl = url.replace(/([?&])sslmode=[^&]*/gi, '$1').replace(/[?&]$/, '');
   return new Client({
-    connectionString: url,
-    // CockroachDB Cloud terminates TLS; the Workers socket layer verifies it.
+    connectionString: cleanUrl,
+    // VM/Cloud terminates TLS with a self-signed cert; skip chain verification.
     ssl: { rejectUnauthorized: false },
     // CockroachDB Serverless scales compute to zero when idle; the FIRST
     // connection after that can take 15-20s. Give it room so a cold start does
@@ -1828,4 +1842,289 @@ export async function backfillFilled(
 
   const pairs = fillCols.map((c) => `${c.name}<-${c.fillFrom}`);
   return { updated, pairs };
+}
+
+// ===========================================================================
+// Heifer SAYE MIS sync — pulls all_trainees_view straight from the MIS instead
+// of the manual 76MB spreadsheet upload (which 503'd on volume). The MIS holds
+// ~778k rows across 45 columns; we flatten to the existing 13-col at_rows shape
+// (Option B) so every dashboard and derived report keeps working unchanged.
+//
+// Cloudflare Workers cannot pull 778k rows in one request (CPU/time limits), so
+// sync runs in SLICES: each call fetches a bounded number of pages, upserts by
+// dedup_key (idempotent — safe to overlap because MIS paging is not stable),
+// and records the next page in mis_sync_state. A Cron trigger advances the
+// cursor repeatedly until the whole set is covered, then wraps to page 1 to
+// pick up new/changed submissions — keeping at_rows continuously fresh.
+// ===========================================================================
+
+/** MIS API base, e.g. https://azure.saye-ug.heifer.org/gateway/api/v1 */
+function misBase(env: Env): string {
+  const b = (env.MIS_BASE_URL || 'https://azure.saye-ug.heifer.org/gateway/api/v1').replace(/\/+$/, '');
+  return b;
+}
+
+/** Log in to the MIS and return a Bearer access token. */
+async function misLogin(env: Env): Promise<string> {
+  if (!env.MIS_USERNAME || !env.MIS_PASSWORD) {
+    throw new Error('MIS_USERNAME / MIS_PASSWORD are not configured');
+  }
+  const res = await fetch(misBase(env) + '/user/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: env.MIS_USERNAME, password: env.MIS_PASSWORD }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`MIS login failed: HTTP ${res.status} ${t.slice(0, 200)}`);
+  }
+  const j: any = await res.json();
+  const tok = j?.access_token;
+  if (!tok) throw new Error('MIS login returned no access_token');
+  return tok as string;
+}
+
+/** Fetch one page of all_trainees_view from the MIS (1-indexed pages). */
+async function misFetchPage(
+  env: Env,
+  token: string,
+  page: number,
+  limit: number
+): Promise<{ rows: Record<string, any>[]; total: number }> {
+  const url =
+    misBase(env) +
+    `/data/filter/all_trainees_view?page=${page}&limit=${limit}&search=true`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: '{}',
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`MIS fetch page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
+  }
+  const j: any = await res.json();
+  return { rows: Array.isArray(j?.rows) ? j.rows : [], total: Number(j?.totalNumberOfRecords) || 0 };
+}
+
+/**
+ * Coerce a raw MIS row (values may be arrays/objects/ISO datetimes) into the
+ * flat string record shape that dedupKeyFor + flattenTrainee expect. Only the
+ * fields at_rows needs are normalized; the rest are ignored (Option B).
+ */
+function misRowToRecord(raw: Record<string, any>): Record<string, string> {
+  const s = (v: any): string => {
+    if (v == null) return '';
+    if (Array.isArray(v)) return v.join(', ');
+    return String(v);
+  };
+  // activity_date arrives as e.g. "2026-07-23T00:00:00.000" — keep YYYY-MM-DD.
+  const rawDate = s(raw['activity_date']);
+  const activity = DATE_RE.test(rawDate) ? rawDate.slice(0, 10) : rawDate;
+  return {
+    _id: s(raw['_id']),
+    participant_name: s(raw['participant_name']),
+    participant_id: s(raw['participant_id']),
+    group_id: s(raw['group_id']),
+    training_type: s(raw['training_type']),
+    activity_date: activity,
+    data_collector: s(raw['data_collector']),
+    group_name: s(raw['group_name']),
+    sex: s(raw['sex']),
+    district: s(raw['district']),
+    subcounty: s(raw['subcounty']),
+    Parish: s(raw['Parish']),
+    Village: s(raw['Village']),
+    Disability_status: s(raw['Disability_status']),
+    Employment_status: s(raw['Employment_status']),
+    Employment_sector: s(raw['Employment_sector']),
+    Do_for_living: s(raw['Do_for_living']),
+  };
+}
+
+/** Ensure the mis_sync_state bookkeeping table exists (Postgres/Oracle VM). */
+async function ensureSyncState(client: Client): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS public.mis_sync_state (
+      id            INTEGER PRIMARY KEY DEFAULT 1,
+      next_page     INTEGER NOT NULL DEFAULT 1,
+      total_records INTEGER,
+      last_run      TIMESTAMPTZ,
+      last_upserted INTEGER,
+      cycles        INTEGER NOT NULL DEFAULT 0,
+      CONSTRAINT mis_sync_state_singleton CHECK (id = 1)
+    )
+  `);
+  await client.query(
+    `INSERT INTO public.mis_sync_state (id, next_page) VALUES (1, 1)
+     ON CONFLICT (id) DO NOTHING`
+  );
+}
+
+export interface MisSyncResult {
+  ok: boolean;
+  fetched: number;      // rows pulled from MIS this run
+  upserted: number;     // rows newly inserted into at_rows this run
+  fromPage: number;
+  toPage: number;
+  nextPage: number;
+  totalRecords: number;
+  atRowsCount: number;  // at_rows total after this run
+  cycles: number;       // how many full passes over the MIS completed
+  wrapped: boolean;     // true if this run reached the end and wrapped to page 1
+}
+
+/**
+ * Run ONE sync slice: log in, fetch up to `maxPages` pages of `pageSize` rows
+ * starting at the stored cursor, upsert into at_rows, and advance the cursor.
+ * Idempotent by dedup_key. Safe to call from Cron and manually.
+ *
+ * Defaults are tuned for the Workers CPU/time budget: 3 pages * 2000 rows =
+ * up to 6000 rows/run. Cron every few minutes converges the ~778k backfill and
+ * then keeps wrapping to stay fresh.
+ */
+export async function misSyncSlice(
+  env: Env,
+  opts: { pageSize?: number; maxPages?: number; startPage?: number } = {}
+): Promise<MisSyncResult> {
+  if (!clusterDbUrl(env)) {
+    throw new Error('No cluster DB configured (ORACLE_DATABASE_URL) for MIS sync');
+  }
+  const pageSize = Math.max(1, Math.min(opts.pageSize ?? 2000, 5000));
+  const maxPages = Math.max(1, Math.min(opts.maxPages ?? 3, 50));
+  const schema = SCHEMA_BY_KEY['all_trainees_view'];
+
+  const token = await misLogin(env);
+  const client = await connectClusterWithRetry(env);
+  let fetched = 0;
+  let upserted = 0;
+  let totalRecords = 0;
+  let wrapped = false;
+  let cycles = 0;
+  try {
+    await ensureSyncState(client);
+    // Read cursor (allow explicit override for manual/parallel backfill).
+    let page: number;
+    if (opts.startPage && opts.startPage > 0) {
+      page = opts.startPage;
+    } else {
+      const st = await client.query(`SELECT next_page, cycles FROM public.mis_sync_state WHERE id=1`);
+      page = Number(st.rows?.[0]?.next_page) || 1;
+      cycles = Number(st.rows?.[0]?.cycles) || 0;
+    }
+    if (page < 1) page = 1;
+    const fromPage = page;
+
+    for (let i = 0; i < maxPages; i++) {
+      const { rows: rawRows, total } = await misFetchPage(env, token, page, pageSize);
+      totalRecords = total;
+      if (!rawRows.length) {
+        // Past the end — wrap to page 1 for the next cycle.
+        wrapped = true;
+        cycles += 1;
+        page = 1;
+        break;
+      }
+
+      // Flatten + intra-batch de-dupe (dedup_key PK rejects dups across runs).
+      const seen = new Set<string>();
+      const flat = [] as ReturnType<typeof flattenTrainee>[];
+      for (const raw of rawRows) {
+        const rec = misRowToRecord(raw);
+        const dk = dedupKeyFor(schema, rec);
+        if (seen.has(dk)) continue;
+        seen.add(dk);
+        flat.push(flattenTrainee(rec, dk, 'mis:all_trainees_view'));
+      }
+      fetched += rawRows.length;
+
+      // Upsert into at_rows (same 13-col INSERT ... ON CONFLICT DO NOTHING).
+      const COLS = 13;
+      const CHUNK = 300;
+      for (let j = 0; j < flat.length; j += CHUNK) {
+        const chunk = flat.slice(j, j + CHUNK);
+        const ph: string[] = [];
+        const params: any[] = [];
+        chunk.forEach((r, k) => {
+          const b = k * COLS;
+          ph.push(
+            `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13})`
+          );
+          params.push(
+            r.dedup_key, r.data_collector, r.participant_id, r.group_id, r.group_name,
+            r.training_type, r.district, r.day, r.sex, r.is_pwd, r.is_farming, r.has_date,
+            r.source_file
+          );
+        });
+        const sql =
+          `INSERT INTO public.at_rows
+           (dedup_key,data_collector,participant_id,group_id,group_name,training_type,
+            district,day,sex,is_pwd,is_farming,has_date,source_file)
+           VALUES ${ph.join(',')}
+           ON CONFLICT (dedup_key) DO NOTHING`;
+        const res = await client.query(sql, params);
+        upserted += res.rowCount ?? 0;
+      }
+
+      // Advance. If we got a short page, we've reached the end -> wrap.
+      if (rawRows.length < pageSize) {
+        wrapped = true;
+        cycles += 1;
+        page = 1;
+        break;
+      }
+      page += 1;
+    }
+
+    const toPage = page; // next page to fetch
+    // Persist cursor only when using the shared (non-override) cursor.
+    if (!(opts.startPage && opts.startPage > 0)) {
+      await client.query(
+        `UPDATE public.mis_sync_state
+           SET next_page=$1, total_records=$2, last_run=now(), last_upserted=$3, cycles=$4
+         WHERE id=1`,
+        [page, totalRecords, upserted, cycles]
+      );
+    }
+    const cntRes = await client.query(`SELECT COUNT(*)::int AS c FROM public.at_rows`);
+    const atRowsCount = Number(cntRes.rows?.[0]?.c) || 0;
+
+    return {
+      ok: true,
+      fetched,
+      upserted,
+      fromPage,
+      toPage,
+      nextPage: page,
+      totalRecords,
+      atRowsCount,
+      cycles,
+      wrapped,
+    };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+/** Read current MIS sync progress without pulling any data. */
+export async function misSyncStatus(env: Env): Promise<any> {
+  if (!clusterDbUrl(env)) return { configured: false };
+  const client = await connectClusterWithRetry(env);
+  try {
+    await ensureSyncState(client);
+    const st = await client.query(
+      `SELECT next_page, total_records, last_run, last_upserted, cycles FROM public.mis_sync_state WHERE id=1`
+    );
+    const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM public.at_rows`);
+    return {
+      configured: !!(env.MIS_USERNAME && env.MIS_PASSWORD),
+      atRowsCount: Number(cnt.rows?.[0]?.c) || 0,
+      ...(st.rows?.[0] || {}),
+    };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
 }
