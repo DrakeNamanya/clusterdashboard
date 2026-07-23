@@ -50,6 +50,10 @@ function storeEnv(c: any): Env {
     NEON_DATABASE_URL: c.env.NEON_DATABASE_URL,
     // D1 serves the Frontliner cluster only when no cluster Postgres is set.
     DB: c.env.DB,
+    // Hyperdrive is the PRODUCTION path to the Oracle VM Postgres: it terminates
+    // TLS with the uploaded CA (verify-ca) and pools connections, sidestepping
+    // workerd's refusal to trust the VM's self-signed cert over a direct socket.
+    HYPERDRIVE: c.env.HYPERDRIVE,
     // Heifer SAYE MIS credentials for the direct all_trainees_view sync.
     MIS_BASE_URL: c.env.MIS_BASE_URL,
     MIS_USERNAME: c.env.MIS_USERNAME,
@@ -831,6 +835,10 @@ app.get('/api/mis-sync/status', async (c) => {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
   }
 });
+
+
+
+
 
 // Run ONE sync slice on demand. Optional query params:
 //   ?pageSize=2000&maxPages=3   — tune batch size

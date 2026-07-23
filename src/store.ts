@@ -11,6 +11,7 @@
 
 import { SheetSchema, SCHEMA_BY_KEY } from './schemas';
 import { Client } from 'pg';
+import { ORACLE_PG_CA, ORACLE_PG_HOST } from './dbcert';
 
 export interface Env {
   SUPABASE_URL: string;
@@ -48,11 +49,32 @@ export interface Env {
   // Supabase because ~728k rows exhausted the 0.5GB RAM nano tier. D1 gives 5GB
   // storage and no RAM ceiling, so it never crashes on this dataset.
   DB?: D1Database;
+  // Cloudflare Hyperdrive binding — pooled, TLS-terminating proxy to the Oracle
+  // VM PostgreSQL. In production this is how the Worker reaches the DB: workerd
+  // refuses to trust the VM's self-signed cert over a direct socket, but
+  // Hyperdrive was configured with the uploaded CA bundle (sslmode=verify-ca) so
+  // it trusts the cert on our behalf. `env.HYPERDRIVE.connectionString` yields a
+  // local (127.0.0.1) URL the pg driver connects to with plaintext.
+  HYPERDRIVE?: { connectionString: string };
 }
 
-/** Resolve the Cluster-2 Postgres connection string (Oracle VM preferred). */
+/**
+ * Resolve the Cluster-2 Postgres connection string.
+ *
+ * Production: prefer the Hyperdrive binding — it terminates TLS to the Oracle VM
+ * using the uploaded CA bundle (workerd can't trust the self-signed cert over a
+ * raw socket) and pools connections.
+ * Local dev / node: Hyperdrive is not bound, so fall back to the direct URL
+ * (Oracle VM preferred, then CockroachDB, then Neon).
+ */
 function clusterDbUrl(env: Env): string | undefined {
+  if (env.HYPERDRIVE?.connectionString) return env.HYPERDRIVE.connectionString;
   return env.ORACLE_DATABASE_URL || env.COCKROACH_DATABASE_URL || env.NEON_DATABASE_URL;
+}
+
+/** True when the resolved connection is via the local Hyperdrive proxy. */
+function usingHyperdrive(env: Env): boolean {
+  return !!env.HYPERDRIVE?.connectionString;
 }
 
 /** Templates whose records live in Cloudflare D1 (the Frontliner cluster). */
@@ -144,21 +166,40 @@ function usesNeon(env: Env, template: string): boolean {
 function newClusterClient(env: Env): Client {
   const url = clusterDbUrl(env);
   if (!url) {
-    throw new Error('COCKROACH_DATABASE_URL (or NEON_DATABASE_URL) is not configured');
+    throw new Error('No cluster DB configured (HYPERDRIVE / ORACLE_DATABASE_URL / COCKROACH_DATABASE_URL / NEON_DATABASE_URL)');
   }
-  // IMPORTANT: newer pg-connection-string treats `sslmode=require` (and
-  // `prefer`/`verify-ca`) as `verify-full`, which REJECTS the Oracle VM's
-  // self-signed cert and makes every cluster query fail with "self-signed
-  // certificate" / "Connection terminated". Strip any sslmode from the URL so
-  // our explicit `ssl: { rejectUnauthorized: false }` governs instead.
-  const cleanUrl = url.replace(/([?&])sslmode=[^&]*/gi, '$1').replace(/[?&]$/, '');
+
+  // PRODUCTION PATH — Hyperdrive.
+  // env.HYPERDRIVE.connectionString points at a LOCAL Hyperdrive endpoint. The
+  // TLS handshake to the origin (the Oracle VM's self-signed cert) is performed
+  // by Hyperdrive using the uploaded CA bundle (sslmode=verify-ca), NOT by the
+  // Worker. So the pg client here must connect WITHOUT its own TLS — plaintext
+  // to the local proxy. This sidesteps workerd's refusal to trust the VM cert
+  // over a direct socket ("could not accept SSL connection: unknown ca").
+  if (usingHyperdrive(env)) {
+    return new Client({
+      connectionString: url,
+      ssl: false,
+      connectionTimeoutMillis: 30000,
+      query_timeout: 55000,
+      statement_timeout: 55000,
+    });
+  }
+
+  // LOCAL DEV / NODE PATH — direct connection to the origin DB.
+  // `pg-connection-string` parses `sslmode=require` from the URL and OVERRIDES
+  // any explicit `ssl` object, discarding our `ca`/`servername` and falling back
+  // to an untrusted self-signed path. Verified: keeping sslmode FAILS even with
+  // the CA; stripping sslmode and passing `ssl:{ca,...}` succeeds. So for the
+  // Oracle host we strip sslmode and drive TLS entirely from `ssl` with the CA.
+  const isOracle = url.includes(ORACLE_PG_HOST);
+  const connStr = isOracle ? url.replace(/([?&])sslmode=[^&]*(&|$)/, '$1').replace(/[?&]$/, '') : url;
   return new Client({
-    connectionString: cleanUrl,
-    // VM/Cloud terminates TLS with a self-signed cert; skip chain verification.
-    ssl: { rejectUnauthorized: false },
-    // CockroachDB Serverless scales compute to zero when idle; the FIRST
-    // connection after that can take 15-20s. Give it room so a cold start does
-    // not surface as a spurious HTTP 503 on the first upload batch.
+    connectionString: connStr,
+    ssl: isOracle
+      ? { ca: ORACLE_PG_CA, rejectUnauthorized: true, servername: ORACLE_PG_HOST }
+      : { rejectUnauthorized: false },
+    // Serverless PG (CockroachDB) can cold-start 15-20s after idle; give room.
     connectionTimeoutMillis: 30000,
     query_timeout: 55000,
     statement_timeout: 55000,
