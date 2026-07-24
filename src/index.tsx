@@ -14,7 +14,7 @@ import {
   islaDash, islaOptions, refreshIsla,
   productionDash, productionOptions, refreshProduction,
   salesDash, salesOptions, refreshSales, Env,
-  misSyncSlice, misSyncStatus,
+  misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -857,14 +857,63 @@ app.all('/api/mis-sync/run', async (c) => {
   }
 });
 
-// Cloudflare Cron entry point: advance the sync cursor by one slice.
+// --- Multi-view MIS sync (Shg_group review, ISLA, Youth/SHG profiling,
+//     Production & Marketing) ------------------------------------------------
+// Per-view sync progress (cursors + counts) without pulling data.
+app.get('/api/mis-sync/view-status', async (c) => {
+  try {
+    return c.json(await misViewSyncStatus(storeEnv(c)));
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Sync ONE view slice. ?key=shg_groups_view&pageSize=2000&maxPages=3[&startPage=N]
+app.all('/api/mis-sync/view', async (c) => {
+  try {
+    const q = c.req.query();
+    const key = q.key;
+    if (!key) return c.json({ ok: false, error: 'missing ?key' }, 400);
+    const pageSize = q.pageSize ? parseInt(q.pageSize, 10) : undefined;
+    const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
+    const startPage = q.startPage ? parseInt(q.startPage, 10) : undefined;
+    const replace = q.replace === 'true' || q.replace === '1';
+    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Sync ALL mapped views one slice each. ?pageSize=2000&maxPages=3
+app.all('/api/mis-sync/all', async (c) => {
+  try {
+    const q = c.req.query();
+    const pageSize = q.pageSize ? parseInt(q.pageSize, 10) : undefined;
+    const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
+    const replace = q.replace === 'true' || q.replace === '1';
+    const res = await misSyncAllViews(storeEnv(c), { pageSize, maxPages, replace });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Cloudflare Cron entry point: advance every MIS cursor by one slice.
+// (On Cloudflare Pages this handler does not fire natively — an external cron
+// hits /api/mis-sync/run + /api/mis-sync/all. Kept for Workers/portability.)
 async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
   ctx.waitUntil(
     (async () => {
       try {
         await misSyncSlice(env, { pageSize: 2000, maxPages: 3 });
       } catch (e) {
-        console.error('MIS cron sync failed:', e);
+        console.error('MIS all_trainees cron sync failed:', e);
+      }
+      try {
+        await misSyncAllViews(env, { pageSize: 2000, maxPages: 2 });
+      } catch (e) {
+        console.error('MIS multi-view cron sync failed:', e);
       }
     })()
   );

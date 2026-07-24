@@ -1051,6 +1051,38 @@ export async function queryRecords(
 /** Row count + last ingest per template for the dashboard. */
 export async function tableStats(env: Env, schemas: SheetSchema[]) {
   const out: { key: string; label: string; count: number; lastIngest: string | null }[] = [];
+
+  // Pre-compute all records-table (Neon/Oracle) counts in ONE query + connection.
+  // The previous per-schema loop opened a fresh pg connection and ran a separate
+  // COUNT(*) for each template; with 9+ templates (several >100k rows) that blew
+  // the Worker CPU/subrequest budget and returned Cloudflare error 1102. A single
+  // GROUP BY over public.records is far cheaper and uses one round-trip.
+  const neonAgg = new Map<string, { count: number; lastIngest: string | null }>();
+  const neonKeys = schemas.filter((s) => !D1_TEMPLATES.has(s.key) && usesNeon(env, s.key)).map((s) => s.key);
+  if (neonKeys.length) {
+    const sql = clusterSql(env);
+    try {
+      const rows = await sql.query(
+        // CockroachDB/Oracle records table uses created_at (no ingested_at column).
+        `select template, count(*)::int as c, max(created_at) as last
+           from public.records
+          where template = ANY($1::text[])
+          group by template`,
+        [neonKeys]
+      );
+      for (const r of rows || []) {
+        neonAgg.set(String((r as any).template), {
+          count: Number((r as any).c) || 0,
+          lastIngest: (r as any).last ? String((r as any).last) : null,
+        });
+      }
+    } catch {
+      /* ignore — dashboard still renders with zero counts */
+    } finally {
+      await sql.close();
+    }
+  }
+
   for (const s of schemas) {
     let count = 0;
     let lastIngest: string | null = null;
@@ -1075,23 +1107,12 @@ export async function tableStats(env: Env, schemas: SheetSchema[]) {
       continue;
     }
 
-    // Cluster-2 templates live on CockroachDB.
+    // Cluster-2 templates live in public.records (counted in the batch above).
     if (usesNeon(env, s.key)) {
-      const sql = clusterSql(env);
-      try {
-        const rows = await sql.query(
-          // CockroachDB records table uses created_at (no ingested_at column).
-          `select count(*)::int as c, max(created_at) as last from public.records where template = $1`,
-          [s.key]
-        );
-        if (rows && rows.length) {
-          count = Number(rows[0].c) || 0;
-          lastIngest = rows[0].last ? String(rows[0].last) : null;
-        }
-      } catch {
-        /* ignore per-table errors */
-      } finally {
-        await sql.close();
+      const agg = neonAgg.get(s.key);
+      if (agg) {
+        count = agg.count;
+        lastIngest = agg.lastIngest;
       }
       out.push({ key: s.key, label: s.label, count, lastIngest });
       continue;
@@ -2164,6 +2185,277 @@ export async function misSyncStatus(env: Env): Promise<any> {
       configured: !!(env.MIS_USERNAME && env.MIS_PASSWORD),
       atRowsCount: Number(cnt.rows?.[0]?.c) || 0,
       ...(st.rows?.[0] || {}),
+    };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+// ===========================================================================
+// GENERIC MULTI-VIEW MIS SYNC
+// ---------------------------------------------------------------------------
+// The manual spreadsheet uploads for the OTHER master tables (Shg_group review,
+// ISLA, Youth profiling, SHG profiling, Production & Marketing) go stale between
+// uploads. This module pulls each of those views DIRECTLY from the Heifer SAYE
+// MIS on a schedule, exactly like all_trainees_view, so every master table stays
+// current with zero manual work.
+//
+// Storage: each view maps to an app SheetSchema (SCHEMA_BY_KEY) and is written
+// via the existing appendRecords() path, so it lands in the SAME table the
+// dashboards/OData already read (the `records` table on the Oracle VM for the
+// NEON_TEMPLATES).
+//
+// Dedup: MIS rows carry a stable `_id`. We force the record's dedup identity to
+// that `_id` so repeated syncs are idempotent (INSERT ... ON CONFLICT DO NOTHING
+// on (template, dedup_key)). Field names in the MIS views match the app schema
+// column names 1:1 for the fields we need; any field the schema doesn't define
+// is ignored, and any schema column absent from MIS is left blank.
+// ===========================================================================
+
+/** app schema key -> MIS view name (names differ for a few views). */
+const MIS_VIEW_MAP: Record<string, string> = {
+  shg_groups_view: 'shg_groups_view',
+  isla_form: 'isla_form',
+  youth_profiling: 'youth_profiling_form',
+  shg_profiling_form: 'shg_profiling_form',
+  production_and_marketing_tool: 'production_and_marketing_tool',
+};
+
+/** Fetch one page of an ARBITRARY MIS view (1-indexed pages). */
+async function misFetchViewPage(
+  env: Env,
+  token: string,
+  view: string,
+  page: number,
+  limit: number
+): Promise<{ rows: Record<string, any>[]; total: number }> {
+  const url = misBase(env) + `/data/filter/${view}?page=${page}&limit=${limit}&search=true`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: '{}',
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`MIS fetch ${view} page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
+  }
+  const j: any = await res.json();
+  return { rows: Array.isArray(j?.rows) ? j.rows : [], total: Number(j?.totalNumberOfRecords) || 0 };
+}
+
+/**
+ * Map a raw MIS row onto the app schema's columns (by matching name). Values are
+ * coerced to strings (arrays joined, ISO datetimes trimmed to YYYY-MM-DD for
+ * date-typed columns). The MIS `_id` is always stored so the dedup key is stable.
+ */
+function misMapRowToSchema(schema: SheetSchema, raw: Record<string, any>): Record<string, string> {
+  const s = (v: any): string => {
+    if (v == null) return '';
+    if (Array.isArray(v)) return v.map((x) => (x == null ? '' : String(x))).join(', ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+  const rec: Record<string, string> = {};
+  for (const col of schema.columns) {
+    if (col.type === 'seq') continue; // seq is app-assigned, not from MIS
+    let val = s(raw[col.name]);
+    if (col.type === 'date' && DATE_RE.test(val)) val = val.slice(0, 10);
+    rec[col.name] = val;
+  }
+  // Always carry the MIS stable id so the sync dedup is deterministic.
+  rec._id = s(raw['_id']);
+  return rec;
+}
+
+export interface MisViewSyncResult {
+  ok: boolean;
+  view: string;
+  schemaKey: string;
+  fetched: number;
+  inserted: number;
+  fromPage: number;
+  nextPage: number;
+  totalRecords: number;
+  cycles: number;
+  wrapped: boolean;
+  cleared?: boolean;
+}
+
+/** Per-view cursor table (separate from the all_trainees at_rows cursor). */
+async function ensureViewSyncState(client: Client): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS public.mis_view_sync_state (
+      schema_key    TEXT PRIMARY KEY,
+      next_page     INTEGER NOT NULL DEFAULT 1,
+      total_records INTEGER,
+      last_run      TIMESTAMPTZ,
+      last_inserted INTEGER,
+      cycles        INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+}
+
+/**
+ * Sync ONE MIS view slice into its app table via appendRecords(). Idempotent by
+ * MIS `_id`. Advances a per-view cursor; wraps to page 1 at the end so it keeps
+ * picking up new/changed submissions. Small views (a few thousand rows) finish
+ * in one or two runs; larger ones (youth_profiling ~114k) converge over several.
+ */
+export async function misSyncView(
+  env: Env,
+  schemaKey: string,
+  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean } = {}
+): Promise<MisViewSyncResult> {
+  const view = MIS_VIEW_MAP[schemaKey];
+  if (!view) throw new Error(`No MIS view mapped for schema '${schemaKey}'`);
+  const schema = SCHEMA_BY_KEY[schemaKey];
+  if (!schema) throw new Error(`Unknown schema '${schemaKey}'`);
+  if (!clusterDbUrl(env)) throw new Error('No cluster DB configured for MIS view sync');
+
+  const pageSize = Math.max(1, Math.min(opts.pageSize ?? 2000, 5000));
+  const maxPages = Math.max(1, Math.min(opts.maxPages ?? 3, 50));
+
+  const token = await misLogin(env);
+  const client = await connectClusterWithRetry(env);
+  let fetched = 0;
+  let inserted = 0;
+  let totalRecords = 0;
+  let wrapped = false;
+  let cycles = 0;
+  let cleared = false;
+  try {
+    await ensureViewSyncState(client);
+    await client.query(
+      `INSERT INTO public.mis_view_sync_state (schema_key, next_page) VALUES ($1, 1)
+       ON CONFLICT (schema_key) DO NOTHING`,
+      [schemaKey]
+    );
+
+    let page: number;
+    if (opts.startPage && opts.startPage > 0) {
+      page = opts.startPage;
+    } else {
+      const st = await client.query(
+        `SELECT next_page, cycles FROM public.mis_view_sync_state WHERE schema_key=$1`,
+        [schemaKey]
+      );
+      page = Number(st.rows?.[0]?.next_page) || 1;
+      cycles = Number(st.rows?.[0]?.cycles) || 0;
+    }
+    if (page < 1) page = 1;
+    const fromPage = page;
+
+    // REPLACE mode: when starting a fresh full pass from page 1, delete the
+    // template's existing rows first so MIS becomes the single source of truth.
+    // This prevents duplicates from the earlier manual uploads (which deduped on
+    // a different key than the MIS `_id` we now use). Only clears at the START of
+    // a cycle (page===1) so mid-cycle slices don't wipe the partial backfill.
+    if (opts.replace && page === 1) {
+      await client.query(`DELETE FROM public.records WHERE template = $1`, [schemaKey]);
+      cleared = true;
+    }
+
+    for (let i = 0; i < maxPages; i++) {
+      const { rows: rawRows, total } = await misFetchViewPage(env, token, view, page, pageSize);
+      totalRecords = total;
+      if (!rawRows.length) {
+        wrapped = true;
+        cycles += 1;
+        page = 1;
+        break;
+      }
+      // Map + intra-batch dedup by MIS _id.
+      const seen = new Set<string>();
+      const recs: Record<string, string>[] = [];
+      for (const raw of rawRows) {
+        const rec = misMapRowToSchema(schema, raw);
+        const id = rec._id || '';
+        if (id && seen.has(id)) continue;
+        if (id) seen.add(id);
+        recs.push(rec);
+      }
+      fetched += rawRows.length;
+
+      // Write through the normal storage path (lands where dashboards read).
+      // Force dedup on MIS _id regardless of the schema's upload-time dedupKey,
+      // so MIS-sourced rows are stable and idempotent.
+      const res = await appendRecords(
+        env,
+        { ...schema, dedupKey: '_id', dedupCols: undefined },
+        recs,
+        `mis:${view}`
+      );
+      inserted += res.inserted;
+
+      if (rawRows.length < pageSize) {
+        wrapped = true;
+        cycles += 1;
+        page = 1;
+        break;
+      }
+      page += 1;
+    }
+
+    if (!(opts.startPage && opts.startPage > 0)) {
+      await client.query(
+        `UPDATE public.mis_view_sync_state
+           SET next_page=$2, total_records=$3, last_run=now(), last_inserted=$4, cycles=$5
+         WHERE schema_key=$1`,
+        [schemaKey, page, totalRecords, inserted, cycles]
+      );
+    }
+
+    return {
+      ok: true,
+      view,
+      schemaKey,
+      fetched,
+      inserted,
+      fromPage,
+      nextPage: page,
+      totalRecords,
+      cycles,
+      wrapped,
+      cleared,
+    };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+/** Sync ALL mapped MIS views one slice each (used by cron + manual "refresh all"). */
+export async function misSyncAllViews(
+  env: Env,
+  opts: { pageSize?: number; maxPages?: number; replace?: boolean } = {}
+): Promise<{ ok: boolean; results: MisViewSyncResult[] }> {
+  const results: MisViewSyncResult[] = [];
+  for (const key of Object.keys(MIS_VIEW_MAP)) {
+    try {
+      results.push(await misSyncView(env, key, opts));
+    } catch (e: any) {
+      results.push({
+        ok: false, view: MIS_VIEW_MAP[key], schemaKey: key, fetched: 0, inserted: 0,
+        fromPage: 0, nextPage: 0, totalRecords: 0, cycles: 0, wrapped: false,
+      } as MisViewSyncResult);
+    }
+  }
+  return { ok: results.every((r) => r.ok), results };
+}
+
+/** Per-view sync progress (cursor + counts) without pulling data. */
+export async function misViewSyncStatus(env: Env): Promise<any> {
+  if (!clusterDbUrl(env)) return { configured: false };
+  const client = await connectClusterWithRetry(env);
+  try {
+    await ensureViewSyncState(client);
+    const st = await client.query(
+      `SELECT schema_key, next_page, total_records, last_run, last_inserted, cycles
+         FROM public.mis_view_sync_state ORDER BY schema_key`
+    );
+    return {
+      configured: !!(env.MIS_USERNAME && env.MIS_PASSWORD),
+      views: st.rows || [],
+      mapped: Object.keys(MIS_VIEW_MAP),
     };
   } finally {
     try { await client.end(); } catch { /* ignore */ }
