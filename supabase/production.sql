@@ -128,7 +128,7 @@ begin
   left join part pa on pa.ref_id = nullif(trim(f.data->>'shg_participant_id'),'')
   left join prof pr on pr.ref_id = pa.shg_id
   where f.template='production_and_marketing_tool'
-    and nullif(trim(f.data->>'pdn_level'),'') = 'production';
+    and lower(nullif(trim(f.data->>'pdn_level'),'')) = 'production';
 
   get diagnostics rows_out = row_count;
   return rows_out;

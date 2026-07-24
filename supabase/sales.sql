@@ -100,7 +100,7 @@ begin
       nnum(f.data->>'net_planting')                   as net_planting
     from public.records f
     where f.template='production_and_marketing_tool'
-      and nullif(trim(f.data->>'pdn_level'),'') = 'marketing'
+      and lower(nullif(trim(f.data->>'pdn_level'),'')) = 'marketing'
   ),
   firstmkt as (
     -- First Marketing Date per participant (as month start)
