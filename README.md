@@ -11,13 +11,59 @@
   storage split** (Neon Postgres + Cloudflare D1 + Supabase), SheetJS for
   in-browser parsing, Tailwind CSS UI.
 
-## Storage Architecture (CockroachDB — single backend)
-**All data now lives on CockroachDB Serverless** (`riled-colugo-29765` /
-`defaultdb`). Neon (512 MB, filled up) and Cloudflare D1 (used for the Frontliner
-cluster, then lost API authorization) have both been **retired**. A per-template
-router in `src/store.ts` (`usesNeon()` = Cluster-2, `frontlinerOnCrdb()` =
-Frontliner) still exists but every branch resolves to CockroachDB when
-`COCKROACH_DATABASE_URL` is set (which it always is in production).
+## Storage Architecture (Oracle-hosted Postgres — single backend, via Cloudflare Hyperdrive)
+**All data now lives on a self-hosted PostgreSQL 16 server** on the Oracle VM
+`51.170.135.225` / `defaultdb`. CockroachDB Serverless (previous backend), Neon
+(512 MB, filled up) and Cloudflare D1 (Frontliner cluster) have all been
+**retired / are being decommissioned**. The per-template router in
+`src/store.ts` (`usesNeon()` = Cluster-2, `frontlinerOnCrdb()` = Frontliner)
+now resolves to the Oracle Postgres server when `ORACLE_DATABASE_URL` (or the
+Hyperdrive binding) is set — which it always is in production.
+
+### Cloudflare Hyperdrive (production DB connectivity)
+The Oracle Postgres server presents a **self-signed TLS certificate**
+(`CN/SAN = 51.170.135.225`). Cloudflare's `workerd` runtime verifies the origin
+cert against **public root CAs only** and rejects self-signed certs even when
+the exact cert is passed as pg's `ssl.ca` (`tlsv1 alert unknown ca`). The fix is
+**Cloudflare Hyperdrive** (`shg-oracle-pg`, id `158ed844…`), which terminates
+TLS to the origin itself using an uploaded CA bundle (`oracle-postgres-ca`,
+`sslmode=verify-ca`) and pools connections. The Worker connects to the local
+Hyperdrive endpoint in **plaintext** (`ssl:false`); it never sees the
+self-signed cert. `wrangler.jsonc` binds it as `HYPERDRIVE`, and `storeEnv()`
+passes the binding through so `newClusterClient()` prefers it in production.
+Local `node`/dev still connects directly using the pinned CA in `src/dbcert.ts`.
+
+### MIS-direct sync (live data from Heifer SAYE MIS)
+The master sheets are kept fresh by pulling **directly from the Heifer MIS
+gateway** (`https://azure.saye-ug.heifer.org/gateway/api/v1`) instead of manual
+uploads. Two sync paths:
+- **`all_trainees_view`** → flattened into `public.at_rows` (13-col shape).
+  Endpoint: `GET /api/mis-sync/run` (cursor in `mis_sync_state`).
+- **5 mapped master views** → upserted into `public.records`, deduped on the
+  MIS `_id` (stable `uuid:…`). Endpoints: `GET /api/mis-sync/view?key=<schema>`,
+  `GET /api/mis-sync/all`, status `GET /api/mis-sync/view-status`
+  (cursors in `mis_view_sync_state`). Mapped views:
+
+  | app schema key | MIS view | rows |
+  |---|---|---|
+  | `shg_groups_view` | `shg_groups_view` | ~4,872 |
+  | `isla_form` | `isla_form` | ~9,117 |
+  | `youth_profiling` | `youth_profiling_form` | ~114,675 |
+  | `shg_profiling_form` | `shg_profiling_form` | ~4,872 |
+  | `production_and_marketing_tool` | `production_and_marketing_tool` | ~26,917 |
+
+  Paging is 1-indexed and unstable across pages, so the sync is **idempotent by
+  `_id` dedup** — re-fetching the same page never duplicates. `?replace=true`
+  (with `startPage=1`) clears the template at the start of a fresh cycle so MIS
+  becomes the single source of truth (used to repair duplicates left by the
+  earlier manual uploads, which deduped on a different key).
+
+### 5-minute freshness (VM cron)
+Cloudflare Pages has **no native cron**, so an external cron on the Oracle VM
+(`/home/ubuntu/mis-cron.sh`, `*/5 * * * *`, `flock`-guarded) hits the production
+`/api/mis-sync/run` + `/api/mis-sync/all` every 5 minutes, advancing every
+cursor by one slice. Log: `/home/ubuntu/mis-cron.log`. New/changed MIS
+submissions are picked up automatically; large views converge over several runs.
 
 ### 1. Cluster-2 dashboards (join-heavy)
 **Production, Sales, ISLA, SHG Profiling, Distribution to Participants,
@@ -165,7 +211,12 @@ All six master tables appear as selectable entity sets and refresh automatically
 - `POST /api/upload` (multipart `file`, optional `schemaKey`) — single-request clean+append (≤ 3000 rows)
 - `POST /api/append` (JSON `{schemaKey, headers, rows[], sourceFile, startSeq}`) — chunked clean+append (used for large files)
 - `GET  /api/maxseq/:key` — current max `No` sequence (to continue numbering)
-- `GET  /api/stats` — record counts + feed links per table
+- `GET  /api/stats` — record counts + feed links per table (counts all `public.records` templates in ONE `GROUP BY` query to stay within the Worker CPU budget)
+- `GET  /api/mis-sync/run?pageSize=&maxPages=` — advance `all_trainees_view` sync one slice (MIS → `at_rows`)
+- `GET  /api/mis-sync/status` — `all_trainees_view` sync cursor/progress
+- `GET  /api/mis-sync/view?key=<schema>&pageSize=&maxPages=&startPage=&replace=` — advance ONE mapped master view (MIS → `public.records`); `replace=true`+`startPage=1` rebuilds from scratch
+- `GET  /api/mis-sync/all?pageSize=&maxPages=&replace=` — advance ALL 5 mapped views one slice each
+- `GET  /api/mis-sync/view-status` — per-view sync cursors/progress
 - `GET  /api/data/:key?top=&skip=` — browse cleaned master rows (JSON)
 - `GET  /api/export/:key.csv` — download a master table as CSV
 - `POST /api/reset/:key` — clear a master table
@@ -256,10 +307,23 @@ with backoff, and the client retries HTTP 503/5xx per chunk — so large uploads
 complete instead of failing mid-way.
 
 ## Deployment
-- **Platform**: Cloudflare Pages
+- **Platform**: Cloudflare Pages (project `shg-data-cleaner`, branch `main`, BYOK to drnamanya@gmail.com)
 - **Production URL**: https://shg-data-cleaner.pages.dev
 - **OData service (Power BI)**: https://shg-data-cleaner.pages.dev/odata/
 - **OData metadata**: https://shg-data-cleaner.pages.dev/odata/$metadata
-- **Database**: Cloudflare D1 `webapp-production` (id `f1220816-22fb-4f14-86f4-42413d60186c`)
+- **Primary DB**: Oracle VM Postgres 16 `51.170.135.225` / `defaultdb`, reached via **Cloudflare Hyperdrive** `shg-oracle-pg` (id `158ed844…`, CA `oracle-postgres-ca`, `verify-ca`)
+- **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
+- **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-03
+- **Last Updated**: 2026-07-24
+  - Migrated production DB from CockroachDB to Oracle-hosted Postgres via Hyperdrive (workerd rejects self-signed cert → Hyperdrive terminates TLS).
+  - Built MIS-direct multi-view sync (5 master views + all_trainees) with idempotent `_id` dedup and `replace` mode.
+  - Fixed duplicate rows (isla_form 17,736→9,117; production_and_marketing_tool 34,648→26,917) and refreshed youth_profiling (35,500→114,675) via replace-mode sync.
+  - Batched `/api/stats` counts into one `GROUP BY` query (fixed Cloudflare error 1102).
+  - Installed 5-min VM cron for continuous freshness.
+
+### Pending / next steps
+- Complete `all_trainees_view` backfill (781,818 MIS rows; VM cron advancing it, currently ~181k in `at_rows`).
+- Obtain the Power BI **DAX** from the user to verify dashboard calculations match Power BI exactly (not yet re-shared — do not assume parity).
+- Upload `reach_targets`.
+- After full validation that all data is on Oracle, **delete the CockroachDB (cockroachlabs.cloud) database** (the overriding migration goal).
