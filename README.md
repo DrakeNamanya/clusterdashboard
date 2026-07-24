@@ -58,12 +58,28 @@ uploads. Two sync paths:
   becomes the single source of truth (used to repair duplicates left by the
   earlier manual uploads, which deduped on a different key).
 
-### 5-minute freshness (VM cron)
+### 5-minute freshness (VM cron) + dashboard rebuild
 Cloudflare Pages has **no native cron**, so an external cron on the Oracle VM
-(`/home/ubuntu/mis-cron.sh`, `*/5 * * * *`, `flock`-guarded) hits the production
-`/api/mis-sync/run` + `/api/mis-sync/all` every 5 minutes, advancing every
-cursor by one slice. Log: `/home/ubuntu/mis-cron.log`. New/changed MIS
-submissions are picked up automatically; large views converge over several runs.
+(`/home/ubuntu/mis-cron.sh`, `*/5 * * * *`, `flock`-guarded) does two things
+every 5 minutes:
+1. **Sync** — hits `/api/mis-sync/run` + `/api/mis-sync/all`, advancing every
+   cursor by one slice (idempotent; large views converge over several runs).
+2. **Rebuild dashboards** — the dashboards read the materialized `*_rows` fact
+   tables, **not `public.records` directly**, so a sync alone would leave them
+   stale. The cron POSTs `/api/refresh-all?only=<cluster>` for the light
+   clusters (`shgprofiling, isla, production, sales, shgdistribution,
+   distribution`) every run, and for the heavy ones (`cluster, newyouth,
+   frontliners`, 700k+ rows) once per hour (on the `:00`/`:05` tick) to spare
+   the DB. Log: `/home/ubuntu/mis-cron.log`.
+
+**Gotcha fixed (case sensitivity):** MIS returns `pdn_level` as
+`'Production'`/`'Marketing'` (capitalized) whereas the old manual uploads used
+lowercase. `refresh_production_rows` / `refresh_sales_rows` filtered on the
+lowercase literal, so after the MIS sync the Production dashboard rebuilt to 1
+row and Sales to 0. Both functions (live on the VM and in
+`supabase/production.sql` / `supabase/sales.sql`) now use
+`lower(pdn_level) = 'production' | 'marketing'` and rebuild to ~13,153 / ~13,764
+rows respectively.
 
 ### 1. Cluster-2 dashboards (join-heavy)
 **Production, Sales, ISLA, SHG Profiling, Distribution to Participants,
