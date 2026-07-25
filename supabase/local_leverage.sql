@@ -30,43 +30,49 @@ returns text
 language sql
 immutable
 as $$
+  -- NOTE: PostgreSQL POSIX regex uses \y (word boundary), \m (start-of-word)
+  -- and \M (end-of-word). It does NOT understand \b — so never use \b here.
   with t as (select lower(coalesce(p_kind,'')) as k)
   select case
-    -- blanks / explicit N/A --------------------------------------------------
-    when (select btrim(k) from t) in ('', 'na', 'n/a', 'none', 'nil', 'nothing', 'inkind', 'in kind', 'in-kind')
+    -- blanks / explicit N/A / pure numbers / bare person-names go to Others.
+    when (select btrim(k) from t) in ('', 'na', 'n/a', 'none', 'nil', 'nothing',
+         'inkind', 'in kind', 'in-kind', 'kind', 'contribution in kind',
+         'youth contribution in kind', 'you contribution', 'youth', 'contribution',
+         'item', 'materials', 'plastic', 'bbbb', 'eb', 'cha', 'visla')
+      then 'Others'
+    when (select k from t) ~ '^\s*[0-9]+\s*$'   -- pure numeric amounts, no kind
       then 'Others'
 
-    -- Commitment / registration / savings fees -------------------------------
-    when (select k from t) ~ '(commit+ement|commitment|registration|membership|subscription|savings?|saving\s|contribution fee|joining|welfare fund|share fund)'
+    -- Commitment / registration / savings / payments / fees ------------------
+    -- (per client: "payment, seed contribution ... commitment fee" — treat all
+    --  monetary / co-funding / contribution-payment phrases as Commitment Fee.)
+    when (select k from t) ~ '(commit+e?ment|registration|membership|subscription|\ysavings?\y|contribution fee|joining|welfare fund|share fund|\yfees?\y|upfront|advance[d]? *pay|advanced? payment|\ypayment|rebooking|\ycash\y|\ymoney\y|\ymomey\y|\yfunds?\y|shillings|\yugx\y|isla loan|\yloan|co.?fund|counterpart|top.?up|\ycontributed|deposit|\yrent\y|renting|\yhire\y)'
       then 'Commitment Fee'
 
-    -- Chemicals & Fertilizers ------------------------------------------------
-    when (select k from t) ~ '(fertili[sz]er|pesticide|herbicide|insecticide|fungicide|agro.?chemical|chemical|spray|acaricide|dewormer|vaccine|vaccination|drug|medicine|treatment)'
+    -- Chemicals & Fertilizers (incl. common Ugandan agro-input brand names) --
+    when (select k from t) ~ '(fertili[sz]er|pesticide|herbicide|insecticide|fungicide|agro.?chemical|\ychemical|spray|acaricide|dewormer|vaccine|vaccination|\ydrug|medicine|\ydap\y|\yurea\y|npk|super *gro|next *gro|rapid *gro|green *gro|green *organic|vigamax|striker|caterpillar *force|fungo *force|fungal *cure|dudu *accel|nsanja|\ycopper\y|agro *input|agro-input|indofil|indoli|back *off|hariza|hwriza|multi *nkp|farm *input|farm *chemical|\ymancozeb|rocket)'
       then 'Chemicals and Fertilizers'
 
-    -- Animal / Poultry structures & equipment --------------------------------
-    when (select k from t) ~ '(poultry|chick|bird|hen|layer|broiler|cockerel|drinker|feeder|waterer|brooder|pen\b|poultry house|chicken house|coop|feeds?\b|husk|maize bran|goat|pig|piggery|swine|cattle|cow shed|kraal|shelter|structure|housing|hutch|manure)'
+    -- Animal / Poultry structures & equipment (incl. building materials) -----
+    when (select k from t) ~ '(poultry|chick|\ybird|\yhen\y|layer|broiler|cockerel|drinker|feeder|waterer|brooder|\ypen\y|poultry house|chicken house|\ycoop\y|\yfeeds?\y|\yhusk|maize bran|\ygoat|\ypig|piggery|swine|cattle|cow shed|kraal|\yshelter|structure|housing|\yhutch|manure|brooding|iron sheet|\ypole|thatch|\ybrick|building material|construction material|generator|roasting *stove|\ystove|\ypump\y)'
       then 'Animal Structures and Equipment'
 
-    -- Land hire & cultivation ------------------------------------------------
-    when (select k from t) ~ '(land|plough|plow|garden|weed|cultivat|digging|ploughing|hoe|tractor|planting|slashing|clearing|acre|opening|seedling|\bseeds?\b|g\.?nut|soya?bean|mulch)'
+    -- Land hire & cultivation (incl. seeds / agro planting inputs) -----------
+    when (select k from t) ~ '(\yland\y|plough|\yplow|garden|\yweed|cultivat|digging|ploughing|\yhoes?\y|tractor|planting|slashing|clearing|\yacre|opening|seedling|\yseeds?\y|\yseed\y|seed contribution|g\.?nut|soya?bean|\ymulch|watermelon|passion fruit|tomato|onion|ridges|horticulture|\ypegs?\y|farm *inputs?|\yrake|panga|slasher|\ypanga|wheelbarrow|watering *can|spade|\yforked?\y|maize *seed|bean *seed)'
       then 'Land Hire and Cultivation'
 
     -- Refreshments -----------------------------------------------------------
-    when (select k from t) ~ '(refreshment|soda|water\b|drinking water|tea\b|coffee|food|lunch|snack|sugar|bread|juice|meals?|eats\b|charcoal|firewood|cooking|catering)'
+    when (select k from t) ~ '(refreshment|\ysoda\y|\ywater\y|drinking water|\ytea\y|coffee|\yfood\y|\ylunch|snack|\ysugar|\ybread|juice|\ymeals?\y|drinkets?|\ycharcoal|firewood|cooking|catering|\ypots?\y|breakfast|\ymilk\y)'
       then 'Refreshments'
 
     -- Labour & transport -----------------------------------------------------
-    when (select k from t) ~ '(labour|labor|casual|porter|worker|transport|fuel|motor|boda|fare|cleaning|carrying|loading|offloading)'
+    when (select k from t) ~ '(labour|\ylabor|casual|porter|\yworker|transport|\yfuel|\ymotor|\yboda|\yfare\y|cleaning|carrying|loading|offloading)'
       then 'Labour and Transport'
 
-    -- Venue & seats (broad catch for the dominant seating cluster) -----------
-    when (select k from t) ~ '(venue|vennue|vanue|hall|space|place|room|compound|ground|seat|sit\b|sits|chair|bench|mat\b|mats|table|desk|stool|furniture|shade|tent|canopy|shelter for meeting|sitting|meeting place)'
+    -- Venue & seats (broad catch for the dominant seating cluster; incl.
+    --  named meeting places: churches, community halls, subcounty offices) ---
+    when (select k from t) ~ '(venue|vennue|vanue|\yhall\y|\yspace\y|\yplace\y|\yroom\y|compound|ground|\yseat|\ysit\y|\ysits\y|chair|bench|\ymat\y|\ymats\y|\ytable|\ydesk|stool|furniture|\yshade\y|\ytent\y|canopy|sitting|meeting place|electricit|\ychurch\y|mosque|\ycommunity\y|sub.?county|\ycentre\y|\ycenter\y|\yoffice\y|premises)'
       then 'Venue and Seats'
-
-    -- Cash / money (uncategorised monetary) ----------------------------------
-    when (select k from t) ~ '(cash|money|funds?|shillings|ugx|amount)'
-      then 'Commitment Fee'
 
     else 'Others'
   end;
@@ -164,6 +170,11 @@ as $$
                     from (select coalesce(category,'Others') as category,
                                  count(*) as cnt, coalesce(sum(contribution_amount),0) as amt
                           from f group by 1) c),
+    'by_district', (select coalesce(jsonb_agg(jsonb_build_object(
+                        'district', district, 'contributions', cnt, 'amount', amt) order by amt desc), '[]'::jsonb)
+                    from (select coalesce(district,'(Blank)') as district,
+                                 count(*) as cnt, coalesce(sum(contribution_amount),0) as amt
+                          from f group by 1) d),
     'rows', (select coalesce(jsonb_agg(to_jsonb(t) order by t.date_created desc nulls last), '[]'::jsonb)
              from (select * from f order by date_created desc nulls last limit p_limit) t),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)

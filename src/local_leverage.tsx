@@ -7,9 +7,12 @@ import { navSidebar } from './nav';
 //     Animal Structures and Equipment · Land Hire and Cultivation ·
 //     Commitment Fee · Venue and Seats · Chemicals and Fertilizers ·
 //     Refreshments · Labour and Transport · Others
-//   Napkin-style arch layout mirroring the client reference graphic:
-//   a central TOTAL hub with colour-coded category nodes (icon + UGX amount)
-//   arranged over a wooden-arch backdrop, plus a detail table.
+//   Central infographic: a hand-drawn TRADITIONAL WOODEN BALANCE structure
+//   (thin dark-grey outlines) with six coloured circular joints and a bold
+//   central "Overview of Leverage Contributions" + UGX total. Contribution
+//   categories are arranged around the balance per the client reference.
+//   Plus a District Ranking bar chart (highest→lowest, filter-aware) and a
+//   detail table.
 //   Filters: District + Date range (date_created).
 //   Data from /api/local-leverage (+ /options).
 // ---------------------------------------------------------------------------
@@ -29,52 +32,66 @@ export function renderLocalLeverage(base: string, opts: any = {}): string {
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
     :root{
-      --cream:#FCF8F5; --panel:#FFFFFF; --ink:#28343a; --muted:#7c8a8f;
-      --head:#3b6e57; --row-alt:#f0f6f2; --line:#dfe6e1; --arch:#5b6b74;
+      --paper:#FFFFFF; --ink:#3b444a; --ink2:#4a555c; --muted:#8a969c;
+      --line:#e2e7ea; --wood:#5b5148; --joint-w:#ffffff;
     }
-    body{ background:var(--cream); color:var(--ink); font-family:"Segoe UI",system-ui,-apple-system,sans-serif; }
-    .card{ background:var(--panel); border:1px solid var(--line); border-radius:10px;
-           box-shadow:0 1px 2px rgba(40,60,60,.06); }
-    .ttl{ background:#e7f0ea; border-radius:12px; }
+    body{ background:#f6f8f9; color:var(--ink); font-family:"Aptos","Segoe UI",Calibri,Arial,system-ui,-apple-system,sans-serif; }
+    .card{ background:var(--paper); border:1px solid var(--line); border-radius:12px;
+           box-shadow:0 1px 3px rgba(40,60,60,.05); }
     .kpi{ position:relative; overflow:hidden; min-width:150px; }
-    .kpi::before{ content:''; position:absolute; top:0; left:0; right:0; height:4px; background:var(--head); }
+    .kpi::before{ content:''; position:absolute; top:0; left:0; right:0; height:3px; background:var(--ink); }
+
     table{ border-collapse:collapse; width:100%; }
-    thead th{ background:var(--head); color:#fff; font-weight:700; font-size:10.5px;
+    thead th{ background:#eef2f4; color:var(--ink); font-weight:700; font-size:10.5px;
               padding:6px 8px; text-align:left; position:sticky; top:0; z-index:2; white-space:nowrap; }
     thead th.num{ text-align:right; }
-    tbody td{ padding:4px 8px; font-size:11px; vertical-align:top; border-bottom:1px solid #edf3ef; white-space:nowrap; }
+    tbody td{ padding:4px 8px; font-size:11px; vertical-align:top; border-bottom:1px solid #eef2f4; white-space:nowrap; }
     tbody td.num{ text-align:right; }
-    tbody tr:nth-child(even) td{ background:var(--row-alt); }
-    tbody tr:hover td{ background:#eef7f1; }
+    tbody tr:nth-child(even) td{ background:#fafbfc; }
+    tbody tr:hover td{ background:#f0f6f2; }
+
     .dist-item{ display:flex; align-items:center; gap:6px; padding:2px 2px; cursor:pointer; font-size:12px; }
-    .dist-item:hover{ background:var(--cream); border-radius:5px; }
-    .dist-item input{ accent-color:var(--head); width:13px; height:13px; }
+    .dist-item:hover{ background:#f2f6f7; border-radius:5px; }
+    .dist-item input{ accent-color:var(--ink); width:13px; height:13px; }
     .scrollbar-thin::-webkit-scrollbar{ width:8px; height:8px; }
-    .scrollbar-thin::-webkit-scrollbar-thumb{ background:#c6d5cc; border-radius:3px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb{ background:#cdd6da; border-radius:3px; }
     .slbl{ font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); font-weight:700; }
     .mini-btn{ font-size:9px; padding:2px 4px; border-radius:4px; border:1px solid var(--line); background:#fff; }
-    .mini-btn:hover{ background:var(--cream); }
+    .mini-btn:hover{ background:#f2f6f7; }
     .mini-search{ width:100%; background:#fff; border:1px solid var(--line); border-radius:5px; padding:2px 6px; font-size:10px; }
     .dt{ width:100%; background:#fff; border:1px solid var(--line); border-radius:5px; padding:3px 6px; font-size:11px; }
 
-    /* ---- Napkin-style arch infographic ---- */
-    .arch-wrap{ position:relative; min-height:430px; }
-    .arch-svg{ position:absolute; inset:0; width:100%; height:100%; z-index:0; }
-    .hub{ position:absolute; left:50%; top:58%; transform:translate(-50%,-50%); text-align:center; z-index:2; }
-    .hub-total{ font-size:30px; font-weight:800; letter-spacing:-.5px; color:var(--ink); }
-    .cat{ position:absolute; z-index:3; display:flex; align-items:flex-start; gap:8px; max-width:230px; }
-    .cat .ic{ width:36px; height:36px; border-radius:9px; display:flex; align-items:center; justify-content:center;
-              font-size:17px; color:#fff; flex:0 0 auto; box-shadow:0 1px 3px rgba(0,0,0,.12); }
-    .cat .lbl{ font-size:12.5px; font-weight:800; line-height:1.15; }
-    .cat .amt{ font-size:12px; font-weight:700; color:var(--ink); margin-top:2px; }
-    .cat .cnt{ font-size:9.5px; color:var(--muted); font-weight:600; }
-    .cat.r{ flex-direction:row; } .cat.l{ flex-direction:row-reverse; text-align:right; }
+    /* ---- Wooden balance infographic ------------------------------------ */
+    .bal-title{ text-align:center; font-size:clamp(15px,1.7vw,22px); color:var(--ink2); font-weight:600; letter-spacing:.2px; }
+    .bal-canvas{ position:relative; width:100%; aspect-ratio:16/9; background:#fff; }
+    .bal-svg{ position:absolute; inset:0; width:100%; height:100%; z-index:0; }
+    .bal-hub{ position:absolute; left:50%; top:63%; transform:translate(-50%,-50%); text-align:center; z-index:2; width:34%; }
+    .bal-hub .h1{ font-size:clamp(15px,1.6vw,21px); font-weight:800; color:var(--ink); line-height:1.12; }
+    .bal-hub .h2{ font-size:clamp(12px,1.15vw,15px); font-weight:600; color:var(--ink2); margin-top:6px; }
+    /* category node */
+    .cat{ position:absolute; z-index:3; display:flex; align-items:flex-start; gap:9px; max-width:23%; }
+    .cat.l{ flex-direction:row-reverse; text-align:right; }
+    .cat .ic{ font-size:clamp(18px,1.9vw,26px); flex:0 0 auto; line-height:1; margin-top:2px; }
+    .cat .lbl{ font-size:clamp(11px,1.15vw,15px); font-weight:700; line-height:1.12; }
+    .cat .amt{ font-size:clamp(11px,1.1vw,14px); font-weight:700; color:var(--ink); margin-top:1px; white-space:nowrap; }
+    .cat .cnt{ font-size:9.5px; color:var(--muted); font-weight:600; margin-top:1px; }
     @media (max-width:1023px){
-      .arch-wrap{ min-height:auto; }
-      .arch-svg,.hub{ position:static; transform:none; }
-      .cat{ position:static; max-width:none; margin-bottom:8px; }
-      .grid-cats{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+      .bal-canvas{ aspect-ratio:auto; min-height:auto; }
+      .bal-svg{ position:relative; height:230px; }
+      .bal-hub{ position:static; transform:none; width:auto; margin:6px 0 10px; }
+      .cat{ position:static; max-width:none; margin-bottom:6px; }
+      .cat.l{ flex-direction:row; text-align:left; }
+      .cats-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     }
+
+    /* ---- District ranking bars ----------------------------------------- */
+    .rank-row{ display:grid; grid-template-columns:88px 1fr; align-items:center; gap:7px; margin-bottom:6px; }
+    .rank-name{ font-size:10px; font-weight:700; color:var(--ink); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .rank-bar{ position:relative; }
+    .rank-track{ background:#eef2f4; border-radius:5px; height:15px; position:relative; overflow:hidden; }
+    .rank-fill{ height:100%; border-radius:5px; background:linear-gradient(90deg,#2f9e44,#7bc47f); transition:width .45s ease; }
+    .rank-val{ font-size:9px; font-weight:700; color:var(--ink2); margin-top:1px; }
+    .rank-cnt{ color:var(--muted); font-weight:600; }
   </style>
 </head>
 <body>
@@ -96,13 +113,14 @@ ${navSidebar('localleverage')}
         <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">Categories</div>
         <div id="kpiCats" class="text-2xl font-extrabold mt-0.5">–</div>
       </div>
-
-      <div class="ttl px-5 py-1.5 flex-1 text-center">
-        <h1 class="text-lg md:text-2xl font-extrabold tracking-tight">LEVERAGE CONTRIBUTIONS BY CATEGORY</h1>
-        <div id="subDate" class="text-[11px] text-[var(--muted)] font-semibold"></div>
+      <div class="card kpi px-4 py-2">
+        <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">Districts</div>
+        <div id="kpiDist" class="text-2xl font-extrabold mt-0.5">–</div>
       </div>
 
-      <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
+      <div class="flex-1"></div>
+
+      <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[#f2f6f7] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
@@ -110,27 +128,50 @@ ${navSidebar('localleverage')}
     <div class="grid grid-cols-12 gap-3">
       <section class="col-span-12 lg:col-span-10 space-y-3">
 
-        <!-- Napkin arch infographic -->
-        <div class="card p-3">
-          <div class="arch-wrap" id="archWrap">
-            <svg class="arch-svg" viewBox="0 0 1000 430" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-              <g fill="none" stroke="var(--arch)" stroke-width="10" stroke-linejoin="round" opacity=".55">
-                <path d="M120 400 L250 250" />
-                <path d="M250 250 L430 200" />
-                <path d="M430 200 L500 175" />
-                <path d="M500 175 L570 200" />
-                <path d="M570 200 L750 250" />
-                <path d="M750 250 L880 400" />
-                <path d="M170 400 L300 260 M300 260 L470 215 M470 215 L530 215 M530 215 L700 260 M700 260 L830 400" opacity=".35"/>
+        <!-- Wooden balance infographic -->
+        <div class="card p-4 md:p-6">
+          <h1 id="balTitle" class="bal-title mb-1">Leverage Contributions by Category</h1>
+          <div class="bal-canvas" id="balCanvas">
+            <svg class="bal-svg" viewBox="0 0 1000 560" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <!-- thin dark-grey hand-drawn wooden balance structure -->
+              <g fill="none" stroke="var(--wood)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- long horizontal balance beam (upper-left-middle -> upper-right-middle) -->
+                <path d="M215 233 C 360 208, 640 208, 792 235" />
+                <path d="M215 239 C 360 214, 640 214, 792 241" opacity=".45"/>
+                <!-- second diagonal beam crossing over the horizontal beam -->
+                <path d="M300 158 C 470 214, 610 250, 742 305" opacity=".85"/>
+                <!-- left support leg (leans outward, ends lower-left) -->
+                <path d="M356 214 C 300 330, 250 430, 196 512" />
+                <!-- right support leg (leans outward, ends lower-right) -->
+                <path d="M648 214 C 706 330, 756 430, 812 512" />
+                <!-- crossing diagonal support beams behind the main beam -->
+                <path d="M300 300 C 430 262, 590 262, 712 236" opacity=".5"/>
+                <path d="M300 236 C 430 262, 590 262, 712 300" opacity=".5"/>
+                <!-- little cross-tie near the apex -->
+                <path d="M470 220 L 530 220" opacity=".7"/>
+                <!-- ground hints under the legs -->
+                <path d="M170 518 L 236 512" opacity=".5"/>
+                <path d="M778 512 L 844 518" opacity=".5"/>
+              </g>
+              <!-- six coloured circular joints (white centres, coloured outlines only) -->
+              <g fill="var(--joint-w)" stroke-width="3.4">
+                <circle cx="215" cy="235" r="11" stroke="#2f9e44"/>   <!-- green - left of main beam -->
+                <circle cx="392" cy="212" r="11" stroke="#2f6fd1"/>   <!-- blue - upper centre-left -->
+                <circle cx="612" cy="212" r="11" stroke="#8a5cd1"/>   <!-- purple - upper centre-right -->
+                <circle cx="742" cy="305" r="11" stroke="#a06bd8"/>   <!-- violet - upper-right sloping beam -->
+                <circle cx="215" cy="470" r="11" stroke="#2f9e44"/>   <!-- green - lower-left support -->
+                <circle cx="792" cy="470" r="11" stroke="#e05a9c"/>   <!-- pink - lower-right support -->
               </g>
             </svg>
-            <div class="hub">
-              <div class="text-[13px] font-bold text-[var(--muted)]">Overview of Leverage Contributions</div>
-              <div class="hub-total">UGX <span id="hubTotal">–</span></div>
+
+            <div class="bal-hub">
+              <div class="h1">Overview of Leverage<br/>Contributions</div>
+              <div class="h2">UGX <span id="hubTotal">–</span></div>
             </div>
-            <!-- category nodes injected here on wide screens; grid on mobile -->
+
+            <!-- category nodes injected here on wide screens -->
             <div id="cats"></div>
-            <div id="catsGrid" class="grid-cats" style="display:none"></div>
+            <div id="catsGrid" class="cats-grid" style="display:none"></div>
           </div>
         </div>
 
@@ -148,6 +189,14 @@ ${navSidebar('localleverage')}
       </section>
 
       <aside class="col-span-12 lg:col-span-2 space-y-2">
+        <!-- District ranking (highest -> lowest, filter-aware) -->
+        <div class="card p-2">
+          <div class="slbl mb-2 flex items-center gap-1"><i class="fas fa-ranking-star"></i> District Ranking</div>
+          <div id="rankList" class="scrollbar-thin overflow-y-auto max-h-[320px] pr-1">
+            <div class="text-[var(--muted)] text-[10px] py-1">Loading…</div>
+          </div>
+        </div>
+
         <div class="card p-2" id="sl-dist"></div>
         <div class="card p-2">
           <div class="slbl mb-1">Date (created)</div>
@@ -169,30 +218,32 @@ ${navSidebar('localleverage')}
     const fmt = (n) => (n ?? 0).toLocaleString('en-US');
     const num = (v) => { const n = Number(v); return (n||0).toLocaleString('en-US',{maximumFractionDigits:2}); };
     const ugx = (v) => (Number(v)||0).toLocaleString('en-US');
+    const compact = (v) => { const n=Number(v)||0; if(n>=1e9)return (n/1e9).toFixed(2)+'B'; if(n>=1e6)return (n/1e6).toFixed(1)+'M'; if(n>=1e3)return (n/1e3).toFixed(0)+'K'; return String(n); };
 
-    // NLP category → colour + FontAwesome icon (mirrors the client graphic).
+    // NLP category -> colour + FontAwesome icon + position around the balance.
+    // Colours & positions follow the client reference wooden-balance graphic.
     const CAT_STYLE = {
-      'Animal Structures and Equipment': { c:'#2f9e77', ic:'fa-kiwi-bird' },
-      'Land Hire and Cultivation':       { c:'#8a6d1f', ic:'fa-tractor' },
       'Commitment Fee':                  { c:'#3f4c53', ic:'fa-hand-holding-dollar' },
-      'Venue and Seats':                 { c:'#c2489a', ic:'fa-chair' },
-      'Chemicals and Fertilizers':       { c:'#7f9b1e', ic:'fa-flask' },
-      'Refreshments':                    { c:'#e07aa6', ic:'fa-glass-water' },
-      'Labour and Transport':            { c:'#2b7fb0', ic:'fa-truck' },
-      'Others':                          { c:'#8560c9', ic:'fa-shapes' },
+      'Land Hire and Cultivation':       { c:'#3f4c53', ic:'fa-tractor' },
+      'Chemicals and Fertilizers':       { c:'#7bc47f', ic:'fa-spray-can-sparkles' },
+      'Animal Structures and Equipment': { c:'#2f9e44', ic:'fa-warehouse' },
+      'Others':                          { c:'#8a5cd1', ic:'fa-people-group' },
+      'Venue and Seats':                 { c:'#e05a9c', ic:'fa-chair' },
+      'Refreshments':                    { c:'#f2a0c4', ic:'fa-mug-hot' },
+      'Labour and Transport':            { c:'#3f4c53', ic:'fa-truck' },
     };
-    // Positions around the arch (wide layout). left/top in %.
+    // Positions around the balance (wide layout). left/top in %, side l|r.
     const CAT_POS = {
-      'Commitment Fee':                  { left:'30%', top:'8%',  side:'l' },
-      'Land Hire and Cultivation':       { left:'66%', top:'8%',  side:'r' },
-      'Chemicals and Fertilizers':       { left:'10%', top:'34%', side:'l' },
-      'Others':                          { left:'70%', top:'34%', side:'r' },
-      'Animal Structures and Equipment': { left:'8%',  top:'66%', side:'l' },
-      'Venue and Seats':                 { left:'72%', top:'58%', side:'r' },
-      'Refreshments':                    { left:'74%', top:'80%', side:'r' },
-      'Labour and Transport':            { left:'10%', top:'86%', side:'l' },
+      'Commitment Fee':                  { left:'20%',  top:'6%',  side:'r' }, // TOP-LEFT
+      'Land Hire and Cultivation':       { left:'62%',  top:'6%',  side:'r' }, // TOP-RIGHT
+      'Chemicals and Fertilizers':       { left:'3%',   top:'28%', side:'r' }, // UPPER-LEFT-MIDDLE
+      'Others':                          { left:'70%',  top:'30%', side:'r' }, // UPPER-RIGHT-MIDDLE
+      'Animal Structures and Equipment': { left:'2%',   top:'55%', side:'r' }, // MIDDLE-LEFT
+      'Venue and Seats':                 { left:'74%',  top:'55%', side:'r' }, // MIDDLE-RIGHT
+      'Refreshments':                    { left:'72%',  top:'80%', side:'r' }, // LOWER-RIGHT
+      'Labour and Transport':            { left:'4%',   top:'80%', side:'r' }, // LOWER-LEFT (8th)
     };
-    const defStyle = { c:'#8560c9', ic:'fa-shapes' };
+    const defStyle = { c:'#8a5cd1', ic:'fa-shapes' };
 
     const COLS = [
       ['contribution_kind','Contribution_Kind','txt'],
@@ -250,11 +301,12 @@ ${navSidebar('localleverage')}
       });
     }
 
+    // ---- Category nodes around the balance -------------------------------
     function catCard(name, amt, cnt, wide){
       const st = CAT_STYLE[name] || defStyle;
       const side = (CAT_POS[name] && CAT_POS[name].side) || 'r';
       const inner =
-        '<div class="ic" style="background:'+st.c+'"><i class="fas '+st.ic+'"></i></div>'
+        '<div class="ic" style="color:'+st.c+'"><i class="fas '+st.ic+'"></i></div>'
         + '<div><div class="lbl" style="color:'+st.c+'">'+name+'</div>'
         + '<div class="amt">UGX '+ugx(amt)+'</div>'
         + '<div class="cnt">'+fmt(cnt)+' contributions</div></div>';
@@ -265,20 +317,51 @@ ${navSidebar('localleverage')}
       return '<div class="cat r">'+inner+'</div>';
     }
 
-    function renderArch(){
+    function renderBalance(){
       if (!lastData) return;
       const by = lastData.by_category || [];
       document.getElementById('hubTotal').textContent = ugx(lastData.total_amount);
+      // Keep the fixed reference ordering (biggest reference categories first),
+      // but only show categories present in the data.
+      const order = ['Commitment Fee','Land Hire and Cultivation','Chemicals and Fertilizers',
+                     'Animal Structures and Equipment','Others','Venue and Seats',
+                     'Refreshments','Labour and Transport'];
+      const map = {}; for (const c of by) map[c.category] = c;
+      const list = order.filter(n=>map[n]).map(n=>map[n]);
+      for (const c of by){ if (!order.includes(c.category)) list.push(c); }
       const wide = window.matchMedia('(min-width:1024px)').matches;
       const cats = document.getElementById('cats');
       const grid = document.getElementById('catsGrid');
       if (wide){
         cats.style.display=''; grid.style.display='none';
-        cats.innerHTML = by.map(c=>catCard(c.category, c.amount, c.contributions, true)).join('');
+        cats.innerHTML = list.map(c=>catCard(c.category, c.amount, c.contributions, true)).join('');
       } else {
         cats.style.display='none'; grid.style.display='grid';
-        grid.innerHTML = by.map(c=>catCard(c.category, c.amount, c.contributions, false)).join('');
+        grid.innerHTML = list.map(c=>catCard(c.category, c.amount, c.contributions, false)).join('');
       }
+    }
+
+    // ---- District ranking chart (highest -> lowest, filter-aware) --------
+    function renderRanking(){
+      const box = document.getElementById('rankList'); if (!box) return;
+      const rows = (lastData && lastData.by_district) ? lastData.by_district.slice() : [];
+      if (!rows.length){ box.innerHTML='<div class="text-[var(--muted)] text-[10px] py-1">No data.</div>'; return; }
+      // already sorted desc by amount in SQL, but re-sort defensively.
+      rows.sort((a,b)=> (Number(b.amount)||0)-(Number(a.amount)||0));
+      const max = Number(rows[0].amount)||1;
+      let html='';
+      rows.forEach((d,i)=>{
+        const amt = Number(d.amount)||0;
+        const pct = Math.max(2, Math.round(100*amt/max));
+        html += '<div class="rank-row">'
+              +   '<div class="rank-name" title="'+(d.district||'')+'">'+(i+1)+'. '+(d.district||'(Blank)')+'</div>'
+              +   '<div class="rank-bar">'
+              +     '<div class="rank-track"><div class="rank-fill" style="width:'+pct+'%"></div></div>'
+              +     '<div class="rank-val">UGX '+compact(amt)+' <span class="rank-cnt">· '+fmt(d.contributions)+'</span></div>'
+              +   '</div>'
+              + '</div>';
+      });
+      box.innerHTML = html;
     }
 
     function renderHead(){
@@ -351,16 +434,19 @@ ${navSidebar('localleverage')}
       }catch(err){ /* slicers stay All */ }
     }
 
-    function updateSubDate(){
-      const df = document.getElementById('dateFrom').value;
+    // Update the page title to "... (As of <date>)".
+    function updateTitle(){
       const dt = document.getElementById('dateTo').value;
-      const el = document.getElementById('subDate');
-      if (df || dt){ el.textContent = 'As of '+(dt||'…')+(df?(' (from '+df+')'):''); }
-      else el.textContent = '';
+      const df = document.getElementById('dateFrom').value;
+      const asOf = dt || (lastData && lastData.date_bounds && lastData.date_bounds.max) || '';
+      const el = document.getElementById('balTitle');
+      let t = 'Leverage Contributions by Category';
+      if (asOf) t += ' (As of '+asOf+')';
+      else if (df) t += ' (From '+df+')';
+      el.textContent = t;
     }
 
     async function load(){
-      updateSubDate();
       const params = filterParams();
       const tb = document.getElementById('tbody');
       if (tb) tb.innerHTML = '<tr><td class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
@@ -372,8 +458,11 @@ ${navSidebar('localleverage')}
         const a=document.getElementById('kpiAmount'); if(a) a.textContent=ugx(d.total_amount);
         const b=document.getElementById('kpiCount');  if(b) b.textContent=fmt(d.total_contributions);
         const c=document.getElementById('kpiCats');   if(c) c.textContent=fmt(d.categories_count);
+        const e=document.getElementById('kpiDist');   if(e) e.textContent=fmt(d.districts_count);
         if (d.districts && d.districts.length && S.opts.length === 0){ S.opts = d.districts; renderDist(); }
-        renderArch();
+        updateTitle();
+        renderBalance();
+        renderRanking();
         renderTable();
       }catch(err){
         const eb = document.getElementById('tbody');
@@ -396,7 +485,7 @@ ${navSidebar('localleverage')}
       document.getElementById('dateTo').value='';
       load();
     }));
-    window.addEventListener('resize', ()=>{ renderArch(); });
+    window.addEventListener('resize', ()=>{ renderBalance(); });
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{
       const btn = e.currentTarget; const old = btn.innerHTML;
       btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Refreshing…';
