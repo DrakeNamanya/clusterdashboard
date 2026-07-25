@@ -218,6 +218,21 @@ ${navSidebar('home')}
         </div>
       </section>
 
+      <!-- Local Leverage -->
+      <section class="grp" id="grp-localleverage">
+        <div class="grp-head">
+          <span class="grp-ico" style="background:#3b6e57"><i class="fas fa-hand-holding-dollar"></i></span>
+          <h2 class="font-bold text-[15px] flex-1">Local Leverage</h2>
+          <a class="open-link" href="/local-leverage">Open <i class="fas fa-arrow-right ml-1"></i></a>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+          <div class="kpi"><div class="n skel" data-f="localleverage.total_amount">…</div><div class="l">Total Amount (UGX)</div></div>
+          <div class="kpi"><div class="n skel" data-f="localleverage.total_contributions">…</div><div class="l">Contributions</div></div>
+          <div class="kpi"><div class="n skel" data-f="localleverage.categories_count">…</div><div class="l">Categories</div></div>
+          <div class="kpi"><div class="n skel" data-f="localleverage.districts_count">…</div><div class="l">Districts</div></div>
+        </div>
+      </section>
+
     </div>
 
     <footer class="text-center text-xs text-slate-400 py-8">
@@ -328,6 +343,13 @@ ${navSidebar('home')}
         setF('itemsnotsold.unique_shgs', d.unique_shgs);
         setF('itemsnotsold.total_items', d.total_items);
         setF('itemsnotsold.value_chains', arrLen(d.value_chains));
+      },
+      async localleverage(){
+        const d = await j('/api/local-leverage');
+        setF('localleverage.total_amount', d.total_amount);
+        setF('localleverage.total_contributions', d.total_contributions);
+        setF('localleverage.categories_count', d.categories_count);
+        setF('localleverage.districts_count', d.districts_count);
       },
     };
 

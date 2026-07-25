@@ -2024,6 +2024,40 @@ export async function refreshItemsNotSold(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_items_not_sold_rows');
 }
 
+// --- Local Leverage (contribution_kind NLP categories) ---------------------
+export interface LocalLeverageFilters {
+  districts?: string[];
+  dateFrom?: string; // YYYY-MM-DD
+  dateTo?: string;   // YYYY-MM-DD
+}
+
+/** Dashboard aggregate: KPIs + category breakdown + detail rows. [Neon] */
+export async function localLeverageDash(
+  env: Env,
+  opts: LocalLeverageFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'local_leverage_dash',
+    '$1::text[], $2::date, $3::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.dateFrom || null,
+      opts.dateTo || null,
+    ]
+  );
+}
+
+/** Lightweight slicer option lists (categories + districts + entities). [Neon] */
+export async function localLeverageOptions(env: Env): Promise<any> {
+  return neonRpcJson(env, 'local_leverage_options', '', []);
+}
+
+/** Rebuild local_leverage_rows from records (call after uploads). [Neon] */
+export async function refreshLocalLeverage(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_local_leverage_rows');
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   if (usesNeon(env, schema.key)) {

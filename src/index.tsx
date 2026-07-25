@@ -16,6 +16,7 @@ import {
   salesDash, salesOptions, refreshSales, Env,
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
+  localLeverageDash, localLeverageOptions, refreshLocalLeverage,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
 } from './store';
 import {
@@ -35,6 +36,7 @@ import { renderProduction } from './production';
 import { renderSales } from './sales';
 import { renderPoultrySales } from './poultry_sales';
 import { renderItemsNotSold } from './items_not_sold';
+import { renderLocalLeverage } from './local_leverage';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -835,6 +837,38 @@ app.post('/api/items-not-sold/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Local Leverage (contribution_kind NLP categories) --------------------
+app.get('/local-leverage', async (c) => {
+  let opts = {};
+  try { opts = await localLeverageOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderLocalLeverage(baseUrl(c.req.url), opts));
+});
+
+// Aggregated data feed (KPIs + category breakdown + detail rows + slicers).
+app.get('/api/local-leverage', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await localLeverageDash(storeEnv(c), {
+    districts: split(q.districts),
+    dateFrom: q.dateFrom || undefined,
+    dateTo: q.dateTo || undefined,
+  });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists.
+app.get('/api/local-leverage/options', async (c) => {
+  const data = await localLeverageOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Rebuild the local_leverage_rows table (run after uploads / imports change data).
+app.post('/api/local-leverage/refresh', async (c) => {
+  const n = await refreshLocalLeverage(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
 // Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
@@ -857,6 +891,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('sales'))        jobs.push({ key: 'sales',        fn: () => refreshSales(env) });
   if (want('poultrysales')) jobs.push({ key: 'poultrysales', fn: () => refreshPoultrySales(env) });
   if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
+  if (want('localleverage')) jobs.push({ key: 'localleverage', fn: () => refreshLocalLeverage(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 

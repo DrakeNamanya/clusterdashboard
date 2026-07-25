@@ -33,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'sales', href: '/sales', label: 'Sales (Horticulture/Oilseeds)', icon: 'fa-sack-dollar' },
   { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird' },
   { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation' },
+  { key: 'localleverage', href: '/local-leverage', label: 'Local Leverage', icon: 'fa-hand-holding-dollar' },
   { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom' },
 ];
 

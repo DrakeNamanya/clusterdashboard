@@ -79,6 +79,14 @@ export const ODATA_SOURCES: Record<
     userEnv: 'ODATA_PROFILING_USER',
     passEnv: 'ODATA_PROFILING_PASS',
   },
+  // Local Leverage Fund contribution master — same Heifer gateway/credentials.
+  local_leverage_fund_contribution_form: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'local_leverage_fund_contribution_form_odata_view/local_leverage_fund_contribution_form_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
 };
 
 function basicAuth(user: string, pass: string): string {

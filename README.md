@@ -281,8 +281,18 @@ All six master tables appear as selectable entity sets and refresh automatically
   - `GET  /api/poultry-sales` — KPIs + grouped table + slicer lists (filters: `districts,poultry,profilers,from,to`)
   - `GET  /api/poultry-sales/options` — lightweight slicer option lists
   - `POST /api/poultry-sales/refresh` — rebuild `poultry_sales_rows`
+- `GET  /items-not-sold` — **ITEMS NOT SOLD** — participants who **received** an item (distribution) but never reported selling it in the marketing form. `Report_Not_Sold = FILTER(Distribution_Marketing_Matrix, [Has_Sold]="No")`. Base join `participants_shg[__Submissions-id] = distribution_form_v2[_id]`; **ValueChain derived** from the distributed item (Poultry←`livestock_type`, Oil seeds/Horticulture←`crop_type`). Materialized as `items_not_sold_rows` (**22,820 rows / 12,049 participants / 1,414 SHGs**). RPCs `refresh_items_not_sold_rows()`, `items_not_sold_dash()`, `items_not_sold_options()`.
+  - Slicers (filters): **Value chain** (`valuechains`), **District** (`districts`), **Days since distribution** (`daysMin`,`daysMax`).
+  - `GET  /api/items-not-sold` — KPIs (unique_participants, unique_shgs, total_items) + wide detail table + slicer lists
+  - `GET  /api/items-not-sold/options` — lightweight slicer option lists + days bounds
+  - `POST /api/items-not-sold/refresh` — rebuild `items_not_sold_rows`
+- `GET  /local-leverage` — **LOCAL LEVERAGE (Leverage Contributions by Category)** — from the `local_leverage_fund_contribution_form` OData feed (18,888 rows). The free-text `contribution_kind` column is **NLP-categorised in SQL** (`public.leverage_category(text)`, priority-ordered keyword matching) into 8 buckets: **Venue and Seats · Land Hire and Cultivation · Commitment Fee · Animal Structures and Equipment · Chemicals and Fertilizers · Refreshments · Labour and Transport · Others**. Napkin-style **arch infographic** (central total hub + colour-coded category nodes with icon + UGX amount) plus a detail table. Materialized as `local_leverage_rows`. RPCs `refresh_local_leverage_rows()`, `local_leverage_dash()`, `local_leverage_options()`.
+  - Slicers (filters, per client request): **District** (`districts`), **Date range** on `date_created` (`dateFrom`,`dateTo`).
+  - `GET  /api/local-leverage` — KPIs (total_amount, total_contributions, categories_count, districts_count) + `by_category` breakdown + detail rows + slicer lists
+  - `GET  /api/local-leverage/options` — lightweight slicer option lists + date bounds
+  - `POST /api/local-leverage/refresh` — rebuild `local_leverage_rows`
 - **Dim_Profile** — `SUMMARIZE(participants filtered to name_ip='HEIFER', participant_id, MAX(...))`; materialized as `dim_profile` (RPC `refresh_dim_profile()`). Participant dimension (full_name, district, sex, disability, shg_name) for profiling analysis.
-- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,frontliners`)
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,itemsnotsold,localleverage,frontliners`)
 
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document

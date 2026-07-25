@@ -325,6 +325,20 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  {
+    key: 'local_leverage_fund_contribution_form',
+    label: 'local_leverage_fund_contribution_form',
+    filenameHints: ['local_leverage', 'leverage_fund', 'local leverage', 'contribution_form'],
+    dedupKey: 'docId',
+    columns: cols(
+      'instructions,partner,district_name,subcounty_name,type_of_entity,type_of_contribution,other_contribution_details,contribution_kind,contribution_amount,photo_of_evidence,submitter_name,submitter_position,other_submitter_position,createdBy,docId,refID,dateCreated,lastUpdated',
+      {
+        contribution_amount: 'number',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(
