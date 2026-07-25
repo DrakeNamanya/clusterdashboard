@@ -32,6 +32,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'production', href: '/production', label: 'Production (Horticulture)', icon: 'fa-seedling' },
   { key: 'sales', href: '/sales', label: 'Sales (Horticulture/Oilseeds)', icon: 'fa-sack-dollar' },
   { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird' },
+  { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation' },
   { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom' },
 ];
 

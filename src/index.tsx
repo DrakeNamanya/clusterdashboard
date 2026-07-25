@@ -15,6 +15,7 @@ import {
   productionDash, productionOptions, refreshProduction,
   salesDash, salesOptions, refreshSales, Env,
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
+  itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
 } from './store';
 import {
@@ -33,6 +34,7 @@ import { renderIsla } from './isla';
 import { renderProduction } from './production';
 import { renderSales } from './sales';
 import { renderPoultrySales } from './poultry_sales';
+import { renderItemsNotSold } from './items_not_sold';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -796,6 +798,43 @@ app.post('/api/poultry-sales/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Items Not Sold (distribution ⋈ marketing, Has_Sold='No') --------------
+app.get('/items-not-sold', async (c) => {
+  let opts = {};
+  try { opts = await itemsNotSoldOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderItemsNotSold(baseUrl(c.req.url), opts));
+});
+
+// Aggregated data feed (KPIs + detail rows + slicers).
+app.get('/api/items-not-sold', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const numOrNull = (s?: string) => {
+    const n = Number(s);
+    return s != null && s !== '' && Number.isFinite(n) ? n : null;
+  };
+  const data = await itemsNotSoldDash(storeEnv(c), {
+    valuechains: split(q.valuechains),
+    districts: split(q.districts),
+    daysMin: numOrNull(q.daysMin) ?? undefined,
+    daysMax: numOrNull(q.daysMax) ?? undefined,
+  });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists.
+app.get('/api/items-not-sold/options', async (c) => {
+  const data = await itemsNotSoldOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Rebuild the items_not_sold_rows table (run after uploads / imports change data).
+app.post('/api/items-not-sold/refresh', async (c) => {
+  const n = await refreshItemsNotSold(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
 // Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
@@ -817,6 +856,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('production'))   jobs.push({ key: 'production',   fn: () => refreshProduction(env) });
   if (want('sales'))        jobs.push({ key: 'sales',        fn: () => refreshSales(env) });
   if (want('poultrysales')) jobs.push({ key: 'poultrysales', fn: () => refreshPoultrySales(env) });
+  if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 

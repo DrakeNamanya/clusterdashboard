@@ -1983,6 +1983,47 @@ export async function refreshPoultrySales(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_poultry_sales_rows');
 }
 
+// --------------------------------------------------------------------------
+// Items Not Sold — participants who RECEIVED an item via distribution but never
+// reported selling it in the marketing form (Has_Sold='No').
+// Distribution_Marketing_Matrix filtered [Has_Sold]="No".
+// Filters: value chain, district, days since distribution (min/max).
+// --------------------------------------------------------------------------
+export interface ItemsNotSoldFilters {
+  valuechains?: string[];
+  districts?: string[];
+  daysMin?: number;
+  daysMax?: number;
+}
+
+/** Dashboard aggregate: KPIs + detail rows + slicer lists. [Neon] */
+export async function itemsNotSoldDash(
+  env: Env,
+  opts: ItemsNotSoldFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'items_not_sold_dash',
+    '$1::text[], $2::text[], $3::int, $4::int',
+    [
+      opts.valuechains && opts.valuechains.length ? opts.valuechains : null,
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.daysMin != null ? opts.daysMin : null,
+      opts.daysMax != null ? opts.daysMax : null,
+    ]
+  );
+}
+
+/** Lightweight slicer option lists (value chains + districts + days bounds). [Neon] */
+export async function itemsNotSoldOptions(env: Env): Promise<any> {
+  return neonRpcJson(env, 'items_not_sold_options', '', []);
+}
+
+/** Rebuild items_not_sold_rows from records (call after uploads). [Neon] */
+export async function refreshItemsNotSold(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_items_not_sold_rows');
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   if (usesNeon(env, schema.key)) {

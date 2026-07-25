@@ -203,6 +203,21 @@ ${navSidebar('home')}
         </div>
       </section>
 
+      <!-- Items Not Sold -->
+      <section class="grp" id="grp-itemsnotsold">
+        <div class="grp-head">
+          <span class="grp-ico" style="background:#8a3d2b"><i class="fas fa-triangle-exclamation"></i></span>
+          <h2 class="font-bold text-[15px] flex-1">Items Not Sold</h2>
+          <a class="open-link" href="/items-not-sold">Open <i class="fas fa-arrow-right ml-1"></i></a>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+          <div class="kpi"><div class="n skel" data-f="itemsnotsold.unique_participants">…</div><div class="l">Participants (Not Sold)</div></div>
+          <div class="kpi"><div class="n skel" data-f="itemsnotsold.unique_shgs">…</div><div class="l">SHGs</div></div>
+          <div class="kpi"><div class="n skel" data-f="itemsnotsold.total_items">…</div><div class="l">Items Not Sold</div></div>
+          <div class="kpi"><div class="n skel" data-f="itemsnotsold.value_chains">…</div><div class="l">Value Chains</div></div>
+        </div>
+      </section>
+
     </div>
 
     <footer class="text-center text-xs text-slate-400 py-8">
@@ -306,6 +321,13 @@ ${navSidebar('home')}
         setF('poultrysales.unique_participants', d.unique_participants);
         setF('poultrysales.unique_shgs', d.unique_shgs);
         setF('poultrysales.districts', arrLen(d.districts));
+      },
+      async itemsnotsold(){
+        const d = await j('/api/items-not-sold');
+        setF('itemsnotsold.unique_participants', d.unique_participants);
+        setF('itemsnotsold.unique_shgs', d.unique_shgs);
+        setF('itemsnotsold.total_items', d.total_items);
+        setF('itemsnotsold.value_chains', arrLen(d.value_chains));
       },
     };
 
