@@ -1242,12 +1242,155 @@ export async function refreshClusterSummary(env: Env): Promise<number> {
  * their FIRST-EVER activity_date; flags come from that first-date row(s).
  * Computed in TS from at_rows (D1 lacks window functions we'd want here).
  */
+/**
+ * Postgres-native implementation of the New Youth "first touch" dashboard.
+ * Does all the heavy lifting in one SQL round-trip (no per-row streaming to the
+ * Worker), so it stays well within the Worker CPU/memory budget even at ~780k
+ * at_rows. Semantics mirror the TS reducer exactly.
+ */
+async function newYouthDashPg(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
+): Promise<any> {
+  const pTarget = opts.target ?? 726;
+  const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
+
+  // firsts CTE: one row per participant with first_date + OR-combined flags over
+  // that participant's first-date row(s), and MAX(district) on those rows.
+  // Then apply the district/date selection and aggregate the KPIs + by-date series.
+  const params: any[] = [];
+  let dcond = '';
+  if (dl.length) { params.push(dl); dcond += ` AND UPPER(district) = ANY($${params.length}::text[])`; }
+  if (opts.from) { params.push(opts.from); dcond += ` AND first_date >= $${params.length}`; }
+  if (opts.to)   { params.push(opts.to);   dcond += ` AND first_date <= $${params.length}`; }
+
+  const aggSql = `
+    WITH dated AS (
+      SELECT participant_id AS pid, day,
+             district,
+             (sex = 'Female')            AS f,
+             (is_pwd = 1)                AS p,
+             (is_farming = 1)            AS w
+      FROM at_rows
+      WHERE participant_id IS NOT NULL AND has_date = 1 AND day IS NOT NULL
+    ),
+    firsts AS (
+      SELECT pid, MIN(day) AS first_date FROM dated GROUP BY pid
+    ),
+    ft AS (
+      SELECT d.pid,
+             f.first_date,
+             MAX(d.district)                     AS district,
+             bool_or(d.f)                         AS is_female,
+             bool_or(d.p)                         AS is_pwd,
+             bool_or(d.w)                         AS is_farming,
+             bool_or(d.f AND d.p)                 AS female_pwd,
+             bool_or(d.w AND d.f)                 AS farming_female,
+             bool_or(d.w AND d.p)                 AS farming_pwd,
+             bool_or(d.w AND d.p AND d.f)         AS farming_fpwd
+      FROM dated d
+      JOIN firsts f ON f.pid = d.pid AND d.day = f.first_date
+      GROUP BY d.pid, f.first_date
+    ),
+    sel AS (
+      SELECT * FROM ft WHERE TRUE ${dcond}
+    )
+    SELECT
+      COUNT(*)::int                                          AS total,
+      COUNT(*) FILTER (WHERE is_female)::int                 AS female,
+      COUNT(*) FILTER (WHERE is_pwd)::int                    AS pwd,
+      COUNT(*) FILTER (WHERE female_pwd)::int                AS fpwd,
+      COUNT(*) FILTER (WHERE is_farming)::int                AS work,
+      COUNT(*) FILTER (WHERE farming_female)::int            AS fwork,
+      COUNT(*) FILTER (WHERE farming_pwd)::int               AS pwork,
+      COUNT(*) FILTER (WHERE farming_fpwd)::int              AS fpwork
+    FROM sel`;
+
+  const byDateSql = `
+    WITH dated AS (
+      SELECT participant_id AS pid, day, district
+      FROM at_rows
+      WHERE participant_id IS NOT NULL AND has_date = 1 AND day IS NOT NULL
+    ),
+    firsts AS (
+      SELECT pid, MIN(day) AS first_date FROM dated GROUP BY pid
+    ),
+    ft AS (
+      SELECT d.pid, f.first_date, MAX(d.district) AS district
+      FROM dated d
+      JOIN firsts f ON f.pid = d.pid AND d.day = f.first_date
+      GROUP BY d.pid, f.first_date
+    ),
+    sel AS ( SELECT * FROM ft WHERE TRUE ${dcond} )
+    SELECT first_date AS date, COUNT(*)::int AS value
+    FROM sel GROUP BY first_date ORDER BY first_date`;
+
+  const [aggRows, byDateRows, targetRows, distRows] = await Promise.all([
+    neonQuery(env, aggSql, params),
+    neonQuery(env, byDateSql, params),
+    neonQuery(env, `SELECT district, month, target FROM reach_targets`),
+    neonQuery(env, `SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL`),
+  ]);
+
+  const a = aggRows[0] || {};
+  const num = (v: any) => Number(v || 0);
+
+  // targets: sum over selected districts whose month intersects the range
+  let periodTotal = 0;
+  const months = new Set<string>();
+  const distSet = new Set<string>();
+  for (const t of targetRows) {
+    if (t.district) distSet.add(t.district);
+    if (dl.length && !dl.includes(String(t.district).toUpperCase())) continue;
+    const mStart = t.month as string;
+    const mEndDate = monthEnd(t.month as string);
+    if (opts.to && mStart > opts.to) continue;
+    if (opts.from && mEndDate < opts.from) continue;
+    periodTotal += num(t.target);
+    months.add(t.month as string);
+  }
+  const nMonths = months.size;
+  for (const d of distRows) if (d.district) distSet.add(d.district);
+
+  return {
+    new_total_reach: num(a.total),
+    target_selected_period: Math.round(periodTotal),
+    monthly_target: nMonths > 0 ? Math.round(periodTotal / nMonths) : pTarget,
+    new_female_reach: num(a.female),
+    new_pwds_reach: num(a.pwd),
+    new_female_pwds_reach: num(a.fpwd),
+    new_youth_in_work: num(a.work),
+    new_female_youth_in_work: num(a.fwork),
+    new_pwds_in_work: num(a.pwork),
+    new_female_pwds_in_work: num(a.fpwork),
+    by_date: byDateRows.map((r) => ({ date: r.date, value: num(r.value) })),
+    districts: [...distSet].sort(),
+  };
+}
+
 export async function newYouthDash(
   env: Env,
   opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
 ): Promise<any> {
   const onCrdb = frontlinerOnCrdb(env);
   const db: any = onCrdb ? crdbAsD1(env) : env.DB!;
+
+  // -------------------------------------------------------------------------
+  // FAST PATH (Postgres / Oracle VM): push the whole first-touch aggregation
+  // down into SQL instead of streaming every at_rows row (~780k) into the
+  // Worker and reducing in TS. That streaming version intermittently returned
+  // HTTP 503 once the backfill grew past ~600k rows (Worker CPU/memory + the
+  // large result transfer over Hyperdrive). The CTE below reproduces the exact
+  // TS semantics: first_date = MIN(day) per participant; flags are OR-combined
+  // over that participant's first-date row(s); district = MAX(district) there.
+  if (onCrdb && usingHyperdrive(env)) {
+    try {
+      return await newYouthDashPg(env, opts);
+    } catch {
+      /* fall through to the TS path below if the SQL path errors */
+    }
+  }
+
   try {
   const pTarget = opts.target ?? 726;
 
