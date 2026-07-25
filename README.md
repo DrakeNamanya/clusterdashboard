@@ -218,11 +218,23 @@ All six master tables appear as selectable entity sets and refresh automatically
   right edge of every page. Each menu item is a normal link, so clicking it opens that
   dashboard **in the same window**. The active dashboard is highlighted (navy edge bar +
   tint). Toggle it with the hamburger; the open/closed state is remembered per browser.
-- **Home** (`GET /`): a KPI **overview dashboard** that summarises the headline numbers
-  from every dashboard in one screen (Cluster Trainings, Monthly New Youth, Frontliners,
-  Distribution to Participants, Distribution to SHGs, SHG Profiling, ISLA, Production,
-  Sales). Each panel fetches that dashboard's own API in the browser, so the figures always
-  match the source dashboard, and every panel links through to the full dashboard.
+- **Home** (`GET /`): a redesigned **SAYE-style landing dashboard** with its own left
+  dark-green sidebar (SAYE Uganda branding, MENU + QUICK ACTIONS, MEL-officer user card),
+  a greeting header, and:
+  - a **dark hero KPI strip** — 4 tiles (Youth Trained, Female Reached, PWDs Trained,
+    Monthly Target) each with a sparkline, plus a circular **Monthly-Pace gauge**. The
+    gauge shows this (partial) month's new reach ÷ the previous full month's reach
+    (a month-over-month pace indicator, capped at 100%) — a meaningful figure since the
+    raw `monthly_target` field is a far-smaller sub-target that cannot be compared to
+    actual monthly reach.
+  - **8 colour-themed summary cards** (Cluster Trainings, Monthly New Youth, Frontliners,
+    Distribution to Participants, Distribution to SHGs, SHG Profiling, ISLA Savings,
+    Production) — each with a headline figure + 3 sub-metrics, linking to the full dashboard.
+  - a **bottom row**: Performance by District table (ranked, achievement bars), a Trends
+    Overview line chart (daily new-reach), and a Recent Activity feed.
+  Each panel fetches that dashboard's own API in the browser, so the figures always match
+  the source dashboard. Charts use Chart.js. *(Production-target and reach-target tables
+  are planned — placeholders only for now.)*
 - **Data Tools & OData** (`GET /tools`, alias `/upload`): the sheet-upload, OData-import,
   Fill-docId, Rebuild-dashboards and Power BI feed tools (formerly the site root).
 
