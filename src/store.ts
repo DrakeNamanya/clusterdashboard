@@ -1906,6 +1906,82 @@ export async function refreshProduction(env: Env): Promise<number> {
 }
 
 // --------------------------------------------------------------------------
+// MEL Report Dashboard — Targets vs Achieved (Production / Reach / Mobilization)
+// Single unified RPC: mel_report_dash(districts text[], from date, to date).
+// Targets: mel_reach_targets (per district per month) + mel_production_targets
+// (per district per season). Achieved: at_rows / production_rows /
+// distribution_rows / shg_profiling_rows. [Neon/Oracle VM]
+// --------------------------------------------------------------------------
+export interface MelReportFilters {
+  districts?: string[];
+  from?: string;
+  to?: string;
+}
+
+export async function melReportDash(env: Env, opts: MelReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_report_dash',
+    '$1::text[], $2::date, $3::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+// --------------------------------------------------------------------------
+// Weekly Report — Mon→Sun summary of ALL indicators per cluster.
+// mel_weekly_report(districts text[], from date, to date). [Oracle VM]
+// --------------------------------------------------------------------------
+export async function weeklyReport(env: Env, opts: MelReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_weekly_report',
+    '$1::text[], $2::date, $3::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+// --------------------------------------------------------------------------
+// CF (Community Facilitator) Report Card.
+// cfStaffList: mel_cf_report_staff(districts text[]) -> [{key,name,activities}]
+// cfReport: mel_cf_report(staff text, districts text[], from date, to date)
+// [Oracle VM]
+// --------------------------------------------------------------------------
+export async function cfStaffList(env: Env, opts: MelReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_report_staff',
+    '$1::text[]',
+    [opts.districts && opts.districts.length ? opts.districts : null]
+  );
+}
+
+export interface CfReportFilters extends MelReportFilters {
+  staff?: string;
+}
+
+export async function cfReport(env: Env, opts: CfReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_report',
+    '$1::text, $2::text[], $3::date, $4::date',
+    [
+      opts.staff || '',
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+// --------------------------------------------------------------------------
 // Sales in Horticulture/Oilseeds — production_and_marketing_tool filtered
 // pdn_level='marketing', joined to participants + shg profiling.
 // --------------------------------------------------------------------------

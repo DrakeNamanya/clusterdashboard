@@ -22,6 +22,9 @@ export interface NavItem {
 // we had before, with Home first.
 export const NAV_ITEMS: NavItem[] = [
   { key: 'home', href: '/', label: 'Home', icon: 'fa-house' },
+  { key: 'report', href: '/report', label: 'Report Dashboard', icon: 'fa-bullseye' },
+  { key: 'weekly', href: '/weekly-report', label: 'Weekly Report', icon: 'fa-calendar-week' },
+  { key: 'cfreport', href: '/cf-report', label: 'CF Report Card', icon: 'fa-id-badge' },
   { key: 'cluster', href: '/cluster-trainings', label: 'Cluster Trainings', icon: 'fa-chart-simple' },
   { key: 'newyouth', href: '/monthly-new-youth', label: 'Monthly New Youth', icon: 'fa-user-plus' },
   { key: 'frontliners', href: '/frontliners', label: 'Trainings by Frontliners', icon: 'fa-table' },

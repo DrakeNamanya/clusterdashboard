@@ -17,6 +17,7 @@ import {
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
+  melReportDash, weeklyReport, cfReport, cfStaffList,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
 } from './store';
 import {
@@ -37,6 +38,9 @@ import { renderSales } from './sales';
 import { renderPoultrySales } from './poultry_sales';
 import { renderItemsNotSold } from './items_not_sold';
 import { renderLocalLeverage } from './local_leverage';
+import { renderReport } from './report';
+import { renderWeeklyReport } from './weekly';
+import { renderCfReport } from './cfreport';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -867,6 +871,52 @@ app.get('/api/local-leverage/options', async (c) => {
 app.post('/api/local-leverage/refresh', async (c) => {
   const n = await refreshLocalLeverage(storeEnv(c));
   return c.json({ ok: true, rows: n });
+});
+
+// ---- Report Dashboard: Targets vs Achieved ---------------------------------
+app.get('/report', (c) => c.html(renderReport(baseUrl(c.req.url))));
+app.get('/api/report', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await melReportDash(storeEnv(c), {
+    districts: split(q.districts),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- Weekly Report (Mon–Sun summary of all indicators) ---------------------
+app.get('/weekly-report', (c) => c.html(renderWeeklyReport(baseUrl(c.req.url))));
+app.get('/api/weekly', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await weeklyReport(storeEnv(c), {
+    districts: split(q.districts),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- CF (Community Facilitator) Report Card --------------------------------
+app.get('/cf-report', (c) => c.html(renderCfReport(baseUrl(c.req.url))));
+app.get('/api/cf-report', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await cfReport(storeEnv(c), {
+    districts: split(q.districts),
+    staff: q.staff || undefined,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+app.get('/api/cf-report/staff', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await cfStaffList(storeEnv(c), { districts: split(q.districts) });
+  return c.json(data);
 });
 
 // ---- Refresh ALL dashboards after a master-sheet update --------------------

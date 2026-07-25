@@ -1,0 +1,211 @@
+import { clusterOptions } from './clusters';
+// ---------------------------------------------------------------------------
+// WEEKLY REPORT — Mon→Sun narrative summary of ALL indicators, per cluster.
+//   Filters: Cluster + Date range (default = current Mon→Sun week).
+//   Renders a "Weekly Highlights" narrative broken into sections:
+//     Profiling & SHG Formation, Training (by area), Distribution,
+//     Production & Marketing, Poultry Sales, Access to Finance (ISLA),
+//     Leverage Contributions.
+//   Data from /api/weekly (mel_weekly_report RPC).
+// ---------------------------------------------------------------------------
+
+export function renderWeeklyReport(base: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weekly Report — SAYE</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
+  <style>
+    :root{
+      --green:#006837; --green-2:#00A859; --lgreen:#e9f5ee; --ink:#25352c;
+      --muted:#7f8c85; --line:#e2e9e4; --amber:#F6921E; --blue:#2E9BD6;
+      --band:#0f5132; --cream:#fbf6e3; --purple:#7c5cbf; --red:#c0392b; --teal:#1f9e94;
+    }
+    body{ background:#f2f6f3; color:var(--ink); font-family:"Segoe UI",Calibri,Arial,system-ui,sans-serif; margin:0; }
+    .wrap{ max-width:1080px; margin:0 auto; padding:22px 20px 60px; }
+    h1{ font-size:24px; font-weight:800; color:var(--green); margin:0 0 2px; }
+    .sub{ color:var(--muted); font-size:13px; margin-bottom:16px; }
+    .card{ background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 1px 3px rgba(40,60,50,.05); }
+
+    .filters{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:18px; }
+    .fld{ display:flex; flex-direction:column; gap:4px; }
+    .fld label{ font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
+    .fld select, .fld input{ border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; background:#fff; min-width:150px; }
+    .btn{ background:var(--green); color:#fff; border:0; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer; }
+    .btn:hover{ background:var(--green-2); }
+    .btn.ghost{ background:#fff; color:var(--green); border:1px solid var(--line); }
+
+    .hero{ background:linear-gradient(120deg,var(--band),var(--green-2)); color:#fff; border-radius:14px; padding:20px 24px; margin-bottom:18px; }
+    .hero .wk{ font-size:12px; text-transform:uppercase; letter-spacing:.08em; opacity:.85; }
+    .hero .ttl{ font-size:22px; font-weight:800; margin:2px 0 4px; }
+    .hero .meta{ font-size:13px; opacity:.9; }
+
+    .kstrip{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
+    @media(max-width:820px){ .kstrip{ grid-template-columns:repeat(2,1fr); } }
+    .kcard{ padding:14px 16px; }
+    .kcard .kt{ font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+    .kcard .kv{ font-size:24px; font-weight:800; color:var(--ink); margin-top:6px; line-height:1; }
+    .kcard .ks{ font-size:11px; color:var(--muted); margin-top:4px; }
+
+    .sec{ padding:18px 20px; margin-bottom:14px; }
+    .sec h2{ font-size:15px; font-weight:800; margin:0 0 8px; display:flex; align-items:center; gap:9px; }
+    .sec h2 .ic{ width:30px; height:30px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:13px; }
+    .sec p{ margin:0; font-size:14px; line-height:1.65; color:#3a4a41; }
+    .sec p b{ color:var(--green); }
+    .chips{ display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .chip{ background:var(--lgreen); border:1px solid #cfe6d8; color:var(--green); font-size:12px; font-weight:700; padding:5px 11px; border-radius:20px; }
+    .chip b{ color:var(--ink); }
+    .trtable{ width:100%; border-collapse:collapse; margin-top:12px; }
+    .trtable td{ padding:6px 10px; font-size:13px; border-bottom:1px solid #eef2ef; }
+    .trtable td.n{ text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
+    .loading{ text-align:center; color:var(--muted); padding:26px; font-size:13px; }
+    .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1><i class="fas fa-calendar-week" style="margin-right:8px"></i>Weekly Report</h1>
+    <p class="sub">Monday → Sunday summary of all indicators, per cluster. Share every Sunday.</p>
+
+    <div class="filters">
+      <div class="fld"><label>Cluster</label>
+        <select id="cluster">${clusterOptions('iganga')}</select></div>
+      <div class="fld"><label>Week from (Mon)</label><input type="date" id="from" /></div>
+      <div class="fld"><label>Week to (Sun)</label><input type="date" id="to" /></div>
+      <button class="btn" id="apply"><i class="fas fa-filter"></i> Apply</button>
+      <button class="btn ghost" id="thisweek">This week</button>
+      <button class="btn ghost" id="reset">All time</button>
+    </div>
+
+    <div id="noteBox"></div>
+
+    <div class="hero">
+      <div class="wk">Weekly Highlights</div>
+      <div class="ttl" id="heroTtl">—</div>
+      <div class="meta" id="heroMeta">Loading…</div>
+    </div>
+
+    <div class="kstrip">
+      <div class="card kcard"><div class="kt">Youth Reached / Trained</div><div class="kv" id="kTrained">—</div><div class="ks">distinct participants trained</div></div>
+      <div class="card kcard"><div class="kt">SHGs Formed</div><div class="kv" id="kShgs">—</div><div class="ks">new groups profiled</div></div>
+      <div class="card kcard"><div class="kt">Savings Mobilized</div><div class="kv" id="kSavings">—</div><div class="ks">UGX (ISLA youth savings)</div></div>
+      <div class="card kcard"><div class="kt">Leverage Raised</div><div class="kv" id="kLev">—</div><div class="ks">UGX local contributions</div></div>
+    </div>
+
+    <div id="narrative"></div>
+  </div>
+
+<script>
+const CLUSTER_DISTRICTS = {
+  iganga:['IGANGA','JINJA','JINJA CITY','MAYUGE','LUUKA'],
+  kamuli:['KAMULI','KALIRO','BUYENDE'],
+  bugiri:['BUGIRI','NAMUTUMBA','NAMAYINGO','BUGWERI'],
+  central:['MUKONO','BUIKWE','KAYUNGA']
+};
+const CLUSTER_LABEL = { iganga:'Iganga Cluster', kamuli:'Kamuli Cluster', bugiri:'Bugiri Cluster', central:'Central Cluster', all:'All Clusters' };
+const fmt = n => (n==null||isNaN(n)) ? '0' : Math.round(Number(n)).toLocaleString();
+function ugx(n){ n=Number(n)||0; if(n>=1e9) return 'UGX '+(n/1e9).toFixed(2)+'B'; if(n>=1e6) return 'UGX '+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K'; return 'UGX '+fmt(n); }
+
+// Monday of the current week + Sunday
+function weekBounds(){
+  const d=new Date(); const day=(d.getDay()+6)%7; // 0=Mon
+  const mon=new Date(d); mon.setDate(d.getDate()-day);
+  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  const iso=x=>x.toISOString().slice(0,10);
+  return { from:iso(mon), to:iso(sun) };
+}
+function prettyDate(s){ if(!s) return ''; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+
+function sec(color, icon, title, bodyHtml){
+  return '<section class="card sec"><h2><span class="ic" style="background:'+color+'"><i class="fas '+icon+'"></i></span>'+title+'</h2>'+bodyHtml+'</section>';
+}
+
+function buildNarrative(d, clusterLabel){
+  const p=d.profiling||{}, dist=d.distribution||{}, prod=d.production||{}, poul=d.poultry||{}, hs=d.hort_sales||{}, isla=d.isla||{}, lev=d.leverage||{};
+  const trBy=d.training_by||[]; const trained=d.training_total||0;
+  let out='';
+
+  // Profiling & SHG Formation
+  out += sec('var(--amber)','fa-users','Profiling & SHG Formation',
+    '<p>The '+clusterLabel+' registered <b>'+fmt(p.shgs_formed)+' SHGs</b> during the period, profiling a total of <b>'+fmt(p.youth_profiled)+' youth</b> ('+fmt(p.female_profiled)+' female, '+fmt(p.male_profiled)+' male).</p>'+
+    '<div class="chips"><span class="chip">SHGs formed <b>'+fmt(p.shgs_formed)+'</b></span><span class="chip">Youth profiled <b>'+fmt(p.youth_profiled)+'</b></span><span class="chip">Female <b>'+fmt(p.female_profiled)+'</b></span><span class="chip">Male <b>'+fmt(p.male_profiled)+'</b></span></div>');
+
+  // Training
+  let trRows = trBy.slice(0,10).map(t=>'<tr><td>'+(t.type||'—')+'</td><td class="n">'+fmt(t.n)+'</td></tr>').join('');
+  if(!trRows) trRows='<tr><td colspan="2" class="loading">No trainings recorded.</td></tr>';
+  out += sec('var(--blue)','fa-chalkboard-user','Training by Frontliners',
+    '<p>A total of <b>'+fmt(trained)+' youth</b> were trained across '+fmt(trBy.length)+' training areas. Breakdown by area:</p>'+
+    '<table class="trtable"><tbody>'+trRows+'</tbody></table>');
+
+  // Distribution
+  out += sec('var(--green-2)','fa-box-open','Distribution to Participants',
+    '<p><b>'+fmt(dist.lines)+' distribution lines</b> reached <b>'+fmt(dist.participants)+' participants</b> across <b>'+fmt(dist.shgs)+' SHGs</b> during the period.</p>');
+
+  // Production & Marketing
+  out += sec('var(--green)','fa-seedling','Production & Marketing',
+    '<p>In production, <b>'+fmt(prod.youth)+' youth</b> from <b>'+fmt(prod.shgs)+' SHGs</b> were active across '+fmt(prod.districts)+' districts ('+(prod.district_list||'—')+'). '+
+    'Horticulture/oilseed marketing engaged <b>'+fmt(hs.youth)+' youth sellers</b> generating <b>'+ugx(hs.value)+'</b>.</p>'+
+    '<div class="chips"><span class="chip">Prod. youth <b>'+fmt(prod.youth)+'</b></span><span class="chip">Prod. SHGs <b>'+fmt(prod.shgs)+'</b></span><span class="chip">Hort. sales <b>'+ugx(hs.value)+'</b></span></div>');
+
+  // Poultry Sales
+  out += sec('var(--amber)','fa-egg','Poultry Sales',
+    '<p><b>'+fmt(poul.birds_sold)+' birds</b> were sold by <b>'+fmt(poul.youth)+' youth</b> across <b>'+fmt(poul.shgs)+' SHGs</b>, earning <b>'+ugx(poul.value)+'</b>.</p>');
+
+  // Access to Finance / ISLA
+  out += sec('var(--purple)','fa-piggy-bank','Access to Finance (ISLA)',
+    '<p><b>'+fmt(isla.shgs)+' SHGs</b> mobilized <b>'+ugx(isla.savings)+'</b> in youth savings, with <b>'+ugx(isla.loans_value)+'</b> disbursed across '+fmt(isla.loans_count)+' loans.</p>'+
+    '<div class="chips"><span class="chip">Savings <b>'+ugx(isla.savings)+'</b></span><span class="chip">Loans given <b>'+ugx(isla.loans_value)+'</b></span><span class="chip">Loans count <b>'+fmt(isla.loans_count)+'</b></span></div>');
+
+  // Leverage
+  out += sec('var(--teal)','fa-handshake','Leverage Contributions',
+    '<p>Local leverage contributions totalled <b>'+ugx(lev.amount)+'</b> during the reporting period.</p>');
+
+  document.getElementById('narrative').innerHTML = out;
+  // KPIs
+  document.getElementById('kTrained').textContent = fmt(trained);
+  document.getElementById('kShgs').textContent = fmt(p.shgs_formed);
+  document.getElementById('kSavings').textContent = ugx(isla.savings);
+  document.getElementById('kLev').textContent = ugx(lev.amount);
+}
+
+let loading=false;
+async function load(){
+  if(loading) return; loading=true;
+  const cl=document.getElementById('cluster').value;
+  const from=document.getElementById('from').value;
+  const to=document.getElementById('to').value;
+  const districts=CLUSTER_DISTRICTS[cl]||[];
+  const label=CLUSTER_LABEL[cl]||'Cluster';
+  document.getElementById('heroTtl').textContent=label;
+  document.getElementById('heroMeta').textContent='Loading…';
+  const qs=new URLSearchParams();
+  if(districts.length) qs.set('districts', districts.join(','));
+  if(from) qs.set('from', from);
+  if(to) qs.set('to', to);
+  try{
+    const res=await fetch('/api/weekly?'+qs.toString());
+    const d=await res.json();
+    const range = (from&&to) ? (prettyDate(from)+' → '+prettyDate(to)) : 'All available data';
+    document.getElementById('heroMeta').textContent = range;
+    buildNarrative(d, label);
+    document.getElementById('noteBox').innerHTML='';
+  }catch(e){
+    document.getElementById('heroMeta').textContent='Error loading data';
+    document.getElementById('narrative').innerHTML='<section class="card sec"><p class="loading">Failed to load weekly report.</p></section>';
+  }
+  loading=false;
+}
+document.getElementById('apply').addEventListener('click', load);
+document.getElementById('cluster').addEventListener('change', load);
+document.getElementById('thisweek').addEventListener('click', ()=>{ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; load(); });
+document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
+// default to current week
+(function(){ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; })();
+load();
+</script>
+</body>
+</html>`;
+}
