@@ -271,8 +271,18 @@ All six master tables appear as selectable entity sets and refresh automatically
   - `GET  /api/isla` — KPI + grouped table + slicer lists (filters: `districts,profilers,from,to`)
   - `GET  /api/isla/options` — lightweight slicer option lists
   - `POST /api/isla/refresh` — rebuild `isla_final_rows`
+- `GET  /production` — **Production (Horticulture)** and `GET /sales` — **Sales in Horticulture/Oilseeds**. Both from `production_and_marketing_tool`: production filters `pdn_level='production'`, sales filters `pdn_level='marketing'`, joined to participants + `shg_profiling_form`. Materialized as `production_rows` / `sales_rows`.
+  - `GET /api/production` / `GET /api/sales` — KPIs + table grouped by `shg_name` + slicer lists (filters: `districts,valuechains,from,to`); `/options`; `POST .../refresh`.
+- `GET  /poultry-sales` — **POULTRY SALES** (`production_and_marketing_tool` filtered `pdn_level='marketing'` **AND** `value_chain='poultry'`, joined to participants + `shg_profiling_form`). Materialized as `poultry_sales_rows` (2,911 rows). RPCs `refresh_poultry_sales_rows()`, `poultry_sales_dash()`, `poultry_sales_options()`.
+  - DAX parity: `Marketing_Table = FILTER(production_and_marketing_tool, [pdn_level]="marketing")` restricted to the poultry value chain.
+  - KPIs: **Unique Participants** = `DISTINCTCOUNT(shg_participant_id)`, **New Participants** = distinct participants whose `activity_date` month equals their first poultry-marketing month, **Unique SHGs** = `DISTINCTCOUNT(shg_id)`.
+  - Table columns (grouped by `shg_name`): Sum of qty_produced, Sum of poultry_sold, Sum of avg_bird_price, Sum of total_poultry_value, Sum of net_poultry, First district_name, First other_poultry, First profilers_name (+ grand-total row).
+  - Slicers (filters): **Date range** (`activity_date`), **district** (`districts`), **poultry type** (`poultry`), **profile_name** (`profilers`).
+  - `GET  /api/poultry-sales` — KPIs + grouped table + slicer lists (filters: `districts,poultry,profilers,from,to`)
+  - `GET  /api/poultry-sales/options` — lightweight slicer option lists
+  - `POST /api/poultry-sales/refresh` — rebuild `poultry_sales_rows`
 - **Dim_Profile** — `SUMMARIZE(participants filtered to name_ip='HEIFER', participant_id, MAX(...))`; materialized as `dim_profile` (RPC `refresh_dim_profile()`). Participant dimension (full_name, district, sex, disability, shg_name) for profiling analysis.
-- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,frontliners`)
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,frontliners`)
 
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document
