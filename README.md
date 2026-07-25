@@ -72,6 +72,15 @@ every 5 minutes:
    frontliners`, 700k+ rows) once per hour (on the `:00`/`:05` tick) to spare
    the DB. Log: `/home/ubuntu/mis-cron.log`.
 
+**Gotcha fixed (Monthly New Youth HTTP 503):** `newYouthDash` streamed every
+`at_rows` row (~780k) into the Worker and reduced in TS, which intermittently
+blew the Worker CPU/memory budget once the backfill passed ~600k rows. Added a
+Postgres-native fast path (`newYouthDashPg`, used on Hyperdrive) that computes
+the first-touch model in SQL (CTEs) and returns only aggregated KPIs + by-date
+series. Response dropped ~6.5s → ~0.1s and the 503s are gone; numbers unchanged.
+`clusterTrainings` was already SQL-aggregated — its numbers simply track the
+`at_rows` backfill and finalise as it completes.
+
 **Gotcha fixed (case sensitivity):** MIS returns `pdn_level` as
 `'Production'`/`'Marketing'` (capitalized) whereas the old manual uploads used
 lowercase. `refresh_production_rows` / `refresh_sales_rows` filtered on the
