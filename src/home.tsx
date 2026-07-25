@@ -188,6 +188,21 @@ ${navSidebar('home')}
         </div>
       </section>
 
+      <!-- Poultry Sales -->
+      <section class="grp" id="grp-poultrysales">
+        <div class="grp-head">
+          <span class="grp-ico" style="background:#e8590c"><i class="fas fa-kiwi-bird"></i></span>
+          <h2 class="font-bold text-[15px] flex-1">Poultry Sales</h2>
+          <a class="open-link" href="/poultry-sales">Open <i class="fas fa-arrow-right ml-1"></i></a>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-4">
+          <div class="kpi"><div class="n skel" data-f="poultrysales.new_participants">…</div><div class="l">New Participants</div></div>
+          <div class="kpi"><div class="n skel" data-f="poultrysales.unique_participants">…</div><div class="l">Unique Participants</div></div>
+          <div class="kpi"><div class="n skel" data-f="poultrysales.unique_shgs">…</div><div class="l">Unique SHGs</div></div>
+          <div class="kpi"><div class="n skel" data-f="poultrysales.districts">…</div><div class="l">Districts</div></div>
+        </div>
+      </section>
+
     </div>
 
     <footer class="text-center text-xs text-slate-400 py-8">
@@ -284,6 +299,13 @@ ${navSidebar('home')}
         setF('sales.unique_participants', d.unique_participants);
         setF('sales.unique_shgs', d.unique_shgs);
         setF('sales.districts', arrLen(d.districts));
+      },
+      async poultrysales(){
+        const d = await j('/api/poultry-sales');
+        setF('poultrysales.new_participants', d.new_participants);
+        setF('poultrysales.unique_participants', d.unique_participants);
+        setF('poultrysales.unique_shgs', d.unique_shgs);
+        setF('poultrysales.districts', arrLen(d.districts));
       },
     };
 

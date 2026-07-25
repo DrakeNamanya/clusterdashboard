@@ -14,6 +14,7 @@ import {
   islaDash, islaOptions, refreshIsla,
   productionDash, productionOptions, refreshProduction,
   salesDash, salesOptions, refreshSales, Env,
+  poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
 } from './store';
 import {
@@ -31,6 +32,7 @@ import { renderShgProfiling } from './shgprofiling';
 import { renderIsla } from './isla';
 import { renderProduction } from './production';
 import { renderSales } from './sales';
+import { renderPoultrySales } from './poultry_sales';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -760,6 +762,40 @@ app.post('/api/sales/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Poultry Sales (production_and_marketing_tool: marketing + poultry) -----
+app.get('/poultry-sales', async (c) => {
+  let opts = {};
+  try { opts = await poultrySalesOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderPoultrySales(baseUrl(c.req.url), opts));
+});
+
+// Aggregated data feed (KPIs + table grouped by shg_name + slicers).
+app.get('/api/poultry-sales', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await poultrySalesDash(storeEnv(c), {
+    districts: split(q.districts),
+    poultry: split(q.poultry),
+    profilers: split(q.profilers),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Lightweight slicer option lists.
+app.get('/api/poultry-sales/options', async (c) => {
+  const data = await poultrySalesOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Rebuild the poultry_sales_rows table (run after uploads / imports change data).
+app.post('/api/poultry-sales/refresh', async (c) => {
+  const n = await refreshPoultrySales(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
 // Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
@@ -780,6 +816,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('isla'))         jobs.push({ key: 'isla',         fn: () => refreshIsla(env) });
   if (want('production'))   jobs.push({ key: 'production',   fn: () => refreshProduction(env) });
   if (want('sales'))        jobs.push({ key: 'sales',        fn: () => refreshSales(env) });
+  if (want('poultrysales')) jobs.push({ key: 'poultrysales', fn: () => refreshPoultrySales(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 

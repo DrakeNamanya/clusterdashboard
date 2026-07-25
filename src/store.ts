@@ -1941,6 +1941,48 @@ export async function refreshSales(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_sales_rows');
 }
 
+// --------------------------------------------------------------------------
+// Poultry Sales — production_and_marketing_tool filtered pdn_level='marketing'
+// AND value_chain='poultry', joined to participants + shg profiling.
+// Filters: district, poultry type, profilers_name, activity_date range.
+// --------------------------------------------------------------------------
+export interface PoultrySalesFilters {
+  districts?: string[];
+  poultry?: string[];
+  profilers?: string[];
+  from?: string;
+  to?: string;
+}
+
+/** Dashboard aggregate: KPIs + table (grouped by shg_name) + slicers. [Neon] */
+export async function poultrySalesDash(
+  env: Env,
+  opts: PoultrySalesFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'poultry_sales_dash',
+    '$1::text[], $2::text[], $3::text[], $4::date, $5::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.poultry && opts.poultry.length ? opts.poultry : null,
+      opts.profilers && opts.profilers.length ? opts.profilers : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+/** Lightweight slicer option lists (district + poultry type + profilers). [Neon] */
+export async function poultrySalesOptions(env: Env): Promise<any> {
+  return neonRpcJson(env, 'poultry_sales_options', '', []);
+}
+
+/** Rebuild poultry_sales_rows from records (call after uploads). [Neon] */
+export async function refreshPoultrySales(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_poultry_sales_rows');
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   if (usesNeon(env, schema.key)) {
