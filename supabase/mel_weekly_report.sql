@@ -110,11 +110,16 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
   isla_tot AS (
+    -- MEL rules (per client):
+    --   amount saved       = SUM(savings_value)
+    --   youth saving       = SUM(youth_group_saving), each row capped: >35 -> 30 (outlier)
+    --   loans given (value)= SUM(youth_loans_value_given)
+    --   youth who got loans= SUM(loans), each row capped: >35 -> 30 (outlier)
     SELECT COUNT(DISTINCT shg_id)::int AS shgs,
-           COALESCE(SUM(youth_savings_value),0)::numeric AS savings,
-           COALESCE(SUM(youth_group_saving),0)::int AS savers,
-           COALESCE(SUM(loans_value_given),0)::numeric AS loans_value,
-           COALESCE(SUM(loans),0)::int AS loans_count
+           COALESCE(SUM(savings_value),0)::numeric AS savings,
+           COALESCE(SUM(CASE WHEN youth_group_saving > 35 THEN 30 ELSE youth_group_saving END),0)::int AS savers,
+           COALESCE(SUM(youth_loans_value_given),0)::numeric AS loans_value,
+           COALESCE(SUM(CASE WHEN loans > 35 THEN 30 ELSE loans END),0)::int AS loans_count
     FROM isla
   ),
   -- ---------- LEVERAGE ----------

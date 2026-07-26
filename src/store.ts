@@ -1213,9 +1213,25 @@ export async function clusterTrainings(
     .bind(...params)
     .all<{ label: string; value: number }>();
 
-  const districts = await db
-    .prepare(`SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL ORDER BY district`)
-    .all<{ district: string }>();
+  // Per-district trained counts (distinct participants) so the home page's
+  // "Performance by District" table has real figures, not just names.
+  const districtRows = await db
+    .prepare(
+      `SELECT district AS district,
+              COUNT(DISTINCT CASE WHEN has_date=1 AND participant_id IS NOT NULL THEN participant_id END) AS trained,
+              COUNT(DISTINCT CASE WHEN sex='Female' THEN participant_id END) AS female
+       FROM at_rows ${clause}
+       ${clause ? 'AND' : 'WHERE'} district IS NOT NULL
+       GROUP BY district ORDER BY trained DESC`
+    )
+    .bind(...params)
+    .all<{ district: string; trained: number; female: number }>();
+
+  const districtStats = (districtRows.results || []).map((d) => ({
+    district: d.district,
+    trained: Number(d.trained || 0),
+    female: Number(d.female || 0),
+  }));
 
   return {
     total_trained: Number(kpi?.total_trained ?? 0),
@@ -1225,7 +1241,10 @@ export async function clusterTrainings(
     pwds_trained: Number(kpi?.pwds_trained ?? 0),
     female_pwds: Number(kpi?.female_pwds ?? 0),
     by_training_type: (bars.results || []).map((b) => ({ label: b.label, value: Number(b.value) })),
-    districts: (districts.results || []).map((d) => d.district),
+    // richer per-district stats for the home Performance-by-District table
+    district_stats: districtStats,
+    // keep the plain name list for any callers that expect strings
+    districts: districtStats.map((d) => d.district),
   };
   } finally {
     if (onCrdb && db.close) await db.close();

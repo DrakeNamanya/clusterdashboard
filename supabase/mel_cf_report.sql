@@ -17,6 +17,25 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
+-- NAME NORMALISER (Level-1 cleaning)
+--   lowercase -> strip everything except a-z and space -> collapse runs of
+--   whitespace to a single space -> trim.  This merges the common dirty-data
+--   variants of the SAME person:
+--     "Akunyo  Beatrice" / "akunyo   beatrice" / "Akunyo. Beatrice" -> "akunyo beatrice"
+--     "Ajiambo Catherine Owino." -> "ajiambo catherine owino"
+--   It deliberately does NOT do fuzzy/typo merging (that is handled by the
+--   user-driven multi-select merge in the UI).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.mel_norm_name(txt text)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT trim(regexp_replace(
+           regexp_replace(lower(coalesce(txt,'')), '[^a-z ]', ' ', 'g'),
+           '\s+', ' ', 'g'));
+$$;
+GRANT EXECUTE ON FUNCTION public.mel_norm_name(text) TO anon, service_role;
+
+-- ---------------------------------------------------------------------------
 -- STAFF LIST  (distinct normalised CF names, optionally filtered by district)
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS public.mel_cf_report_staff(text[]);
@@ -30,16 +49,19 @@ BEGIN
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH allnames AS (
-    SELECT trim(lower(profiler_name))  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-    UNION ALL SELECT trim(lower(profilers_name)), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT trim(lower(profilers_name)), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT trim(lower(profilers_name)), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT trim(lower(profilers_name)), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT trim(lower(submitter_name)), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
+    SELECT public.mel_norm_name(profiler_name)  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
+    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT public.mel_norm_name(submitter_name), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
   ),
   filtered AS (
     SELECT nm, count(*) c FROM allnames
     WHERE nm <> '' AND nm ~ '[a-z]'          -- must contain a letter (drop phone-only)
+      AND nm ~ ' '                           -- must have at least 2 words (drop single-word junk like "a","aman")
+      -- drop obvious non-person / group entries
+      AND nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
       AND (v_dl IS NULL OR d = ANY(v_dl))
     GROUP BY nm
   )
@@ -62,10 +84,22 @@ CREATE OR REPLACE FUNCTION public.mel_cf_report(
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
   v jsonb;
-  v_dl  text[];
-  v_key text;
+  v_dl   text[];
+  v_keys text[];
+  v_label text;
 BEGIN
-  v_key := trim(lower(p_staff));
+  -- p_staff may be a single normalised key OR several joined by '|' (the UI
+  -- multi-select merge sends the chosen keys pipe-joined).  Normalise each.
+  SELECT array_agg(DISTINCT public.mel_norm_name(x))
+    INTO v_keys
+    FROM unnest(string_to_array(coalesce(p_staff,''), '|')) x
+   WHERE public.mel_norm_name(x) <> '';
+  IF v_keys IS NULL OR array_length(v_keys,1) IS NULL THEN v_keys := ARRAY['']; END IF;
+  -- Display label: initcap of the first key (merged staff share one card).
+  v_label := initcap(v_keys[1]);
+  IF array_length(v_keys,1) > 1 THEN
+    v_label := v_label || ' (+' || (array_length(v_keys,1)-1)::text || ' merged)';
+  END IF;
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
@@ -73,7 +107,7 @@ BEGIN
   -- ---------- SHG PROFILING ----------
   prof AS (
     SELECT * FROM shg_profiling_rows
-    WHERE trim(lower(profiler_name)) = v_key
+    WHERE public.mel_norm_name(profiler_name) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR created_date >= p_date_from)
       AND (p_date_to   IS NULL OR created_date <= p_date_to)
@@ -89,7 +123,7 @@ BEGIN
   -- ---------- TRAININGS BY FRONTLINER (at_rows keyed on data_collector) ----------
   tr AS (
     SELECT participant_id, training_type FROM at_rows
-    WHERE trim(lower(data_collector)) = v_key
+    WHERE public.mel_norm_name(data_collector) = ANY(v_keys)
       AND has_date=1 AND day ~ '^\d{4}-\d{2}-\d{2}'
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR (day)::date >= p_date_from)
@@ -100,7 +134,7 @@ BEGIN
   -- ---------- DISTRIBUTION (submitted_by = system username; matched if present) ----------
   dist AS (
     SELECT * FROM distribution_rows
-    WHERE trim(lower(submitted_by)) = v_key
+    WHERE public.mel_norm_name(submitted_by) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
@@ -110,7 +144,7 @@ BEGIN
   -- ---------- PRODUCTION ----------
   prod AS (
     SELECT * FROM production_rows
-    WHERE trim(lower(profilers_name)) = v_key AND lower(pdn_level)='production'
+    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys) AND lower(pdn_level)='production'
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -120,7 +154,7 @@ BEGIN
   -- ---------- SALES HORTICULTURE ----------
   hs AS (
     SELECT * FROM sales_rows
-    WHERE trim(lower(profilers_name)) = v_key
+    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -130,7 +164,7 @@ BEGIN
   -- ---------- SALES POULTRY ----------
   ps AS (
     SELECT * FROM poultry_sales_rows
-    WHERE trim(lower(profilers_name)) = v_key
+    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -141,18 +175,24 @@ BEGIN
   -- ---------- ISLA SAVINGS ----------
   isla AS (
     SELECT * FROM isla_final_rows
-    WHERE trim(lower(profilers_name)) = v_key
+    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
+  -- MEL rules (per client): amount saved = SUM(savings_value);
+  -- loans given (value) = SUM(youth_loans_value_given);
+  -- youth saving = SUM(youth_group_saving) capped per row (>35 -> 30);
+  -- youth who got loans = SUM(loans) capped per row (>35 -> 30).
   isla_t AS ( SELECT COUNT(DISTINCT shg_id)::int AS isla_shgs,
-                     COALESCE(SUM(youth_savings_value),0)::numeric AS savings,
-                     COALESCE(SUM(loans_value_given),0)::numeric AS loans_value FROM isla ),
+                     COALESCE(SUM(savings_value),0)::numeric AS savings,
+                     COALESCE(SUM(youth_loans_value_given),0)::numeric AS loans_value,
+                     COALESCE(SUM(CASE WHEN youth_group_saving > 35 THEN 30 ELSE youth_group_saving END),0)::int AS youth_savers,
+                     COALESCE(SUM(CASE WHEN loans > 35 THEN 30 ELSE loans END),0)::int AS youth_loans FROM isla ),
   -- ---------- LOCAL LEVERAGE ----------
   lev AS (
     SELECT * FROM local_leverage_rows
-    WHERE trim(lower(submitter_name)) = v_key
+    WHERE public.mel_norm_name(submitter_name) = ANY(v_keys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR date_created >= p_date_from)
       AND (p_date_to   IS NULL OR date_created <= p_date_to)
@@ -171,7 +211,7 @@ BEGIN
     ) q WHERE d IS NOT NULL
   )
   SELECT jsonb_build_object(
-    'staff_name', initcap(v_key),
+    'staff_name', v_label,
     'districts',  (SELECT initcap(lower(districts)) FROM ctx),
     'profiling',  (SELECT to_jsonb(prof_t) FROM prof_t),
     'training',   (SELECT to_jsonb(tr_t)   FROM tr_t),

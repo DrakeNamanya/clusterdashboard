@@ -165,10 +165,12 @@ as $$
     select
       shg_name,
       sum(savings_value)           as savings_value,
-      sum(youth_group_saving)      as youth_group_saving,
+      -- youth saving capped per activity row (>35 -> 30) per MEL outlier rule
+      sum(case when youth_group_saving > 35 then 30 else youth_group_saving end) as youth_group_saving,
       sum(youth_loans_value_given) as youth_loans_value_given,
       sum(total_fund)              as total_fund,
-      sum(loans)                   as loans,
+      -- youth who got loans capped per activity row (>35 -> 30) per MEL outlier rule
+      sum(case when loans > 35 then 30 else loans end) as loans,
       min(profilers_name)          as profilers_name,   -- First (alphabetical, like PBI First)
       min(district_shg)            as district_shg
     from f
@@ -190,15 +192,20 @@ as $$
         'district_shg', district_shg
       ) order by shg_name), '[]'::jsonb)
       from (select * from g order by shg_name limit p_limit) t),
-    -- Grand-total row (all filtered rows)
+    -- Grand-total row (all filtered rows).
+    -- MEL outlier rules (per client): per-row `loans` and `youth_group_saving`
+    -- capped at >35 -> 30 before summing.  savings_value / total_fund /
+    -- youth_loans_value_given are pure sums.  NOTE these grand totals are computed
+    -- from the raw filtered rows `f` (not the shg_name-grouped `g`) so the row-level
+    -- outlier cap is applied correctly.
     'total', (select jsonb_build_object(
-        'shg_count', count(*),
+        'shg_count', (select count(distinct shg_id) from f where shg_id is not null),
         'savings_value', coalesce(sum(savings_value),0),
-        'youth_group_saving', coalesce(sum(youth_group_saving),0),
+        'youth_group_saving', coalesce(sum(case when youth_group_saving > 35 then 30 else youth_group_saving end),0),
         'youth_loans_value_given', coalesce(sum(youth_loans_value_given),0),
         'total_fund', coalesce(sum(total_fund),0),
-        'loans', coalesce(sum(loans),0)
-      ) from g),
+        'loans', coalesce(sum(case when loans > 35 then 30 else loans end),0)
+      ) from f),
     -- Slicer lists (global) — District_SHG (with (Blank)) + Profilers_name
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(district_shg),''),'(Blank)') as d

@@ -230,11 +230,14 @@ All six master tables appear as selectable entity sets and refresh automatically
   - **8 colour-themed summary cards** (Cluster Trainings, Monthly New Youth, Frontliners,
     Distribution to Participants, Distribution to SHGs, SHG Profiling, ISLA Savings,
     Production) — each with a headline figure + 3 sub-metrics, linking to the full dashboard.
-  - a **bottom row**: Performance by District table (ranked, achievement bars), a Trends
-    Overview line chart (daily new-reach), and a Recent Activity feed.
+  - a **bottom row**: Performance by District table (ranked, achievement bars — now
+    driven by real per-district trained counts via `cluster-trainings.district_stats`),
+    a Trends Overview line chart (daily new-reach, rendered in a fixed-height wrapper so
+    the responsive Chart.js canvas always draws), and a Recent Activity feed.
   Each panel fetches that dashboard's own API in the browser, so the figures always match
-  the source dashboard. Charts use Chart.js. *(Production-target and reach-target tables
-  are planned — placeholders only for now.)*
+  the source dashboard. Charts use Chart.js. The SAYE sidebar/hero greens were lightened
+  (~10%) for readability. *(Production-target and reach-target tables are planned —
+  placeholders only for now.)*
 - **Data Tools & OData** (`GET /tools`, alias `/upload`): the sheet-upload, OData-import,
   Fill-docId, Rebuild-dashboards and Power BI feed tools (formerly the site root).
 
@@ -306,6 +309,74 @@ All six master tables appear as selectable entity sets and refresh automatically
 - **Dim_Profile** — `SUMMARIZE(participants filtered to name_ip='HEIFER', participant_id, MAX(...))`; materialized as `dim_profile` (RPC `refresh_dim_profile()`). Participant dimension (full_name, district, sex, disability, shg_name) for profiling analysis.
 - `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,itemsnotsold,localleverage,frontliners`)
 
+### Automated Reports (Targets vs Achieved · Weekly · CF Report Card)
+Three automated report deliverables driven by **cluster + date** filters. Cluster
+→ district mapping (single source of truth in `src/clusters.ts`):
+**Iganga** = Iganga, Jinja, Jinja City, Mayuge, Luuka · **Kamuli** = Kamuli,
+Kaliro, Buyende · **Bugiri** = Bugiri, Namutumba, Namayingo, Bugweri ·
+**Central** = Mukono, Buikwe, Kayunga. Targets are currently loaded for the
+**Iganga cluster only** (from `Targets.xlsx` + `Y3_Season_production.xlsx`);
+other clusters show achieved figures with blank targets until their targets are
+added.
+
+- `GET  /report` — **Report Dashboard — Targets vs Achieved** (SAYE green theme).
+  Compares **Production**, **Reach** and **Mobilization** targets vs achieved,
+  per district + a totals row, with progress bars and % achievement pills.
+  - **Production achieved** = Youth in Production (`production_rows`, value chains
+    Horticulture + Oil seeds) + Livestock Distribution (`distribution_rows`,
+    livestock, unit = Number), distinct youth. **Target** = Year-3 production
+    target (`mel_production_targets`), with a Season A/B expected-jobs breakdown.
+  - **Reach achieved** = New Youth Reached (distinct participant at first training
+    date in `at_rows`). **Target** = Year-3 cumulative reach target
+    (`mel_reach_targets`, Oct 2025 – Sep 2026); total 30,290.
+  - **Mobilization achieved** = SHG Profiling (sum of `total`). **Target** =
+    Monthly_SHGs × 25 participants × 12 months.
+  - **Default date range = 01 Oct 2025 – 30 Sep 2026** (the reporting year), so
+    achieved figures are counted within that window and tie out exactly to the
+    source dashboards (`/monthly-new-youth` reach, `/shg-profiling` mobilization).
+    Leaving the dates blank previously produced all-time totals that did not match
+    the date-filtered dashboards.
+  - `GET /api/report?districts=&from=&to=` → `mel_report_dash` RPC (jsonb:
+    `reach[]`, `mobilization[]`, `production[]`, `production_seasons[]`, `totals`,
+    `date_bounds`).
+- `GET  /weekly-report` — **Weekly Report** (Mon → Sun narrative, shared each
+  Sunday). Summarises **all indicators per cluster** as "Weekly Highlights":
+  Profiling & SHG Formation, Training by Frontliners (broken down by
+  `training_type`), Distribution, Production & Marketing, Poultry Sales, Access
+  to Finance (ISLA), Leverage Contributions. Defaults to the current Mon–Sun
+  week; **This week** / **All time** shortcuts.
+  - `GET /api/weekly?districts=&from=&to=` → `mel_weekly_report` RPC.
+- `GET  /cf-report` — **Community Facilitator (CF) Report Card**. Cluster +
+  **field-staff (CF)** + date filters. Report card matching the SAYE design:
+  branded header, identity row (Cluster / CF / Report Period / Days), KPI tiles
+  (activity areas, youth reached, SHGs reached, value mobilized, overall %),
+  an 8-row activity-area table (Trainings, Distribution, SHG Profiling, ISLA,
+  Production, Sales Horticulture, Sales Poultry, Local Leverage) with achieved
+  figures + performance grade, Key Highlights, and an Overall Performance Grade
+  gauge (A–E). CF identity keys on the **real human names** in `profiler_name`
+  (profiling) / `profilers_name` (production/poultry/sales/isla) / `submitter_name`
+  (leverage). Names are **auto-cleaned (Level-1)** via `mel_norm_name()`:
+  lowercase → strip punctuation → collapse whitespace, plus obvious non-person
+  entries (`… group`, `… association`, single-word junk) are dropped. This merged
+  the Iganga-cluster facilitator list from **312 → 246**. Trainings & distribution
+  use system usernames and are not name-matchable, so those two rows show 0 unless
+  the CF name happens to appear there.
+  - **Multi-select merge**: the facilitator picker is a searchable checkbox list —
+    tick **several** spelling variants of the same person to merge them into one
+    report card. The chosen keys are pipe-joined (`staff=a|b|c`) and `mel_cf_report`
+    matches on `mel_norm_name(col) = ANY(keys)`. The card title shows
+    `Name (+N merged)`.
+  - `GET /api/cf-report/staff?districts=` → `mel_cf_report_staff` (cleaned
+    facilitator list for the cluster, with activity counts).
+  - `GET /api/cf-report?staff=&districts=&from=&to=` → `mel_cf_report` RPC
+    (`staff` may be a single key or pipe-joined keys for merging).
+
+**ISLA loan/savings rules** (applied in `isla_dash`, `mel_weekly_report`,
+`mel_cf_report`): *amount saved* = `SUM(savings_value)`; *loans given (value)* =
+`SUM(youth_loans_value_given)`; *youth who got loans* = `SUM(loans)` with each row
+capped (>35 → 30 outlier rule); *youth saving* = `SUM(youth_group_saving)` with the
+same per-row cap. The outlier cap is applied on the raw activity rows before summing.
+
 ### OData v4 (for Power BI)
 - `GET /odata/` — service document
 - `GET /odata/$metadata` — CSDL metadata (XML)
@@ -372,7 +443,7 @@ complete instead of failing mid-way.
 - **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-24
+- **Last Updated**: 2026-07-26
   - Migrated production DB from CockroachDB to Oracle-hosted Postgres via Hyperdrive (workerd rejects self-signed cert → Hyperdrive terminates TLS).
   - Built MIS-direct multi-view sync (5 master views + all_trainees) with idempotent `_id` dedup and `replace` mode.
   - Fixed duplicate rows (isla_form 17,736→9,117; production_and_marketing_tool 34,648→26,917) and refreshed youth_profiling (35,500→114,675) via replace-mode sync.

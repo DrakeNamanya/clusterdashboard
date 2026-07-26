@@ -75,13 +75,13 @@ export function renderReport(base: string): string {
 <body>
   <div class="wrap">
     <h1><i class="fas fa-bullseye" style="margin-right:8px"></i>Report Dashboard — Targets vs Achieved</h1>
-    <p class="sub">Production, Reach and Mobilization performance against Year-3 targets. Filter by cluster and date.</p>
+    <p class="sub">Production, Reach and Mobilization performance against Year-3 targets. Filter by cluster and date. <b>Reporting year: 01 Oct 2025 – 30 Sep 2026</b> (default) — achieved figures are counted within the selected date range, so they match the source dashboards (Monthly New Youth, SHG Profiling) when filtered to the same period.</p>
 
     <div class="filters">
       <div class="fld"><label>Cluster</label>
         <select id="cluster">${clusterOptions('iganga')}</select></div>
-      <div class="fld"><label>Date from</label><input type="date" id="from" /></div>
-      <div class="fld"><label>Date to</label><input type="date" id="to" /></div>
+      <div class="fld"><label>Date from</label><input type="date" id="from" value="2025-10-01" /></div>
+      <div class="fld"><label>Date to</label><input type="date" id="to" value="2026-09-30" /></div>
       <button class="btn" id="apply"><i class="fas fa-filter"></i> Apply</button>
       <button class="btn ghost" id="reset">Reset</button>
       <div id="stamp" style="margin-left:auto;font-size:11px;color:var(--muted)"></div>
@@ -264,7 +264,7 @@ async function load(){
   loading=false;
 }
 document.getElementById('apply').addEventListener('click', load);
-document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; document.getElementById('cluster').value='iganga'; load(); });
+document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value='2025-10-01'; document.getElementById('to').value='2026-09-30'; document.getElementById('cluster').value='iganga'; load(); });
 document.getElementById('cluster').addEventListener('change', load);
 load();
 </script>

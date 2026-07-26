@@ -91,7 +91,7 @@ export function renderWeeklyReport(base: string): string {
     <div class="kstrip">
       <div class="card kcard"><div class="kt">Youth Reached / Trained</div><div class="kv" id="kTrained">—</div><div class="ks">distinct participants trained</div></div>
       <div class="card kcard"><div class="kt">SHGs Formed</div><div class="kv" id="kShgs">—</div><div class="ks">new groups profiled</div></div>
-      <div class="card kcard"><div class="kt">Savings Mobilized</div><div class="kv" id="kSavings">—</div><div class="ks">UGX (ISLA youth savings)</div></div>
+      <div class="card kcard"><div class="kt">Savings Mobilized</div><div class="kv" id="kSavings">—</div><div class="ks">UGX (ISLA amount saved)</div></div>
       <div class="card kcard"><div class="kt">Leverage Raised</div><div class="kv" id="kLev">—</div><div class="ks">UGX local contributions</div></div>
     </div>
 
@@ -156,8 +156,8 @@ function buildNarrative(d, clusterLabel){
 
   // Access to Finance / ISLA
   out += sec('var(--purple)','fa-piggy-bank','Access to Finance (ISLA)',
-    '<p><b>'+fmt(isla.shgs)+' SHGs</b> mobilized <b>'+ugx(isla.savings)+'</b> in youth savings, with <b>'+ugx(isla.loans_value)+'</b> disbursed across '+fmt(isla.loans_count)+' loans.</p>'+
-    '<div class="chips"><span class="chip">Savings <b>'+ugx(isla.savings)+'</b></span><span class="chip">Loans given <b>'+ugx(isla.loans_value)+'</b></span><span class="chip">Loans count <b>'+fmt(isla.loans_count)+'</b></span></div>');
+    '<p><b>'+fmt(isla.shgs)+' SHGs</b> mobilized <b>'+ugx(isla.savings)+'</b> in savings, with <b>'+ugx(isla.loans_value)+'</b> in loans given to <b>'+fmt(isla.loans_count)+'</b> youth.</p>'+
+    '<div class="chips"><span class="chip">Amount saved <b>'+ugx(isla.savings)+'</b></span><span class="chip">Loans given <b>'+ugx(isla.loans_value)+'</b></span><span class="chip">Youth who got loans <b>'+fmt(isla.loans_count)+'</b></span></div>');
 
   // Leverage
   out += sec('var(--teal)','fa-handshake','Leverage Contributions',

@@ -36,6 +36,20 @@ export function renderCfReport(base: string): string {
     .btn:hover{ background:var(--green-2); }
     .btn.ghost{ background:#fff; color:var(--green); border:1px solid var(--line); }
 
+    /* Multi-select facilitator picker */
+    .staffbox{ border:1px solid var(--line); border-radius:8px; background:#fff; padding:6px; width:340px; max-width:100%; }
+    .staffbox #staffSearch{ border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px; width:100%; box-sizing:border-box; margin-bottom:6px; }
+    .stafflist{ max-height:190px; overflow-y:auto; border-top:1px solid #f0f3f1; }
+    .stafflist label{ display:flex; align-items:center; gap:8px; padding:5px 6px; font-size:12.5px; border-radius:6px; cursor:pointer; text-transform:none; letter-spacing:0; color:var(--ink); font-weight:500; }
+    .stafflist label:hover{ background:var(--lgreen); }
+    .stafflist input[type=checkbox]{ min-width:auto; accent-color:var(--green-2); }
+    .stafflist .cnt{ margin-left:auto; color:var(--muted); font-size:11px; }
+    .staffloading,.staffempty{ color:var(--muted); font-size:12px; padding:10px 6px; text-align:center; }
+    .staffchosen{ display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+    .chip{ background:var(--green); color:#fff; font-size:11px; font-weight:700; padding:3px 8px; border-radius:14px; display:inline-flex; align-items:center; gap:6px; }
+    .chip i{ cursor:pointer; opacity:.85; }
+    .chip i:hover{ opacity:1; }
+
     .cardsheet{ background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:0 4px 18px rgba(30,50,40,.08); overflow:hidden; }
     .chead{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 26px; border-bottom:3px solid var(--green-2); }
     .chead .logo{ width:46px; height:46px; border-radius:12px; background:var(--green); color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px; }
@@ -90,14 +104,21 @@ export function renderCfReport(base: string): string {
   <div class="wrap">
     <div class="filters">
       <div class="fld"><label>Cluster</label><select id="cluster">${clusterOptions('iganga')}</select></div>
-      <div class="fld"><label>Field Staff (CF)</label><select id="staff"><option value="">— Select a facilitator —</option></select></div>
+      <div class="fld" style="flex:1;min-width:280px">
+        <label>Field Staff (CF) — tick one, or several to merge duplicates</label>
+        <div id="staffBox" class="staffbox">
+          <input type="text" id="staffSearch" placeholder="Search facilitator…" autocomplete="off" />
+          <div id="staffList" class="stafflist"><div class="staffloading">Loading…</div></div>
+          <div id="staffChosen" class="staffchosen"></div>
+        </div>
+      </div>
       <div class="fld"><label>Date from</label><input type="date" id="from" /></div>
       <div class="fld"><label>Date to</label><input type="date" id="to" /></div>
       <button class="btn" id="apply"><i class="fas fa-id-badge"></i> Generate</button>
       <button class="btn ghost" id="reset">All time</button>
     </div>
 
-    <div id="noteBox"></div>
+    <div id="noteBox"><div class="note"><i class="fas fa-circle-info"></i> Facilitator names are auto-cleaned (spacing/punctuation). If the same person still appears under two spellings, tick <b>both</b> to merge them into one report card.</div></div>
     <div id="report"><div class="cardsheet"><div class="loading">Select a cluster and a field staff (CF), then click <b>Generate</b>.</div></div></div>
   </div>
 
@@ -121,20 +142,44 @@ function gradeFor(p){
   return {g:'E',lbl:'Needs Improvement',c:'#c0392b',bg:'#fbe4e0'};
 }
 
-// Populate staff dropdown for the chosen cluster
+// -------- Multi-select facilitator picker --------
+let STAFF=[];                 // [{key,name,activities}]
+const CHOSEN=new Map();       // key -> name
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function renderStaffList(){
+  const q=(document.getElementById('staffSearch').value||'').trim().toLowerCase();
+  const box=document.getElementById('staffList');
+  const items=STAFF.filter(s=>!q || s.name.toLowerCase().includes(q));
+  if(!items.length){ box.innerHTML='<div class="staffempty">No facilitators match.</div>'; return; }
+  box.innerHTML=items.slice(0,400).map(s=>{
+    const k=esc(s.key), checked=CHOSEN.has(s.key)?'checked':'';
+    return '<label><input type="checkbox" data-key="'+k+'" data-name="'+esc(s.name)+'" '+checked+'/>'+
+      '<span>'+esc(s.name)+'</span><span class="cnt">'+fmt(s.activities)+'</span></label>';
+  }).join('');
+}
+function renderChosen(){
+  const host=document.getElementById('staffChosen');
+  if(!CHOSEN.size){ host.innerHTML=''; return; }
+  host.innerHTML=[...CHOSEN.entries()].map(([k,n])=>
+    '<span class="chip">'+esc(n)+'<i class="fas fa-xmark" data-rm="'+esc(k)+'"></i></span>').join('');
+}
+function chosenKeys(){ return [...CHOSEN.keys()]; }
+
+// Populate the facilitator list for the chosen cluster
 async function loadStaff(){
   const cl=document.getElementById('cluster').value;
   const districts=CLUSTER_DISTRICTS[cl]||[];
-  const sel=document.getElementById('staff');
-  sel.innerHTML='<option value="">Loading…</option>';
+  CHOSEN.clear(); renderChosen();
+  const box=document.getElementById('staffList');
+  box.innerHTML='<div class="staffloading">Loading…</div>';
   const qs=new URLSearchParams(); if(districts.length) qs.set('districts', districts.join(','));
   try{
     const res=await fetch('/api/cf-report/staff?'+qs.toString());
     const list=await res.json();
-    let html='<option value="">— Select a facilitator ('+(list?list.length:0)+') —</option>';
-    (list||[]).forEach(s=>{ html+='<option value="'+String(s.key).replace(/"/g,'&quot;')+'">'+s.name+' ('+fmt(s.activities)+')</option>'; });
-    sel.innerHTML=html;
-  }catch(e){ sel.innerHTML='<option value="">Failed to load staff</option>'; }
+    STAFF=(list||[]).map(s=>({key:String(s.key), name:String(s.name), activities:Number(s.activities)||0}));
+    renderStaffList();
+  }catch(e){ box.innerHTML='<div class="staffempty">Failed to load facilitators.</div>'; }
 }
 
 // Build one activity table row
@@ -171,7 +216,7 @@ function buildCard(d, clusterLabel, from, to){
   rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings by Frontliners','Youth trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained), presenceGrade(tr.youth_trained));
   rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', fmt(dist.dist_lines)+' lines', presenceGrade(dist.dist_lines));
   rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+fmt(prof.female)+'F / '+fmt(prof.pwd)+' PWD)', fmt(prof.shgs_profiled)+' SHGs', presenceGrade(prof.shgs_profiled));
-  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans', fmt(isla.isla_shgs)+' SHGs', presenceGrade(isla.isla_shgs));
+  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', presenceGrade(isla.isla_shgs));
   rows += actRow(5,'var(--green)','fa-seedling','Production (Horticulture)', fmt(prod.prod_shgs)+' SHGs active', fmt(prod.prod_youth)+' youth', presenceGrade(prod.prod_youth));
   rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers', ugx(hs.hs_value), presenceGrade(hs.hs_value));
   rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
@@ -181,7 +226,7 @@ function buildCard(d, clusterLabel, from, to){
   const hls=[];
   if((Number(ps.ps_value)||0)>0) hls.push('Poultry sales generated <b>'+ugx(ps.ps_value)+'</b> from '+fmt(ps.birds_sold)+' birds.');
   if((Number(lev.lev_amount)||0)>0) hls.push('Mobilized <b>'+ugx(lev.lev_amount)+'</b> in local leverage across '+fmt(lev.lev_count)+' contributions.');
-  if((Number(isla.savings)||0)>0) hls.push('Strong ISLA performance with <b>'+ugx(isla.savings)+'</b> youth savings.');
+  if((Number(isla.savings)||0)>0) hls.push('Strong ISLA performance: <b>'+ugx(isla.savings)+'</b> saved and <b>'+ugx(isla.loans_value)+'</b> in loans given.');
   if((Number(prof.shgs_profiled)||0)>0) hls.push('Profiled <b>'+fmt(prof.shgs_profiled)+' SHGs</b> reaching '+fmt(prof.youth_profiled)+' youth.');
   if((Number(prod.prod_youth)||0)>0) hls.push('Engaged <b>'+fmt(prod.prod_youth)+' youth</b> in production.');
   if(!hls.length) hls.push('No recorded activity for this facilitator in the selected period.');
@@ -230,8 +275,8 @@ function buildCard(d, clusterLabel, from, to){
 
 let loading=false;
 async function load(){
-  const staff=document.getElementById('staff').value;
-  if(!staff){ document.getElementById('report').innerHTML='<div class="cardsheet"><div class="loading">Select a field staff (CF), then click <b>Generate</b>.</div></div>'; return; }
+  const keys=chosenKeys();
+  if(!keys.length){ document.getElementById('report').innerHTML='<div class="cardsheet"><div class="loading">Tick one or more field staff (CF), then click <b>Generate</b>.</div></div>'; return; }
   if(loading) return; loading=true;
   const cl=document.getElementById('cluster').value;
   const from=document.getElementById('from').value;
@@ -240,7 +285,7 @@ async function load(){
   const label=CLUSTER_LABEL[cl]||'Cluster';
   document.getElementById('report').innerHTML='<div class="cardsheet"><div class="loading">Generating report card…</div></div>';
   const qs=new URLSearchParams();
-  qs.set('staff', staff);
+  qs.set('staff', keys.join('|'));   // multi-select merge: pipe-joined keys
   if(districts.length) qs.set('districts', districts.join(','));
   if(from) qs.set('from', from);
   if(to) qs.set('to', to);
@@ -255,7 +300,19 @@ async function load(){
 }
 document.getElementById('cluster').addEventListener('change', loadStaff);
 document.getElementById('apply').addEventListener('click', load);
-document.getElementById('staff').addEventListener('change', load);
+document.getElementById('staffSearch').addEventListener('input', renderStaffList);
+// checkbox toggle (delegated)
+document.getElementById('staffList').addEventListener('change', (e)=>{
+  const cb=e.target.closest('input[type=checkbox]'); if(!cb) return;
+  const k=cb.getAttribute('data-key'), n=cb.getAttribute('data-name');
+  if(cb.checked) CHOSEN.set(k,n); else CHOSEN.delete(k);
+  renderChosen();
+});
+// remove chip (delegated)
+document.getElementById('staffChosen').addEventListener('click', (e)=>{
+  const x=e.target.closest('[data-rm]'); if(!x) return;
+  CHOSEN.delete(x.getAttribute('data-rm')); renderChosen(); renderStaffList();
+});
 document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
 loadStaff();
 </script>

@@ -27,7 +27,7 @@ export function renderHome(base: string): string {
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root{
-      --side:#013322; --side-2:#012317; --side-active:#00A859; --side-hover:#024a31;
+      --side:#0a4733; --side-2:#083a29; --side-active:#00A859; --side-hover:#0c6444;
       --bg:#F1F5F3; --ink:#12211a; --ink2:#3c4b43; --muted:#8a978f; --line:#e6ece9;
       --green:#00A859; --green-d:#006837; --orange:#F6921E; --blue:#2E9BD6;
       --purple:#8C5CD1; --teal:#12b5a5; --red:#E8556B; --lgreen:#4CB963;
@@ -87,7 +87,7 @@ export function renderHome(base: string): string {
     .wrap{ padding:6px 26px 30px; }
 
     /* ---------- hero strip ---------- */
-    .hero{ background:linear-gradient(180deg,#013322,#012317); border-radius:18px; padding:18px 20px;
+    .hero{ background:linear-gradient(180deg,#0a4733,#083a29); border-radius:18px; padding:18px 20px;
            display:grid; grid-template-columns:repeat(4,1fr) 230px; gap:14px; color:#eafff4; }
     @media (max-width:1500px){ .hero{ grid-template-columns:repeat(4,1fr); } .hero .gauge-tile{ grid-column:1 / -1; justify-content:flex-start; } }
     @media (max-width:820px){ .hero{ grid-template-columns:repeat(2,1fr); } }
@@ -133,6 +133,8 @@ export function renderHome(base: string): string {
     .panel-h{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .panel-h .pt{ font-size:14px; font-weight:700; color:#1a2b22; }
     .panel-h .pl{ font-size:11px; font-weight:600; color:var(--muted); }
+    .trend-wrap{ position:relative; width:100%; height:220px; }
+    .trend-wrap canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; }
     table.dist{ width:100%; border-collapse:collapse; }
     table.dist th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); padding:6px 6px; border-bottom:1px solid var(--line); }
     table.dist th.num, table.dist td.num{ text-align:right; }
@@ -267,7 +269,7 @@ export function renderHome(base: string): string {
           <!-- Trends Overview -->
           <div class="panel">
             <div class="panel-h"><div class="pt">Trends Overview</div><span class="pl">New reach over time</span></div>
-            <canvas id="trendChart" height="150"></canvas>
+            <div class="trend-wrap"><canvas id="trendChart"></canvas></div>
           </div>
           <!-- Recent Activity -->
           <div class="panel">
@@ -392,7 +394,7 @@ export function renderHome(base: string): string {
         heroState.youth=d.total_trained; heroState.female=d.female_reached; heroState.pwds=d.pwds_trained;
         setF('hero.youth', d.total_trained); setF('hero.female', d.female_reached); setF('hero.pwds', d.pwds_trained);
         // district performance table (Trained + Target where available)
-        renderDistricts(d.districts||[]);
+        renderDistricts(d.district_stats||d.districts||[]);
       },
       async newyouth(){
         const d=await j('/api/new-youth');
