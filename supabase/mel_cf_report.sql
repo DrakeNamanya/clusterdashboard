@@ -170,6 +170,9 @@ BEGIN
   dist_t AS ( SELECT COUNT(*)::int AS dist_lines,
                      COUNT(DISTINCT participant_id)::int AS dist_participants FROM dist ),
   -- ---------- PRODUCTION ----------
+  -- Youth in production = youth in the horticulture production form
+  --   PLUS youth who received livestock/birds in distribution.
+  -- (client rule: e.g. Mutaisa Karim = 1 horticulture + 18 livestock = 19.)
   prod AS (
     SELECT * FROM production_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys) AND lower(pdn_level)='production'
@@ -177,8 +180,30 @@ BEGIN
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
-  prod_t AS ( SELECT COUNT(DISTINCT shg_participant_id)::int AS prod_youth,
-                     COUNT(DISTINCT shg_id)::int AS prod_shgs FROM prod ),
+  -- Livestock recipients from this CF's distribution (matched on squashed username).
+  prod_livestock AS (
+    SELECT participant_id, shg_name FROM distribution_rows
+    WHERE material_type = 'Livestock'
+      AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
+                  WHERE public.mel_norm_key(submitted_by) = k
+                     OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))
+      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR dist_date >= p_date_from)
+      AND (p_date_to   IS NULL OR dist_date <= p_date_to)
+  ),
+  -- Distinct union of production participants + livestock recipients.
+  prod_youth_all AS (
+    SELECT shg_participant_id AS pid FROM prod WHERE shg_participant_id IS NOT NULL
+    UNION
+    SELECT participant_id      AS pid FROM prod_livestock WHERE participant_id IS NOT NULL
+  ),
+  prod_shg_all AS (
+    SELECT shg_id::text AS sid FROM prod WHERE shg_id IS NOT NULL
+    UNION
+    SELECT shg_name     AS sid FROM prod_livestock WHERE shg_name IS NOT NULL
+  ),
+  prod_t AS ( SELECT (SELECT COUNT(*) FROM prod_youth_all)::int AS prod_youth,
+                     (SELECT COUNT(*) FROM prod_shg_all)::int   AS prod_shgs ),
   -- ---------- SALES HORTICULTURE ----------
   hs AS (
     SELECT * FROM sales_rows

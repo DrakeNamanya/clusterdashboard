@@ -1,4 +1,5 @@
 import { clusterOptions } from './clusters';
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // REPORT DASHBOARD — Targets vs Achieved
 //   Filters: Cluster + Date range.
@@ -70,9 +71,21 @@ export function renderReport(base: string): string {
     @media(max-width:760px){ .season-grid{ grid-template-columns:1fr; } }
     .loading{ text-align:center; color:var(--muted); padding:26px; font-size:13px; }
     .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
+
+    /* PRINT — colored PDF, aligned (neutralise sidebar padding, hide the nav) */
+    @media print{
+      @page{ size:A4; margin:12mm; }
+      html,body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      body.shg-has-nav{ padding-right:0 !important; }
+      .shg-nav,.shg-nav-open,.filters,#noteBox,.no-print{ display:none !important; }
+      .wrap{ max-width:100% !important; margin:0 !important; padding:0 4mm !important; }
+      table,.card,.season-grid,tr{ page-break-inside:avoid; }
+      thead th{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
   </style>
 </head>
 <body>
+${navSidebar('report')}
   <div class="wrap">
     <h1><i class="fas fa-bullseye" style="margin-right:8px"></i>Report Dashboard — Targets vs Achieved</h1>
     <p class="sub">Production, Reach and Mobilization performance against Year-3 targets. Filter by cluster and date. <b>Reporting year: 01 Oct 2025 – 30 Sep 2026</b> (default) — achieved figures are counted within the selected date range, so they match the source dashboards (Monthly New Youth, SHG Profiling) when filtered to the same period.</p>

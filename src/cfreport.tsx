@@ -1,4 +1,5 @@
 import { clusterOptions } from './clusters';
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // CF (Community Facilitator) REPORT CARD
 //   Filters: Cluster + Field Staff (CF) + Date range.
@@ -120,18 +121,20 @@ export function renderCfReport(base: string): string {
     .stamp-dt{ font-size:12px; font-weight:800; margin:3px 0; }
     .stamp-bot{ font-size:7.5px; font-weight:800; letter-spacing:.03em; width:88%; }
 
-    /* PRINT — colored PDF via browser Print → Save as PDF */
+    /* PRINT — colored PDF via browser Print → Save as PDF (aligned) */
     @media print{
       @page{ size:A4; margin:12mm; }
-      body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-      .filters,#noteBox,.no-print{ display:none !important; }
-      .wrap{ max-width:100%; padding:0; }
+      html,body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      body.shg-has-nav{ padding-right:0 !important; }
+      .shg-nav,.shg-nav-open,.filters,#noteBox,.no-print{ display:none !important; }
+      .wrap{ max-width:100% !important; margin:0 !important; padding:0 4mm !important; }
       .cardsheet{ box-shadow:none; border:1px solid #ccc; page-break-inside:avoid; }
       table.act thead th{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     }
   </style>
 </head>
 <body>
+${navSidebar('cfreport')}
   <div class="wrap">
     <div class="filters">
       <div class="fld"><label>Cluster</label><select id="cluster">${clusterOptions('iganga')}</select></div>
@@ -277,7 +280,7 @@ function buildCard(d, clusterLabel, from, to){
   rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', fmt(dist.dist_lines)+' lines', presenceGrade(dist.dist_lines));
   rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+femalePct+'% F / '+pwdPct+'% PWD)', fmt(prof.shgs_profiled)+' SHGs', tgtGrade(prof.shgs_profiled, T.shgs_profiled));
   rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', tgtGrade(isla.isla_shgs, T.shgs_saving));
-  rows += actRow(5,'var(--green)','fa-seedling','Production (Horticulture)', fmt(prod.prod_shgs)+' SHGs active', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
+  rows += actRow(5,'var(--green)','fa-seedling','Youth into Production', fmt(prod.prod_shgs)+' SHGs · horticulture + livestock recipients', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
   rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers', ugx(hs.hs_value), presenceGrade(hs.hs_value));
   rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
   rows += actRow(8,'var(--teal)','fa-handshake','Local Leverage', fmt(lev.lev_count)+' contributions', ugx(lev.lev_amount), presenceGrade(lev.lev_count));

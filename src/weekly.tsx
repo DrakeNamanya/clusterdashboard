@@ -1,4 +1,5 @@
 import { clusterOptions } from './clusters';
+import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // WEEKLY REPORT — Mon→Sun narrative summary of ALL indicators, per cluster.
 //   Filters: Cluster + Date range (default = current Mon→Sun week).
@@ -79,15 +80,17 @@ export function renderWeeklyReport(base: string): string {
     /* PRINT — colored PDF via browser Print → Save as PDF */
     @media print{
       @page{ size:A4; margin:12mm; }
-      body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-      .filters,#noteBox,.no-print{ display:none !important; }
-      .wrap{ max-width:100%; padding:0; }
+      html,body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      body.shg-has-nav{ padding-right:0 !important; }
+      .shg-nav,.shg-nav-open,.filters,#noteBox,.no-print{ display:none !important; }
+      .wrap{ max-width:100% !important; margin:0 !important; padding:0 4mm !important; }
       .card,.sec,.hero,.kcard{ box-shadow:none; page-break-inside:avoid; }
       .sec h2 .ic,.chip,.hero{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     }
   </style>
 </head>
 <body>
+${navSidebar('weekly')}
   <div class="wrap">
     <h1><i class="fas fa-calendar-week" style="margin-right:8px"></i>Weekly Report</h1>
     <p class="sub">Monday → Sunday summary of all indicators, per cluster. Share every Sunday.</p>

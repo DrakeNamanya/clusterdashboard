@@ -9,10 +9,15 @@
 //   * bottom row: Performance by District table, Trends line chart, Recent Activity
 //
 // All headline numbers are pulled live from each dashboard's own JSON API so
-// they always match the underlying dashboard. Production Target and Reach
-// Target panels are intentionally left as graceful placeholders — those source
-// tables are still to be added.
+// they always match the underlying dashboard. Every indicator re-fetches when
+// the Cluster + Date filters at the top change, passing ?districts=&from=&to=
+// to each dashboard API (which all accept those params).
+//
+// The page uses the SHARED navy sidebar (navSidebar) — the same one every other
+// dashboard uses — so navigation is identical across the whole app.
 // ---------------------------------------------------------------------------
+
+import { navSidebar } from './nav';
 
 export function renderHome(base: string): string {
   return `<!DOCTYPE html>
@@ -36,42 +41,14 @@ export function renderHome(base: string): string {
     body{ margin:0; background:var(--bg); color:var(--ink); font-family:"Inter",system-ui,-apple-system,sans-serif; }
     a{ text-decoration:none; color:inherit; }
 
-    /* ---------- layout ---------- */
-    .layout{ display:flex; min-height:100vh; }
-    .side{ width:240px; flex:none; background:var(--side); color:#cfe7db;
-           position:sticky; top:0; height:100vh; display:flex; flex-direction:column; }
-    .main{ flex:1; min-width:0; }
-    @media (max-width:1000px){
-      .side{ position:fixed; left:0; top:0; z-index:60; transform:translateX(-100%); transition:transform .25s; box-shadow:2px 0 18px rgba(0,0,0,.3); }
-      .side.open{ transform:translateX(0); }
-      .side-toggle{ display:inline-flex !important; }
-    }
+    /* ---------- layout (shared navy sidebar handles nav; main is full width) ---------- */
+    .main{ min-width:0; }
 
-    /* ---------- sidebar ---------- */
-    .brand{ display:flex; align-items:center; gap:10px; padding:18px 18px 14px; }
-    .brand .logo{ width:34px; height:34px; border-radius:9px; background:rgba(255,255,255,.08);
-                  display:flex; align-items:center; justify-content:center; color:#fff; font-size:17px; }
-    .brand .nm{ font-weight:800; font-size:17px; color:#fff; line-height:1; }
-    .brand .sub{ font-size:11px; color:#7fbf9f; font-weight:600; }
-    .kpi-stamp{ font-size:10.5px; color:#7fbf9f; padding:0 18px 12px; display:flex; align-items:center; gap:6px; }
-    .kpi-stamp .dot{ width:7px; height:7px; border-radius:50%; background:#3ce07f; box-shadow:0 0 0 3px rgba(60,224,127,.18); }
-    .side-cap{ font-size:10px; letter-spacing:.14em; color:#5f9c7c; font-weight:700; padding:10px 18px 6px; }
-    .side-body{ overflow-y:auto; flex:1; }
-    .side-body::-webkit-scrollbar{ width:6px; } .side-body::-webkit-scrollbar-thumb{ background:#0a4a30; border-radius:4px; }
-    .nav-i{ display:flex; align-items:center; gap:12px; padding:9px 18px; font-size:13.5px; font-weight:500; color:#bfe0d0; position:relative; }
-    .nav-i i{ width:18px; text-align:center; font-size:14px; color:#8fc4a8; }
-    .nav-i:hover{ background:var(--side-hover); color:#fff; }
-    .nav-i.active{ background:var(--side-active); color:#fff; font-weight:700; }
-    .nav-i.active i{ color:#fff; }
-    .qa{ display:flex; align-items:center; gap:11px; padding:8px 18px; font-size:13px; font-weight:600; color:#d7ebe0; }
-    .qa .qi{ width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff; }
-    .qa:hover{ background:var(--side-hover); }
-    .user-card{ margin:12px; padding:10px; border-radius:12px; background:rgba(255,255,255,.06);
-                display:flex; align-items:center; gap:10px; }
-    .user-card .av{ width:38px; height:38px; border-radius:50%; background:var(--green); color:#fff;
-                    display:flex; align-items:center; justify-content:center; font-weight:800; font-size:15px; }
-    .user-card .un{ font-weight:700; font-size:13px; color:#fff; line-height:1.1; }
-    .user-card .ur{ font-size:11px; color:#8fc4a8; }
+    /* ---------- filters bar ---------- */
+    .filters{ display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+    .fld{ display:flex; flex-direction:column; gap:3px; }
+    .fld label{ font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-weight:700; }
+    .fld select, .fld input{ border:1px solid var(--line); border-radius:9px; padding:8px 10px; font-size:13px; background:#fff; min-width:130px; color:var(--ink); }
 
     /* ---------- header ---------- */
     .topbar{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:20px 26px 6px; }
@@ -151,61 +128,35 @@ export function renderHome(base: string): string {
   </style>
 </head>
 <body>
-  <div class="layout">
-
-    <!-- ==================== SIDEBAR ==================== -->
-    <aside class="side" id="side">
-      <div class="brand">
-        <span class="logo"><i class="fas fa-people-group"></i></span>
-        <div>
-          <div class="nm">SAYE</div>
-          <div class="sub">Uganda</div>
-        </div>
-      </div>
-      <div class="kpi-stamp"><span class="dot"></span> <span id="kpiStamp">KPIs updated: —</span></div>
-
-      <div class="side-body">
-        <div class="side-cap">MENU</div>
-        <a class="nav-i active" href="/"><i class="fas fa-house"></i> Home</a>
-        <a class="nav-i" href="/cluster-trainings"><i class="fas fa-chart-simple"></i> Dashboard</a>
-        <a class="nav-i" href="/monthly-new-youth"><i class="fas fa-user-plus"></i> Participants</a>
-        <a class="nav-i" href="/frontliners"><i class="fas fa-chalkboard-user"></i> Trainings</a>
-        <a class="nav-i" href="/distribution"><i class="fas fa-boxes-stacked"></i> Distribution</a>
-        <a class="nav-i" href="/shg-profiling"><i class="fas fa-people-group"></i> SHGs</a>
-        <a class="nav-i" href="/production"><i class="fas fa-seedling"></i> Production</a>
-        <a class="nav-i" href="/isla"><i class="fas fa-piggy-bank"></i> ISLA Savings</a>
-        <a class="nav-i" href="/local-leverage"><i class="fas fa-hand-holding-dollar"></i> Local Leverage</a>
-        <a class="nav-i" href="/tools"><i class="fas fa-broom"></i> Data Tools & OData</a>
-
-        <div class="side-cap" style="margin-top:8px">QUICK ACTIONS</div>
-        <a class="qa" href="/tools"><span class="qi" style="background:var(--green)"><i class="fas fa-plus"></i></span> Add Training</a>
-        <a class="qa" href="/tools"><span class="qi" style="background:var(--lgreen)"><i class="fas fa-box"></i></span> Add Distribution</a>
-        <a class="qa" href="/tools"><span class="qi" style="background:var(--purple)"><i class="fas fa-user"></i></span> Add Participant</a>
-        <a class="qa" href="/tools"><span class="qi" style="background:var(--red)"><i class="fas fa-file-lines"></i></span> Generate Report</a>
-      </div>
-
-      <div class="user-card">
-        <span class="av">DN</span>
-        <div style="flex:1">
-          <div class="un">Drake Namanya</div>
-          <div class="ur">MEL Officer</div>
-        </div>
-        <i class="fas fa-chevron-up" style="color:#7fbf9f;font-size:11px"></i>
-      </div>
-    </aside>
-
-    <!-- ==================== MAIN ==================== -->
-    <div class="main">
+${navSidebar('home')}
+  <div class="main">
       <div class="topbar">
-        <button class="ctl side-toggle" id="sideToggle" style="width:38px;padding:0"><i class="fas fa-bars"></i></button>
         <div style="flex:1;min-width:200px">
           <div class="hi">Welcome back, Drake <span style="font-weight:400">👋</span></div>
-          <div class="hi-sub">Here's what's happening with SAYE Uganda today.</div>
+          <div class="hi-sub"><span id="kpiStamp">Here's what's happening with SAYE Uganda today.</span></div>
         </div>
-        <button class="ctl" id="dateBtn"><i class="far fa-calendar"></i> <span id="dateLbl">This period</span></button>
-        <button class="ctl"><i class="fas fa-filter"></i> Filters</button>
         <button class="ctl primary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
         <button class="ctl" id="refreshBtn" title="Refresh KPIs"><i class="fas fa-rotate"></i></button>
+      </div>
+
+      <!-- ==================== FILTERS ==================== -->
+      <div class="topbar" style="padding-top:0">
+        <div class="filters">
+          <div class="fld"><label>Cluster</label>
+            <select id="fCluster">
+              <option value="all">All clusters</option>
+              <option value="iganga">Iganga Cluster</option>
+              <option value="kamuli">Kamuli Cluster</option>
+              <option value="bugiri">Bugiri Cluster</option>
+              <option value="central">Central Cluster</option>
+            </select>
+          </div>
+          <div class="fld"><label>From</label><input type="date" id="fFrom" /></div>
+          <div class="fld"><label>To</label><input type="date" id="fTo" /></div>
+          <button class="ctl primary" id="fApply"><i class="fas fa-filter"></i> Apply</button>
+          <button class="ctl" id="fYear">Reporting year</button>
+          <button class="ctl" id="fReset">All time</button>
+        </div>
       </div>
 
       <div class="wrap">
@@ -236,7 +187,7 @@ export function renderHome(base: string): string {
           <div class="htile">
             <div class="ico" style="background:var(--blue)"><i class="fas fa-bullseye"></i></div>
             <div class="val skel" data-f="hero.target">…</div>
-            <div class="lab">Monthly Target</div>
+            <div class="lab" title="Planned new-youth reach for one month = Monthly_SHGs × 25 participants (from the reach-target table). The gauge below shows the current month's pace against this.">Monthly Target <i class="fas fa-circle-info" style="font-size:8px;opacity:.6"></i></div>
             <div class="chg flat" data-f="hero.target_chg">— of last-month pace</div>
             <canvas class="spark" data-spark="target" data-color="#5ab6e0"></canvas>
           </div>
@@ -246,9 +197,9 @@ export function renderHome(base: string): string {
               <div class="pct"><div class="p" id="gaugePct">—</div><div class="t">of last<br/>month</div></div>
             </div>
             <div>
-              <div style="font-size:12px;color:#a9cdbc;font-weight:600;margin-bottom:4px">Monthly Pace</div>
+              <div style="font-size:12px;color:#a9cdbc;font-weight:600;margin-bottom:4px" title="Latest month's new reach ÷ previous month's new reach × 100. 100% means this month is keeping pace with last month.">Monthly Pace <i class="fas fa-circle-info" style="font-size:9px;opacity:.7"></i></div>
               <div style="font-size:12px;color:#eafff4;font-weight:700" id="gaugeFrac">— / —</div>
-              <div style="font-size:10.5px;color:#7fbf9f;margin-top:6px">This month vs last month reach</div>
+              <div style="font-size:10.5px;color:#7fbf9f;margin-top:6px">Latest month ÷ previous month (new reach)</div>
             </div>
           </div>
         </section>
@@ -279,7 +230,6 @@ export function renderHome(base: string): string {
         </section>
 
       </div>
-    </div>
   </div>
 
   <script>
@@ -289,8 +239,31 @@ export function renderHome(base: string): string {
     const setF = (path,val,f)=>{ document.querySelectorAll('[data-f="'+path+'"]').forEach(el=>{ el.classList.remove('skel'); el.textContent=(f||fmt)(val); }); };
     const arrLen = (a)=>Array.isArray(a)?a.length:0;
     async function j(url){ const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
-    const sideToggle=document.getElementById('sideToggle');
-    if(sideToggle) sideToggle.addEventListener('click',()=>document.getElementById('side').classList.toggle('open'));
+
+    // ---------------- filters ----------------
+    // Cluster → district list (single source of truth, matches clusters.ts).
+    const CLUSTER_DISTRICTS = {
+      all:[],
+      iganga:['IGANGA','JINJA','JINJA CITY','MAYUGE','LUUKA'],
+      kamuli:['KAMULI','KALIRO','BUYENDE'],
+      bugiri:['BUGIRI','NAMUTUMBA','NAMAYINGO','BUGWERI'],
+      central:['MUKONO','BUIKWE','KAYUNGA']
+    };
+    // Build the shared ?districts=&from=&to= querystring from the current filters.
+    function filterQS(){
+      const cl=(document.getElementById('fCluster')||{}).value||'all';
+      const from=(document.getElementById('fFrom')||{}).value||'';
+      const to=(document.getElementById('fTo')||{}).value||'';
+      const qs=new URLSearchParams();
+      const ds=CLUSTER_DISTRICTS[cl]||[];
+      if(ds.length) qs.set('districts', ds.join(','));
+      if(from) qs.set('from', from);
+      if(to) qs.set('to', to);
+      const s=qs.toString();
+      return s ? ('?'+s) : '';
+    }
+    // Append the filter querystring to a dashboard API path.
+    function api(path){ const q=filterQS(); if(!q) return path; return path + (path.includes('?')?'&':'') + q.slice(1); }
 
     // ---------------- summary card definitions ----------------
     // Each renders a themed card; subs are filled by the loaders via data-f.
@@ -385,7 +358,7 @@ export function renderHome(base: string): string {
 
     const loaders = {
       async cluster(){
-        const d=await j('/api/cluster-trainings');
+        const d=await j(api('/api/cluster-trainings'));
         setF('cluster.total_trained', d.total_trained);
         setF('cluster.groups_reached', d.groups_reached);
         setF('cluster.female_reached', d.female_reached);
@@ -397,7 +370,7 @@ export function renderHome(base: string): string {
         renderDistricts(d.district_stats||d.districts||[]);
       },
       async newyouth(){
-        const d=await j('/api/new-youth');
+        const d=await j(api('/api/new-youth'));
         setF('newyouth.new_total_reach', d.new_total_reach);
         setF('newyouth.new_female_reach', d.new_female_reach);
         setF('newyouth.new_pwds_reach', d.new_pwds_reach);
@@ -438,7 +411,7 @@ export function renderHome(base: string): string {
         }
       },
       async frontliners(){
-        const d=await j('/api/frontliners');
+        const d=await j(api('/api/frontliners'));
         const rows=d.rows||[]; let y=0,f=0,p=0;
         for(const r of rows){ y+=Number(r.youth_trained)||0; f+=Number(r.female_reached)||0; p+=Number(r.pwds_trained)||0; }
         setF('frontliners.frontliners', rows.length);
@@ -447,35 +420,35 @@ export function renderHome(base: string): string {
         setF('frontliners.pwds_trained', p);
       },
       async distribution(){
-        const d=await j('/api/distribution');
+        const d=await j(api('/api/distribution'));
         setF('distribution.new_distributees', d.new_distributees);
         setF('distribution.districts', arrLen(d.districts));
         setF('distribution.materials', arrLen(d.materials));
         setF('distribution.rows', arrLen(d.rows));
       },
       async shgdist(){
-        const d=await j('/api/shg-distribution');
+        const d=await j(api('/api/shg-distribution'));
         setF('shgdist.shgs_reached', d.shgs_reached);
         setF('shgdist.records_count', d.records_count);
         setF('shgdist.total_qty', Math.round(d.total_qty||0));
         setF('shgdist.districts', arrLen(d.districts));
       },
       async profiling(){
-        const d=await j('/api/shg-profiling');
+        const d=await j(api('/api/shg-profiling'));
         setF('profiling.new_shgs_profiles', d.new_shgs_profiles);
         setF('profiling.monthly_shgs', d.monthly_shgs);
         setF('profiling.profilers', arrLen(d.profilers));
         setF('profiling.districts', arrLen(d.districts));
       },
       async isla(){
-        const d=await j('/api/isla'); const t=d.total||{};
+        const d=await j(api('/api/isla')); const t=d.total||{};
         setMoney('isla.savings_value', t.savings_value);
         setMoney('isla.total_fund', t.total_fund);
         setF('isla.shg_count', t.shg_count!=null?t.shg_count:d.shg_saving);
         setMoney('isla.loans', t.loans);
       },
       async production(){
-        const d=await j('/api/production');
+        const d=await j(api('/api/production'));
         setF('production.new_participants', d.new_participants);
         setF('production.unique_participants', d.unique_participants);
         setF('production.unique_shgs', d.unique_shgs);
@@ -497,7 +470,7 @@ export function renderHome(base: string): string {
         if(name) norm.push({name, trained, target});
       }
       norm.sort((a,b)=>b.trained-a.trained);
-      const top=norm.slice(0,6);
+      const top=norm; // show ALL districts (was previously capped at 6)
       if(!top.length){ body.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">No district data.</td></tr>'; return; }
       let tt=0,tg=0;
       let html=top.map(d=>{
@@ -538,7 +511,11 @@ export function renderHome(base: string): string {
       drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
       const jobs=Object.entries(loaders).map(([k,fn])=>fn().catch(err=>{ console.error(k,err); }));
       Promise.allSettled(jobs).then(()=>{
-        document.getElementById('kpiStamp').textContent='KPIs updated: '+new Date().toLocaleString('en-GB');
+        const cl=(document.getElementById('fCluster')||{}).value||'all';
+        const clLbl={all:'All clusters',iganga:'Iganga Cluster',kamuli:'Kamuli Cluster',bugiri:'Bugiri Cluster',central:'Central Cluster'}[cl]||'All clusters';
+        const from=(document.getElementById('fFrom')||{}).value, to=(document.getElementById('fTo')||{}).value;
+        const range = (from&&to) ? (from+' → '+to) : 'all time';
+        document.getElementById('kpiStamp').textContent=clLbl+' · '+range+' · updated '+new Date().toLocaleTimeString('en-GB');
         // hero % change placeholders (no month-over-month source yet)
         ['hero.youth_chg','hero.female_chg','hero.pwds_chg'].forEach(f=>{
           const els=document.querySelectorAll('[data-f="'+f+'"]'); els.forEach(e=>{ if(e.textContent.includes('—')) e.textContent='↑ trending vs last month'; });
@@ -550,6 +527,11 @@ export function renderHome(base: string): string {
     renderActivity();
     document.getElementById('refreshBtn').addEventListener('click', loadAll);
     document.getElementById('exportBtn').addEventListener('click', ()=>{ window.location.href='/tools'; });
+    // filter controls
+    document.getElementById('fApply').addEventListener('click', loadAll);
+    document.getElementById('fCluster').addEventListener('change', loadAll);
+    document.getElementById('fYear').addEventListener('click', ()=>{ document.getElementById('fFrom').value='2025-10-01'; document.getElementById('fTo').value='2026-09-30'; loadAll(); });
+    document.getElementById('fReset').addEventListener('click', ()=>{ document.getElementById('fFrom').value=''; document.getElementById('fTo').value=''; document.getElementById('fCluster').value='all'; loadAll(); });
     loadAll();
     window.addEventListener('resize', ()=>{ Object.keys(sparks).forEach(k=>{ const cv=document.querySelector('canvas[data-spark="'+k+'"]'); if(cv){ cv.width=cv.parentElement.clientWidth-28; cv.height=26; } }); });
   </script>
