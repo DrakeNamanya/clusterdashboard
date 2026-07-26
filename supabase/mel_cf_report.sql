@@ -140,23 +140,37 @@ BEGIN
            COALESCE(SUM(pwd),0)::int AS pwd
     FROM prof
   ),
-  -- ---------- TRAININGS BY FRONTLINER (at_rows.data_collector = squashed username) ----------
-  -- Match the squashed collector username to the CF's de-spaced key (exact, or
-  -- collector starts with the full CF key when the key is >=8 chars — catches
-  -- system suffixes like …aegy/…flep without short-name false positives).
+  -- ---------- TRAININGS (from SHG profiling — first trainings) ----------
+  -- Client rule: "groups trained cannot be zero if a group was trained/reached,
+  -- and groups trained/distribution/production/saving cannot exceed groups
+  -- profiled".  The SHG profiling form itself records the first trainings per
+  -- group (trainings = comma-list of topics, participants_trained = youth
+  -- trained in that group).  So we derive trainings from the SAME profiling
+  -- rows (matched on the CF's real profiler_name — reliable), NOT from the
+  -- at_rows frontliner sheet whose data_collector is a squashed system username
+  -- that often fails to match (that mismatch is why Justine Zipporah showed 0).
+  --   groups_trained = SHGs in this CF's profiling that have any first-training
+  --                    (trainings text non-empty OR participants_trained > 0)  -> always <= shgs_profiled
+  --   youth_trained  = SUM(participants_trained) over this CF's profiled groups
+  --   training_areas = distinct training topics across those groups
   tr AS (
-    SELECT participant_id, training_type, group_id FROM at_rows
-    WHERE has_date=1 AND day ~ '^\d{4}-\d{2}-\d{2}'
-      AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
-                  WHERE public.mel_norm_key(data_collector) = k
-                     OR (length(k) >= 8 AND public.mel_norm_key(data_collector) LIKE k || '%'))
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR (day)::date >= p_date_from)
-      AND (p_date_to   IS NULL OR (day)::date <= p_date_to)
+    SELECT shg_id, shg_name, participants_trained,
+           NULLIF(btrim(trainings),'') AS trainings
+    FROM prof
   ),
-  tr_t AS ( SELECT COUNT(DISTINCT participant_id)::int AS youth_trained,
-                   COUNT(DISTINCT training_type)::int AS training_areas,
-                   COUNT(DISTINCT group_id)::int      AS groups_trained FROM tr ),
+  tr_topics AS (
+    SELECT DISTINCT btrim(lower(t)) AS topic
+    FROM tr, LATERAL regexp_split_to_table(coalesce(tr.trainings,''), '\s*,\s*') AS t
+    WHERE btrim(t) <> ''
+  ),
+  tr_t AS (
+    SELECT
+      COALESCE(SUM(participants_trained),0)::int AS youth_trained,
+      (SELECT COUNT(*) FROM tr_topics)::int AS training_areas,
+      COUNT(*) FILTER (
+        WHERE trainings IS NOT NULL OR COALESCE(participants_trained,0) > 0
+      )::int AS groups_trained
+    FROM tr ),
   -- ---------- DISTRIBUTION (submitted_by = squashed username) ----------
   dist AS (
     SELECT * FROM distribution_rows
@@ -169,6 +183,17 @@ BEGIN
   ),
   dist_t AS ( SELECT COUNT(*)::int AS dist_lines,
                      COUNT(DISTINCT participant_id)::int AS dist_participants FROM dist ),
+  -- What was distributed: material types (initcap) with their line counts,
+  -- e.g. "Crop, Livestock, Other" — so the card names the items handed out
+  -- instead of an opaque "N lines".
+  dist_items AS (
+    SELECT string_agg(mt || ' (' || c || ')', ', ' ORDER BY c DESC) AS items
+    FROM (
+      SELECT initcap(coalesce(nullif(btrim(material_type),''),'Unspecified')) AS mt,
+             COUNT(*) AS c
+      FROM dist GROUP BY 1
+    ) q
+  ),
   -- ---------- PRODUCTION ----------
   -- Youth in production = youth in the horticulture production form
   --   PLUS youth who received livestock/birds in distribution.
@@ -205,9 +230,15 @@ BEGIN
   prod_t AS ( SELECT (SELECT COUNT(*) FROM prod_youth_all)::int AS prod_youth,
                      (SELECT COUNT(*) FROM prod_shg_all)::int   AS prod_shgs ),
   -- ---------- SALES HORTICULTURE ----------
+  -- Client rule: "youth sellers on sales (horticulture) = youth in the marketing
+  -- sheet who sold HORTICULTURE or OIL SEEDS".  The marketing sheet (sales_rows)
+  -- carries three value chains: Horticulture, Oil seeds, Poultry.  Poultry sales
+  -- belong to the separate Sales (Poultry) block, so here we count ONLY the
+  -- Horticulture + Oil seeds sellers (distinct youth).
   hs AS (
     SELECT * FROM sales_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
+      AND lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -268,7 +299,7 @@ BEGIN
     'districts',  (SELECT initcap(lower(districts)) FROM ctx),
     'profiling',  (SELECT to_jsonb(prof_t) FROM prof_t),
     'training',   (SELECT to_jsonb(tr_t)   FROM tr_t),
-    'distribution', (SELECT to_jsonb(dist_t) FROM dist_t),
+    'distribution', (SELECT to_jsonb(dist_t) || jsonb_build_object('items', (SELECT items FROM dist_items)) FROM dist_t),
     'production', (SELECT to_jsonb(prod_t) FROM prod_t),
     'hort_sales', (SELECT to_jsonb(hs_t)   FROM hs_t),
     'poultry',    (SELECT to_jsonb(ps_t)   FROM ps_t),

@@ -1344,32 +1344,92 @@ async function newYouthDashPg(
     SELECT first_date AS date, COUNT(*)::int AS value
     FROM sel GROUP BY first_date ORDER BY first_date`;
 
-  const [aggRows, byDateRows, targetRows, distRows] = await Promise.all([
+  // Accumulative NEW youth per district (first-touch), same district/date
+  // selection as the KPIs. Feeds the home "Performance by District" table so
+  // its Trained column is the accumulative new-youth reach, not raw trainings.
+  const byDistrictSql = `
+    WITH dated AS (
+      SELECT participant_id AS pid, day, district
+      FROM at_rows
+      WHERE participant_id IS NOT NULL AND has_date = 1 AND day IS NOT NULL
+    ),
+    firsts AS (
+      SELECT pid, MIN(day) AS first_date FROM dated GROUP BY pid
+    ),
+    ft AS (
+      SELECT d.pid, f.first_date, MAX(d.district) AS district
+      FROM dated d
+      JOIN firsts f ON f.pid = d.pid AND d.day = f.first_date
+      GROUP BY d.pid, f.first_date
+    ),
+    sel AS ( SELECT * FROM ft WHERE TRUE ${dcond} )
+    SELECT UPPER(district) AS district, COUNT(*)::int AS trained
+    FROM sel WHERE district IS NOT NULL GROUP BY UPPER(district) ORDER BY trained DESC`;
+
+  // Reach targets per district (from mel_reach_targets), summed over the months
+  // that intersect the selected date range and selected districts.
+  const mtParams: any[] = [];
+  let mtCond = '';
+  if (dl.length) { mtParams.push(dl); mtCond += ` AND UPPER(district) = ANY($${mtParams.length}::text[])`; }
+  if (opts.from) { mtParams.push(opts.from); mtCond += ` AND month >= date_trunc('month',$${mtParams.length}::date)`; }
+  if (opts.to)   { mtParams.push(opts.to);   mtCond += ` AND month <= $${mtParams.length}::date`; }
+  const distTargetSql = `
+    SELECT UPPER(district) AS district, COALESCE(SUM(monthly_target),0)::numeric AS target
+    FROM mel_reach_targets WHERE TRUE ${mtCond}
+    GROUP BY UPPER(district)`;
+
+  const [aggRows, byDateRows, targetRows, distRows, byDistrictRows, distTargetRows] = await Promise.all([
     neonQuery(env, aggSql, params),
     neonQuery(env, byDateSql, params),
-    neonQuery(env, `SELECT district, month, target FROM reach_targets`),
+    neonQuery(env, `SELECT district, month, monthly_target AS target FROM mel_reach_targets`),
     neonQuery(env, `SELECT DISTINCT district FROM at_rows WHERE district IS NOT NULL`),
+    neonQuery(env, byDistrictSql, params),
+    neonQuery(env, distTargetSql, mtParams),
   ]);
 
   const a = aggRows[0] || {};
   const num = (v: any) => Number(v || 0);
 
-  // targets: sum over selected districts whose month intersects the range
+  // targets: sum over selected districts whose month intersects the range.
+  // mel_reach_targets.month is a DATE, which Hyperdrive/pg may hand back as a JS
+  // Date object (not a string) — so normalise to a 'YYYY-MM-DD' string before any
+  // .slice()/comparison (that mismatch caused "e.slice is not a function").
+  const toDateStr = (v: any): string => {
+    if (v == null) return '';
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    const s = String(v);
+    return s.length >= 10 ? s.slice(0, 10) : s;
+  };
   let periodTotal = 0;
   const months = new Set<string>();
   const distSet = new Set<string>();
   for (const t of targetRows) {
     if (t.district) distSet.add(t.district);
     if (dl.length && !dl.includes(String(t.district).toUpperCase())) continue;
-    const mStart = t.month as string;
-    const mEndDate = monthEnd(t.month as string);
+    const mStart = toDateStr(t.month);
+    const mEndDate = monthEnd(mStart);
     if (opts.to && mStart > opts.to) continue;
     if (opts.from && mEndDate < opts.from) continue;
     periodTotal += num(t.target);
-    months.add(t.month as string);
+    months.add(mStart);
   }
   const nMonths = months.size;
   for (const d of distRows) if (d.district) distSet.add(d.district);
+
+  // Per-district accumulative new youth + reach target (+ achieved %).
+  const tgtByDist = new Map<string, number>();
+  for (const t of distTargetRows) tgtByDist.set(String(t.district).toUpperCase(), num(t.target));
+  const by_district = byDistrictRows.map((r) => {
+    const dname = String(r.district).toUpperCase();
+    const target = tgtByDist.get(dname) || 0;
+    const trained = num(r.trained);
+    return {
+      district: dname,
+      trained,
+      target: Math.round(target),
+      achieved_pct: target > 0 ? Math.round((100 * trained) / target) : null,
+    };
+  });
 
   return {
     new_total_reach: num(a.total),
@@ -1383,6 +1443,7 @@ async function newYouthDashPg(
     new_pwds_in_work: num(a.pwork),
     new_female_pwds_in_work: num(a.fpwork),
     by_date: byDateRows.map((r) => ({ date: r.date, value: num(r.value) })),
+    by_district,
     districts: [...distSet].sort(),
   };
 }
@@ -1405,7 +1466,8 @@ export async function newYouthDash(
   if (onCrdb && usingHyperdrive(env)) {
     try {
       return await newYouthDashPg(env, opts);
-    } catch {
+    } catch (e) {
+      console.error('newYouthDashPg failed, falling back to TS path:', (e as any)?.message || e);
       /* fall through to the TS path below if the SQL path errors */
     }
   }

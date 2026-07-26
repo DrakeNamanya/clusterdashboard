@@ -276,12 +276,12 @@ function buildCard(d, clusterLabel, from, to){
   function presenceGrade(v){ return (Number(v)||0)>0 ? gradeFor(100) : gradeFor(0); }
   function tgtGrade(ach,tgt){ return gradeFor(tgt>0?Math.min(100,100*(Number(ach)||0)/tgt):0); }
   let rows='';
-  rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings by Frontliners', fmt(tr.groups_trained)+' groups trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained)+' youth', tgtGrade(tr.groups_trained, T.groups_trained));
-  rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', fmt(dist.dist_lines)+' lines', presenceGrade(dist.dist_lines));
+  rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings (first trainings)', fmt(tr.groups_trained)+' groups trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained)+' youth', tgtGrade(tr.groups_trained, T.groups_trained));
+  rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', (dist.items||'—'), presenceGrade(dist.dist_lines));
   rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+femalePct+'% F / '+pwdPct+'% PWD)', fmt(prof.shgs_profiled)+' SHGs', tgtGrade(prof.shgs_profiled, T.shgs_profiled));
   rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', tgtGrade(isla.isla_shgs, T.shgs_saving));
   rows += actRow(5,'var(--green)','fa-seedling','Youth into Production', fmt(prod.prod_shgs)+' SHGs · horticulture + livestock recipients', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
-  rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers', ugx(hs.hs_value), presenceGrade(hs.hs_value));
+  rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers · horticulture + oil seeds', ugx(hs.hs_value), presenceGrade(hs.hs_value));
   rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
   rows += actRow(8,'var(--teal)','fa-handshake','Local Leverage', fmt(lev.lev_count)+' contributions', ugx(lev.lev_amount), presenceGrade(lev.lev_count));
 

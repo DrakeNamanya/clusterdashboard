@@ -211,9 +211,9 @@ ${navSidebar('home')}
         <section class="bottom">
           <!-- Performance by District -->
           <div class="panel">
-            <div class="panel-h"><div class="pt">Performance by District</div><a class="pl" href="/cluster-trainings">View all →</a></div>
+            <div class="panel-h"><div class="pt">Performance by District</div><a class="pl" href="/monthly-new-youth">View all →</a></div>
             <table class="dist">
-              <thead><tr><th>District</th><th class="num">Trained</th><th class="num">Target</th><th class="num">Achv.</th></tr></thead>
+              <thead><tr><th>District</th><th class="num" title="Accumulative new youth reached (first-touch)">New Youth</th><th class="num" title="Reach target">Target</th><th class="num">Achv.</th></tr></thead>
               <tbody id="distBody"><tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">Loading…</td></tr></tbody>
             </table>
           </div>
@@ -238,7 +238,10 @@ ${navSidebar('home')}
     const compact = (v)=>{ const n=Number(v)||0; if(Math.abs(n)>=1e9)return (n/1e9).toFixed(2)+'B'; if(Math.abs(n)>=1e6)return (n/1e6).toFixed(2)+'M'; if(Math.abs(n)>=1e3)return (n/1e3).toFixed(1)+'K'; return fmt(n); };
     const setF = (path,val,f)=>{ document.querySelectorAll('[data-f="'+path+'"]').forEach(el=>{ el.classList.remove('skel'); el.textContent=(f||fmt)(val); }); };
     const arrLen = (a)=>Array.isArray(a)?a.length:0;
-    async function j(url){ const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+    // Always bypass HTTP cache so a filter change re-fetches fresh data (a repeated
+    // querystring must not be served from the browser/CDN cache — that was making the
+    // dashboard look like it "didn't respond" to the cluster/date filters).
+    async function j(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
 
     // ---------------- filters ----------------
     // Cluster → district list (single source of truth, matches clusters.ts).
@@ -366,8 +369,6 @@ ${navSidebar('home')}
         // hero tiles
         heroState.youth=d.total_trained; heroState.female=d.female_reached; heroState.pwds=d.pwds_trained;
         setF('hero.youth', d.total_trained); setF('hero.female', d.female_reached); setF('hero.pwds', d.pwds_trained);
-        // district performance table (Trained + Target where available)
-        renderDistricts(d.district_stats||d.districts||[]);
       },
       async newyouth(){
         const d=await j(api('/api/new-youth'));
@@ -377,6 +378,9 @@ ${navSidebar('home')}
         setF('newyouth.monthly_target', d.monthly_target);
         heroState.target=d.monthly_target; heroState.reach=d.new_total_reach;
         setF('hero.target', d.monthly_target);
+        // Performance by District: Trained = accumulative NEW youth reach per
+        // district, Target = reach target (mel_reach_targets), Achieved = %.
+        renderDistricts(d.by_district||[]);
 
         // by_date is a daily series of {date, value} (new reach per day).
         const bd=(d.by_date||[]).filter(r=>r && r.date);
