@@ -63,6 +63,28 @@ export function renderWeeklyReport(base: string): string {
     .trtable td.n{ text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
     .loading{ text-align:center; color:var(--muted); padding:26px; font-size:13px; }
     .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
+
+    /* sign-off + MEL stamp */
+    .signoff{ display:flex; align-items:flex-end; gap:34px; padding:16px 22px 26px; position:relative; margin-top:6px; }
+    .sign{ flex:1; max-width:220px; }
+    .sign .sline{ border-bottom:1.5px solid #9aa8a0; height:34px; }
+    .sign .slbl{ font-size:11px; color:var(--muted); font-weight:700; margin-top:5px; text-transform:uppercase; letter-spacing:.04em; }
+    .stamp{ margin-left:auto; }
+    .stamp-inner{ width:150px; height:150px; border-radius:50%; border:3px solid #c0392b; color:#c0392b; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; transform:rotate(-11deg); opacity:.86; box-shadow:inset 0 0 0 2px #c0392b33; }
+    .stamp-top{ font-size:12px; font-weight:900; letter-spacing:.08em; }
+    .stamp-mid{ font-size:16px; font-weight:900; margin:3px 0; border-top:2px solid #c0392b; border-bottom:2px solid #c0392b; padding:3px 0; width:82%; }
+    .stamp-dt{ font-size:12px; font-weight:800; margin:3px 0; }
+    .stamp-bot{ font-size:7.5px; font-weight:800; letter-spacing:.03em; width:88%; }
+
+    /* PRINT — colored PDF via browser Print → Save as PDF */
+    @media print{
+      @page{ size:A4; margin:12mm; }
+      body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      .filters,#noteBox,.no-print{ display:none !important; }
+      .wrap{ max-width:100%; padding:0; }
+      .card,.sec,.hero,.kcard{ box-shadow:none; page-break-inside:avoid; }
+      .sec h2 .ic,.chip,.hero{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
   </style>
 </head>
 <body>
@@ -78,6 +100,7 @@ export function renderWeeklyReport(base: string): string {
       <button class="btn" id="apply"><i class="fas fa-filter"></i> Apply</button>
       <button class="btn ghost" id="thisweek">This week</button>
       <button class="btn ghost" id="reset">All time</button>
+      <button class="btn ghost" id="printBtn"><i class="fas fa-file-pdf" style="color:#c0392b"></i> Print / PDF</button>
     </div>
 
     <div id="noteBox"></div>
@@ -163,6 +186,18 @@ function buildNarrative(d, clusterLabel){
   out += sec('var(--teal)','fa-handshake','Leverage Contributions',
     '<p>Local leverage contributions totalled <b>'+ugx(lev.amount)+'</b> during the reporting period.</p>');
 
+  // ---- SIGN-OFF + MEL STAMP ----
+  out += '<section class="card"><div class="signoff">'+
+    '<div class="sign"><div class="sline"></div><div class="slbl">Prepared by (M&amp;E)</div></div>'+
+    '<div class="sign"><div class="sline"></div><div class="slbl">Cluster Supervisor</div></div>'+
+    '<div class="stamp"><div class="stamp-inner">'+
+      '<div class="stamp-top">SAYE UGANDA</div>'+
+      '<div class="stamp-mid">M &amp; E VERIFIED</div>'+
+      '<div class="stamp-dt">'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'+
+      '<div class="stamp-bot">MONITORING · EVALUATION · LEARNING</div>'+
+    '</div></div>'+
+  '</div></section>';
+
   document.getElementById('narrative').innerHTML = out;
   // KPIs
   document.getElementById('kTrained').textContent = fmt(trained);
@@ -202,6 +237,7 @@ document.getElementById('apply').addEventListener('click', load);
 document.getElementById('cluster').addEventListener('change', load);
 document.getElementById('thisweek').addEventListener('click', ()=>{ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; load(); });
 document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
+document.getElementById('printBtn').addEventListener('click', ()=>window.print());
 // default to current week
 (function(){ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; })();
 load();

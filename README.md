@@ -345,6 +345,10 @@ added.
   `training_type`), Distribution, Production & Marketing, Poultry Sales, Access
   to Finance (ISLA), Leverage Contributions. Defaults to the current Mon–Sun
   week; **This week** / **All time** shortcuts.
+  - **Print / colored PDF** button (browser Print → Save as PDF; `@media print`
+    preserves colours via `-webkit-print-color-adjust:exact`) and an **M&E
+    verification stamp** (circular red "SAYE UGANDA · M & E VERIFIED · date")
+    plus sign-off lines at the foot of the report.
   - `GET /api/weekly?districts=&from=&to=` → `mel_weekly_report` RPC.
 - `GET  /cf-report` — **Community Facilitator (CF) Report Card**. Cluster +
   **field-staff (CF)** + date filters. Report card matching the SAYE design:
@@ -358,14 +362,32 @@ added.
   (leverage). Names are **auto-cleaned (Level-1)** via `mel_norm_name()`:
   lowercase → strip punctuation → collapse whitespace, plus obvious non-person
   entries (`… group`, `… association`, single-word junk) are dropped. This merged
-  the Iganga-cluster facilitator list from **312 → 246**. Trainings & distribution
-  use system usernames and are not name-matchable, so those two rows show 0 unless
-  the CF name happens to appear there.
+  the Iganga-cluster facilitator list from **312 → 246**.
+  - **Trainings & Distribution (squashed-username matching)**: `at_rows.data_collector`
+    and `distribution_rows.submitted_by` store **system usernames with no spaces**
+    (and occasional `aegy`/`flep` suffixes, e.g. `achamirenejosephine`,
+    `akunyobeatricaegy`), so name-based matching used to return **0** for both rows.
+    Fixed with `mel_norm_key(txt)` = lowercase → strip non-`a-z` → strip trailing
+    `(aegy|flep)`; the CF human name is de-spaced the same way and matched by
+    **exact de-spaced key OR (key length ≥ 8 AND collector LIKE key||'%')** to avoid
+    short-name false positives. Both rows now populate (e.g. *Rehema Fina Kenzo* →
+    316 youth trained / 12 groups / 16 distribution lines).
+  - **Per-CF Targets vs Achieved**: each field staff (CF) is graded against fixed
+    targets — **16 SHGs profiled**, **min 400 youth** (**70% female**, **3% PWD**),
+    **16 SHGs saving**, **400 youth into production**, **all 16 groups trained**.
+    The `targets` JSON block is returned by `mel_cf_report`; the card renders a
+    **Targets vs Achieved** section (7 rows with progress bars + A–E grades) above
+    the **Activity Detail** section, and an **Overall %** = average of the capped
+    target percentages. `groups_trained` = `COUNT(DISTINCT group_id)` among the CF's
+    matched training rows.
+  - **Print / colored PDF** button + `@media print` (preserves colours) and an
+    **M&E verification stamp** (circular red "SAYE UGANDA · M & E VERIFIED · date")
+    with Field Staff / Supervisor sign-off lines at the foot of the card.
   - **Multi-select merge**: the facilitator picker is a searchable checkbox list —
     tick **several** spelling variants of the same person to merge them into one
     report card. The chosen keys are pipe-joined (`staff=a|b|c`) and `mel_cf_report`
-    matches on `mel_norm_name(col) = ANY(keys)`. The card title shows
-    `Name (+N merged)`.
+    matches on `mel_norm_name(col) = ANY(keys)` (and `mel_norm_key` for trainings/
+    distribution). The card title shows `Name (+N merged)`.
   - `GET /api/cf-report/staff?districts=` → `mel_cf_report_staff` (cleaned
     facilitator list for the cluster, with activity counts).
   - `GET /api/cf-report?staff=&districts=&from=&to=` → `mel_cf_report` RPC
@@ -444,6 +466,8 @@ complete instead of failing mid-way.
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
 - **Last Updated**: 2026-07-26
+  - **CF Report Card (Phase-2 batch B)**: fixed Trainings/Distribution showing 0 (squashed-username `mel_norm_key` de-spaced matching); added per-CF **Targets vs Achieved** (16 SHGs, 400 youth @70% female/3% PWD, 16 saving, 400 into production, 16 groups trained) with A–E grades; added **Print/colored-PDF** button and **M&E verification stamp**. Weekly Report also gained the Print/PDF button and M&E stamp.
+  - **Dashboard fixes (Phase-2 batch A)**: lightened home greens; fixed Performance-by-District (`district_stats`) and Trends Overview chart (fixed-height wrapper); defaulted the Report to the reporting year (01 Oct 2025 – 30 Sep 2026) so Reach/Mobilization tie out to the source dashboards; applied ISLA outlier caps (loans / youth_group_saving >35 → 30); cleaned the CF facilitator list 312 → 246 with multi-select merge.
   - Migrated production DB from CockroachDB to Oracle-hosted Postgres via Hyperdrive (workerd rejects self-signed cert → Hyperdrive terminates TLS).
   - Built MIS-direct multi-view sync (5 master views + all_trainees) with idempotent `_id` dedup and `replace` mode.
   - Fixed duplicate rows (isla_form 17,736→9,117; production_and_marketing_tool 34,648→26,917) and refreshed youth_profiling (35,500→114,675) via replace-mode sync.

@@ -35,6 +35,21 @@ LANGUAGE sql IMMUTABLE AS $$
 $$;
 GRANT EXECUTE ON FUNCTION public.mel_norm_name(text) TO anon, service_role;
 
+-- Squashed username key: trainings (at_rows.data_collector) and distribution
+-- (distribution_rows.submitted_by) store SYSTEM usernames with NO spaces and an
+-- occasional system suffix (…aegy / …flep), e.g. "achamirenejosephine",
+-- "akunyobeatricaegy".  mel_norm_key() reduces a name to a-z only (spaces
+-- removed) and strips those suffixes so a CF human name ("acham irene josephine")
+-- can be matched against the squashed collector username.
+CREATE OR REPLACE FUNCTION public.mel_norm_key(txt text)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT regexp_replace(
+           regexp_replace(lower(coalesce(txt,'')), '[^a-z]', '', 'g'),
+           '(aegy|flep)$', '');
+$$;
+GRANT EXECUTE ON FUNCTION public.mel_norm_key(text) TO anon, service_role;
+
 -- ---------------------------------------------------------------------------
 -- STAFF LIST  (distinct normalised CF names, optionally filtered by district)
 -- ---------------------------------------------------------------------------
@@ -86,6 +101,7 @@ DECLARE
   v jsonb;
   v_dl   text[];
   v_keys text[];
+  v_nokeys text[];
   v_label text;
 BEGIN
   -- p_staff may be a single normalised key OR several joined by '|' (the UI
@@ -95,6 +111,10 @@ BEGIN
     FROM unnest(string_to_array(coalesce(p_staff,''), '|')) x
    WHERE public.mel_norm_name(x) <> '';
   IF v_keys IS NULL OR array_length(v_keys,1) IS NULL THEN v_keys := ARRAY['']; END IF;
+  -- De-spaced keys for matching against squashed collector/submitter usernames.
+  SELECT array_agg(DISTINCT public.mel_norm_key(x)) INTO v_nokeys
+    FROM unnest(v_keys) x WHERE public.mel_norm_key(x) <> '';
+  IF v_nokeys IS NULL THEN v_nokeys := ARRAY['']; END IF;
   -- Display label: initcap of the first key (merged staff share one card).
   v_label := initcap(v_keys[1]);
   IF array_length(v_keys,1) > 1 THEN
@@ -120,21 +140,29 @@ BEGIN
            COALESCE(SUM(pwd),0)::int AS pwd
     FROM prof
   ),
-  -- ---------- TRAININGS BY FRONTLINER (at_rows keyed on data_collector) ----------
+  -- ---------- TRAININGS BY FRONTLINER (at_rows.data_collector = squashed username) ----------
+  -- Match the squashed collector username to the CF's de-spaced key (exact, or
+  -- collector starts with the full CF key when the key is >=8 chars — catches
+  -- system suffixes like …aegy/…flep without short-name false positives).
   tr AS (
-    SELECT participant_id, training_type FROM at_rows
-    WHERE public.mel_norm_name(data_collector) = ANY(v_keys)
-      AND has_date=1 AND day ~ '^\d{4}-\d{2}-\d{2}'
+    SELECT participant_id, training_type, group_id FROM at_rows
+    WHERE has_date=1 AND day ~ '^\d{4}-\d{2}-\d{2}'
+      AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
+                  WHERE public.mel_norm_key(data_collector) = k
+                     OR (length(k) >= 8 AND public.mel_norm_key(data_collector) LIKE k || '%'))
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR (day)::date >= p_date_from)
       AND (p_date_to   IS NULL OR (day)::date <= p_date_to)
   ),
   tr_t AS ( SELECT COUNT(DISTINCT participant_id)::int AS youth_trained,
-                   COUNT(DISTINCT training_type)::int AS training_areas FROM tr ),
-  -- ---------- DISTRIBUTION (submitted_by = system username; matched if present) ----------
+                   COUNT(DISTINCT training_type)::int AS training_areas,
+                   COUNT(DISTINCT group_id)::int      AS groups_trained FROM tr ),
+  -- ---------- DISTRIBUTION (submitted_by = squashed username) ----------
   dist AS (
     SELECT * FROM distribution_rows
-    WHERE public.mel_norm_name(submitted_by) = ANY(v_keys)
+    WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) k
+                  WHERE public.mel_norm_key(submitted_by) = k
+                     OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
@@ -220,7 +248,19 @@ BEGIN
     'hort_sales', (SELECT to_jsonb(hs_t)   FROM hs_t),
     'poultry',    (SELECT to_jsonb(ps_t)   FROM ps_t),
     'isla',       (SELECT to_jsonb(isla_t) FROM isla_t),
-    'leverage',   (SELECT to_jsonb(lev_t)  FROM lev_t)
+    'leverage',   (SELECT to_jsonb(lev_t)  FROM lev_t),
+    -- Per-CF performance targets (client-defined, uniform per field staff):
+    --   16 SHGs profiled, 400 youth (>=70% F, >=3% PWD),
+    --   16 SHGs saving (ISLA), 400 youth into production, 16 groups trained.
+    'targets', jsonb_build_object(
+      'shgs_profiled',  16,
+      'youth',          400,
+      'female_pct',     70,
+      'pwd_pct',        3,
+      'shgs_saving',    16,
+      'youth_production',400,
+      'groups_trained', 16
+    )
   ) INTO v;
   RETURN v;
 END;

@@ -98,6 +98,37 @@ export function renderCfReport(base: string): string {
 
     .loading{ text-align:center; color:var(--muted); padding:40px; font-size:14px; }
     .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
+
+    /* section titles */
+    .secttl{ font-size:13px; font-weight:800; color:var(--green); display:flex; align-items:center; gap:8px; margin:6px 0 10px; flex-wrap:wrap; }
+    .secttl .secsub{ font-weight:600; color:var(--muted); font-size:11px; }
+    /* progress bar in targets table */
+    table.act.tgt thead th{ background:var(--band); }
+    .pbar{ display:inline-block; width:88px; height:8px; border-radius:6px; background:#eef2ef; vertical-align:middle; overflow:hidden; }
+    .pbar-f{ height:100%; border-radius:6px; }
+    .pval{ font-size:11.5px; font-weight:800; margin-left:8px; font-variant-numeric:tabular-nums; }
+
+    /* sign-off + MEL stamp */
+    .signoff{ display:flex; align-items:flex-end; gap:34px; padding:10px 26px 26px; position:relative; }
+    .sign{ flex:1; max-width:220px; }
+    .sign .sline{ border-bottom:1.5px solid #9aa8a0; height:34px; }
+    .sign .slbl{ font-size:11px; color:var(--muted); font-weight:700; margin-top:5px; text-transform:uppercase; letter-spacing:.04em; }
+    .stamp{ margin-left:auto; }
+    .stamp-inner{ width:150px; height:150px; border-radius:50%; border:3px solid #c0392b; color:#c0392b; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; transform:rotate(-11deg); opacity:.86; box-shadow:inset 0 0 0 2px #c0392b33; }
+    .stamp-top{ font-size:12px; font-weight:900; letter-spacing:.08em; }
+    .stamp-mid{ font-size:16px; font-weight:900; margin:3px 0; border-top:2px solid #c0392b; border-bottom:2px solid #c0392b; padding:3px 0; width:82%; }
+    .stamp-dt{ font-size:12px; font-weight:800; margin:3px 0; }
+    .stamp-bot{ font-size:7.5px; font-weight:800; letter-spacing:.03em; width:88%; }
+
+    /* PRINT — colored PDF via browser Print → Save as PDF */
+    @media print{
+      @page{ size:A4; margin:12mm; }
+      body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      .filters,#noteBox,.no-print{ display:none !important; }
+      .wrap{ max-width:100%; padding:0; }
+      .cardsheet{ box-shadow:none; border:1px solid #ccc; page-break-inside:avoid; }
+      table.act thead th{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
   </style>
 </head>
 <body>
@@ -116,6 +147,7 @@ export function renderCfReport(base: string): string {
       <div class="fld"><label>Date to</label><input type="date" id="to" /></div>
       <button class="btn" id="apply"><i class="fas fa-id-badge"></i> Generate</button>
       <button class="btn ghost" id="reset">All time</button>
+      <button class="btn ghost" id="printBtn"><i class="fas fa-file-pdf" style="color:#c0392b"></i> Print / PDF</button>
     </div>
 
     <div id="noteBox"><div class="note"><i class="fas fa-circle-info"></i> Facilitator names are auto-cleaned (spacing/punctuation). If the same person still appears under two spellings, tick <b>both</b> to merge them into one report card.</div></div>
@@ -203,21 +235,49 @@ function buildCard(d, clusterLabel, from, to){
   const totalBeneficiaries = (Number(prof.youth_profiled)||0);
   const totalShgs = (Number(prof.shgs_profiled)||0)+(Number(prod.prod_shgs)||0)+(Number(isla.isla_shgs)||0);
   const valueMobilized = (Number(isla.savings)||0)+(Number(hs.hs_value)||0)+(Number(ps.ps_value)||0)+(Number(lev.lev_amount)||0);
-  // count activity areas that have any achievement
   const areaVals=[prof.shgs_profiled, tr.youth_trained, dist.dist_lines, prod.prod_youth, hs.hs_youth, ps.birds_sold, isla.isla_shgs, lev.lev_count];
   const totalActivities = areaVals.filter(x=>(Number(x)||0)>0).length;
-  // A simple "overall performance" proxy = share of the 8 activity areas the CF was active in
-  const overall = Math.round(100*totalActivities/8);
+
+  // -------- TARGETS vs ACHIEVED (client-defined per-CF targets) --------
+  const T=d.targets||{shgs_profiled:16,youth:400,female_pct:70,pwd_pct:3,shgs_saving:16,youth_production:400,groups_trained:16};
+  const femalePct = (Number(prof.youth_profiled)||0)>0 ? Math.round(100*(Number(prof.female)||0)/(Number(prof.youth_profiled)||1)) : 0;
+  const pwdPct    = (Number(prof.youth_profiled)||0)>0 ? Math.round(100*(Number(prof.pwd)||0)/(Number(prof.youth_profiled)||1)) : 0;
+  // each target: {label, achieved, target, pct, unit}
+  const targetRows=[
+    {ic:'fa-people-group', c:'var(--amber)', label:'SHGs Profiled', ach:Number(prof.shgs_profiled)||0, tgt:Number(T.shgs_profiled)||16, unit:'SHGs'},
+    {ic:'fa-users', c:'var(--blue)', label:'Youth Mobilized', ach:Number(prof.youth_profiled)||0, tgt:Number(T.youth)||400, unit:'youth'},
+    {ic:'fa-venus', c:'#d6408a', label:'Female Share', ach:femalePct, tgt:Number(T.female_pct)||70, unit:'%', isPct:true},
+    {ic:'fa-wheelchair', c:'var(--teal)', label:'PWD Share', ach:pwdPct, tgt:Number(T.pwd_pct)||3, unit:'%', isPct:true},
+    {ic:'fa-piggy-bank', c:'var(--purple)', label:'SHGs Saving (ISLA)', ach:Number(isla.isla_shgs)||0, tgt:Number(T.shgs_saving)||16, unit:'SHGs'},
+    {ic:'fa-seedling', c:'var(--green)', label:'Youth into Production', ach:Number(prod.prod_youth)||0, tgt:Number(T.youth_production)||400, unit:'youth'},
+    {ic:'fa-chalkboard-user', c:'var(--green-2)', label:'Groups Trained', ach:Number(tr.groups_trained)||0, tgt:Number(T.groups_trained)||16, unit:'groups'}
+  ].map(r=>{ r.pct = r.tgt>0 ? Math.round(100*r.ach/r.tgt) : 0; r.grade=gradeFor(Math.min(100,r.pct)); return r; });
+
+  // Overall = average % achievement across the client targets (capped at 100 each).
+  const overall = Math.round(targetRows.reduce((a,r)=>a+Math.min(100,r.pct),0)/targetRows.length);
   const og = gradeFor(overall);
 
-  // Activity rows (Target column omitted per-CF; individual CF targets not defined — show Achieved + qualitative grade based on activity presence)
+  const targetTable = targetRows.map((r,i)=>{
+    const barPct=Math.min(100,r.pct);
+    return '<tr>'+
+      '<td class="num" style="color:var(--muted)">'+(i+1)+'</td>'+
+      '<td><div class="areahead"><span class="ic" style="background:'+r.c+'"><i class="fas '+r.ic+'"></i></span><span class="nm">'+r.label+'</span></div></td>'+
+      '<td class="num">'+fmt(r.tgt)+(r.isPct?'%':'')+'</td>'+
+      '<td class="num">'+fmt(r.ach)+(r.isPct?'%':'')+'</td>'+
+      '<td><div class="pbar"><div class="pbar-f" style="width:'+barPct+'%;background:'+r.grade.c+'"></div></div><span class="pval" style="color:'+r.grade.c+'">'+r.pct+'%</span></td>'+
+      '<td><span class="grade" style="color:'+r.grade.c+';background:'+r.grade.bg+'">'+r.grade.g+'</span></td>'+
+    '</tr>';
+  }).join('');
+
+  // Activity rows — grade against the client target where one exists, else presence.
   function presenceGrade(v){ return (Number(v)||0)>0 ? gradeFor(100) : gradeFor(0); }
+  function tgtGrade(ach,tgt){ return gradeFor(tgt>0?Math.min(100,100*(Number(ach)||0)/tgt):0); }
   let rows='';
-  rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings by Frontliners','Youth trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained), presenceGrade(tr.youth_trained));
+  rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings by Frontliners', fmt(tr.groups_trained)+' groups trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained)+' youth', tgtGrade(tr.groups_trained, T.groups_trained));
   rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', fmt(dist.dist_lines)+' lines', presenceGrade(dist.dist_lines));
-  rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+fmt(prof.female)+'F / '+fmt(prof.pwd)+' PWD)', fmt(prof.shgs_profiled)+' SHGs', presenceGrade(prof.shgs_profiled));
-  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', presenceGrade(isla.isla_shgs));
-  rows += actRow(5,'var(--green)','fa-seedling','Production (Horticulture)', fmt(prod.prod_shgs)+' SHGs active', fmt(prod.prod_youth)+' youth', presenceGrade(prod.prod_youth));
+  rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+femalePct+'% F / '+pwdPct+'% PWD)', fmt(prof.shgs_profiled)+' SHGs', tgtGrade(prof.shgs_profiled, T.shgs_profiled));
+  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', tgtGrade(isla.isla_shgs, T.shgs_saving));
+  rows += actRow(5,'var(--green)','fa-seedling','Production (Horticulture)', fmt(prod.prod_shgs)+' SHGs active', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
   rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers', ugx(hs.hs_value), presenceGrade(hs.hs_value));
   rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
   rows += actRow(8,'var(--teal)','fa-handshake','Local Leverage', fmt(lev.lev_count)+' contributions', ugx(lev.lev_amount), presenceGrade(lev.lev_count));
@@ -257,7 +317,12 @@ function buildCard(d, clusterLabel, from, to){
       '<div class="kpi"><div class="ic"><i class="fas fa-sack-dollar"></i></div><div class="v">'+ugx(valueMobilized)+'</div><div class="l">Value Mobilized</div></div>'+
       '<div class="kpi"><div class="ic"><i class="fas fa-arrow-trend-up"></i></div><div class="v" style="color:'+og.c+'">'+overall+'%</div><div class="l">Overall</div></div>'+
     '</div>'+
-    '<div class="tblwrap"><table class="act"><thead><tr><th class="num">#</th><th>Activity Area</th><th>Indicator</th><th class="num">Achieved</th><th>Performance</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    // ---- TARGETS vs ACHIEVED ----
+    '<div class="tblwrap"><div class="secttl"><i class="fas fa-bullseye"></i> Targets vs Achieved <span class="secsub">(per field-staff standard: 16 SHGs · 400 youth · 70% female · 3% PWD · 16 SHGs saving · 400 into production · 16 groups trained)</span></div>'+
+      '<table class="act tgt"><thead><tr><th class="num">#</th><th>Target Area</th><th class="num">Target</th><th class="num">Achieved</th><th>% Achieved</th><th>Grade</th></tr></thead><tbody>'+targetTable+'</tbody></table></div>'+
+    // ---- ACTIVITY DETAIL ----
+    '<div class="tblwrap"><div class="secttl"><i class="fas fa-list-check"></i> Activity Detail</div>'+
+      '<table class="act"><thead><tr><th class="num">#</th><th>Activity Area</th><th>Indicator</th><th class="num">Achieved</th><th>Performance</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<div class="btm">'+
       '<div class="panel"><h3><i class="fas fa-star"></i> Key Highlights</h3>'+hls.map(h=>'<div class="hl"><i class="fas fa-circle-check"></i><span>'+h+'</span></div>').join('')+'</div>'+
       '<div class="panel"><h3><i class="fas fa-gauge-high"></i> Overall Performance Grade</h3>'+
@@ -268,6 +333,16 @@ function buildCard(d, clusterLabel, from, to){
           '<text x="55" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#7f8c85">'+overall+'%</text></svg>'+
           '<table class="gradetbl">'+gradeTbl+'</table>'+
         '</div>'+
+      '</div>'+
+    '</div>'+
+    // ---- SIGN-OFF + MEL STAMP ----
+    '<div class="signoff">'+
+      '<div class="sign"><div class="sline"></div><div class="slbl">Field Staff (CF)</div></div>'+
+      '<div class="sign"><div class="sline"></div><div class="slbl">Supervisor</div></div>'+
+      '<div class="stamp">'+
+        '<div class="stamp-inner"><div class="stamp-top">SAYE UGANDA</div><div class="stamp-mid">M &amp; E VERIFIED</div>'+
+        '<div class="stamp-dt">'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'+
+        '<div class="stamp-bot">MONITORING · EVALUATION · LEARNING</div></div>'+
       '</div>'+
     '</div>'+
   '</div>';
@@ -314,6 +389,10 @@ document.getElementById('staffChosen').addEventListener('click', (e)=>{
   CHOSEN.delete(x.getAttribute('data-rm')); renderChosen(); renderStaffList();
 });
 document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
+document.getElementById('printBtn').addEventListener('click', ()=>{
+  if(!chosenKeys().length){ alert('Generate a report card first, then Print / PDF.'); return; }
+  window.print();
+});
 loadStaff();
 </script>
 </body>
