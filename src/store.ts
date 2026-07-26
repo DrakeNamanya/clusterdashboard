@@ -1415,6 +1415,13 @@ async function newYouthDashPg(
   }
   const nMonths = months.size;
   for (const d of distRows) if (d.district) distSet.add(d.district);
+  // When a specific cluster/district filter is applied but that area has NO reach
+  // targets loaded (e.g. Kamuli/Bugiri/Central), don't fall back to the generic
+  // single-district default (726) — that made the Monthly Target card show a
+  // bogus fixed number. Show 0 so it's clear no target exists for that selection.
+  const monthlyTargetVal = nMonths > 0
+    ? Math.round(periodTotal / nMonths)
+    : (dl.length ? 0 : pTarget);
 
   // Per-district accumulative new youth + reach target (+ achieved %).
   const tgtByDist = new Map<string, number>();
@@ -1434,7 +1441,7 @@ async function newYouthDashPg(
   return {
     new_total_reach: num(a.total),
     target_selected_period: Math.round(periodTotal),
-    monthly_target: nMonths > 0 ? Math.round(periodTotal / nMonths) : pTarget,
+    monthly_target: monthlyTargetVal,
     new_female_reach: num(a.female),
     new_pwds_reach: num(a.pwd),
     new_female_pwds_reach: num(a.fpwd),

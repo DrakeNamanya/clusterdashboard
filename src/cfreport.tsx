@@ -236,7 +236,9 @@ function buildCard(d, clusterLabel, from, to){
 
   // Totals for KPI tiles
   const totalBeneficiaries = (Number(prof.youth_profiled)||0);
-  const totalShgs = (Number(prof.shgs_profiled)||0)+(Number(prod.prod_shgs)||0)+(Number(isla.isla_shgs)||0);
+  // "SHGs Reached" = groups the CF actually trained (per client: SHGs reached
+  // should equal groups trained), not profiled+production+isla SHGs summed.
+  const totalShgs = (Number(tr.groups_trained)||0);
   const valueMobilized = (Number(isla.savings)||0)+(Number(hs.hs_value)||0)+(Number(ps.ps_value)||0)+(Number(lev.lev_amount)||0);
   const areaVals=[prof.shgs_profiled, tr.youth_trained, dist.dist_lines, prod.prod_youth, hs.hs_youth, ps.birds_sold, isla.isla_shgs, lev.lev_count];
   const totalActivities = areaVals.filter(x=>(Number(x)||0)>0).length;

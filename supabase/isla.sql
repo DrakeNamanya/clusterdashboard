@@ -203,6 +203,9 @@ as $$
         'savings_value', coalesce(sum(savings_value),0),
         'youth_group_saving', coalesce(sum(case when youth_group_saving > 35 then 30 else youth_group_saving end),0),
         'youth_loans_value_given', coalesce(sum(youth_loans_value_given),0),
+        -- Monetary VALUE of loans given (UGX). `loans` (below) is only a COUNT of
+        -- borrowers, so the home "Loans (UGX)" card must read loans_value, not loans.
+        'loans_value', coalesce(sum(youth_loans_value_given),0),
         'total_fund', coalesce(sum(total_fund),0),
         'loans', coalesce(sum(case when loans > 35 then 30 else loans end),0)
       ) from f),

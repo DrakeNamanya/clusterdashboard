@@ -166,9 +166,14 @@ function buildNarrative(d, clusterLabel){
     '<p>A total of <b>'+fmt(trained)+' youth</b> were trained across '+fmt(trBy.length)+' training areas. Breakdown by area:</p>'+
     '<table class="trtable"><tbody>'+trRows+'</tbody></table>');
 
-  // Distribution
+  // Distribution — say WHAT was distributed (material types) rather than opaque
+  // "N distribution lines". Falls back gracefully if no items are available.
+  const distItems = (dist.items && String(dist.items).trim()) ? String(dist.items) : '';
   out += sec('var(--green-2)','fa-box-open','Distribution to Participants',
-    '<p><b>'+fmt(dist.lines)+' distribution lines</b> reached <b>'+fmt(dist.participants)+' participants</b> across <b>'+fmt(dist.shgs)+' SHGs</b> during the period.</p>');
+    '<p>'+(distItems
+      ? '<b>'+distItems+'</b> were distributed to '
+      : 'Materials were distributed to ')
+    +'<b>'+fmt(dist.participants)+' participants</b> across <b>'+fmt(dist.shgs)+' SHGs</b> during the period.</p>');
 
   // Production & Marketing
   out += sec('var(--green)','fa-seedling','Production & Marketing',

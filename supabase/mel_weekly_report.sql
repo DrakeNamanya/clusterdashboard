@@ -60,6 +60,17 @@ BEGIN
            COUNT(DISTINCT shg_name)::int AS shgs
     FROM dist
   ),
+  -- What was actually distributed: material types (initcap) + their counts,
+  -- e.g. "Livestock (18), Seeds (4)". Lets the weekly card say what was handed
+  -- out instead of an opaque "N distribution lines".
+  dist_items AS (
+    SELECT string_agg(mt || ' (' || c || ')', ', ' ORDER BY c DESC) AS items
+    FROM (
+      SELECT initcap(coalesce(nullif(btrim(material_type),''),'Unspecified')) AS mt,
+             COUNT(*) AS c
+      FROM dist GROUP BY 1
+    ) q
+  ),
   -- ---------- PRODUCTION (Horticulture + Oil seeds) ----------
   prod AS (
     SELECT * FROM production_rows
@@ -134,7 +145,7 @@ BEGIN
     'profiling', (SELECT to_jsonb(prof_tot) FROM prof_tot),
     'training_total', (SELECT trained FROM tr_tot),
     'training_by', (SELECT coalesce(jsonb_agg(jsonb_build_object('type',training_type,'n',n)),'[]'::jsonb) FROM tr_by),
-    'distribution', (SELECT to_jsonb(dist_tot) FROM dist_tot),
+    'distribution', (SELECT to_jsonb(dist_tot) || jsonb_build_object('items', (SELECT items FROM dist_items)) FROM dist_tot),
     'production', (SELECT to_jsonb(prod_tot) FROM prod_tot),
     'poultry', (SELECT to_jsonb(ps_tot) FROM ps_tot),
     'hort_sales', (SELECT to_jsonb(hs_tot) FROM hs_tot),

@@ -449,7 +449,10 @@ ${navSidebar('home')}
         setMoney('isla.savings_value', t.savings_value);
         setMoney('isla.total_fund', t.total_fund);
         setF('isla.shg_count', t.shg_count!=null?t.shg_count:d.shg_saving);
-        setMoney('isla.loans', t.loans);
+        // "Loans (UGX)" must show the monetary VALUE of loans given, not the
+        // borrower COUNT (t.loans). Prefer loans_value; fall back to
+        // youth_loans_value_given for older API responses.
+        setMoney('isla.loans', t.loans_value!=null?t.loans_value:(t.youth_loans_value_given!=null?t.youth_loans_value_given:0));
       },
       async production(){
         const d=await j(api('/api/production'));
@@ -509,7 +512,14 @@ ${navSidebar('home')}
 
     // ---------------- orchestration ----------------
     function loadAll(){
-      document.querySelectorAll('.skel').forEach(el=>{ el.classList.add('skel'); el.textContent='…'; });
+      // Reset EVERY value element (by data-f) back to the loading state on each
+      // refilter. NB: loaders remove the .skel class after first load, so a plain
+      // '.skel' selector would match nothing on the 2nd+ load and the cards would
+      // never visibly refresh — making filters look like they "do nothing".
+      document.querySelectorAll('[data-f]').forEach(el=>{ el.classList.add('skel'); el.textContent='…'; });
+      // Show the district table is refreshing too.
+      const distBody=document.getElementById('distBody');
+      if(distBody) distBody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">Loading…</td></tr>';
       // baseline sparklines so the strip never looks empty
       drawSpark('youth', null, '#54e08c'); drawSpark('female', null, '#f6b45a');
       drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
