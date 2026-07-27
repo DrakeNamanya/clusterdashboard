@@ -233,14 +233,16 @@ All six master tables appear as selectable entity sets and refresh automatically
   - a **bottom row**: the **District Race — Participant Target Achievement** panel
     (the old "Performance by District" table and "Trends Overview" line chart are now
     merged into ONE horse-race visualization). All districts race along **one shared
-    ground line** — each horse is positioned horizontally by its % of the new-youth
-    reach target for the reporting year Oct 1 2025 – Sep 30 2026 (0% at the start gate,
-    100% at the FINISH; over-target districts finish past the line), and each horse
-    carries its own **"District · NN%" label on top**. Each racer sits on its own tier
-    so they never overlap. The data is the **exact same table as the Report dashboard's
-    "Reach: Targets vs Achieved"** — the race fetches `/api/report` (`reach` array) so
-    the two always agree; districts with no reach target don't race and appear in the
-    legend only. Rendered as an inline SVG via `renderDistrictRace()`. A legend below
+    ground line** with small horses — each horse is positioned horizontally by its % of
+    the new-youth reach target (0% at the start gate, 100% at the FINISH box), and each
+    horse carries its own **"District · NN%" label on top** (labels auto-stack when two
+    horses sit close). The data is the **exact same table as the Report dashboard's
+    "Reach: Targets vs Achieved"** — the race fetches `/api/report` (`reach` array) and
+    **pins the reporting-year window Oct 1 2025 – Sep 30 2026** (the home page's global
+    date filter defaults to all-time, which would over-count reach against the Year-3
+    target and inflate the %), so the race and that table always agree exactly (e.g.
+    Iganga 53% · Jinja 60% · Luuka 72% · Mayuge 80%). Districts with no reach target
+    don't race and appear in the legend only. Rendered as an inline SVG via `renderDistrictRace()`. A legend below
     lists exact achieved/target figures and %. Next to it is a **Value Chain Total Sales**
     panel (UGX sold per chain with proportional bars + youth-seller counts; `GET /api/value-chain-sales?districts=&from=&to=`).
   Each panel fetches that dashboard's own API in the browser, so the figures always match
