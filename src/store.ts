@@ -1958,6 +1958,74 @@ export async function refreshIsla(env: Env): Promise<number> {
 }
 
 // --------------------------------------------------------------------------
+// Value-chain total sales for the home dashboard. Poultry value comes from
+// poultry_sales_rows; oil-seed & horticulture-crop value from sales_rows
+// (horticulture rows carry the crop name — Tomatoes/Watermelon/Onions…; oil
+// seeds are grouped as one chain because sales_rows has no oil-seed crop split).
+// Returns [{ chain, value, sellers }] sorted by value desc. [Oracle VM / pg]
+// --------------------------------------------------------------------------
+export async function valueChainSales(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string } = {}
+): Promise<{ chains: any[] }> {
+  const dl = (opts.districts || []).map((d) => d.toUpperCase());
+  const num = (v: any) => Number(v || 0);
+
+  // sales_rows: oil seeds (one chain) + each horticulture crop.
+  const sParams: any[] = [];
+  let sCond = '';
+  if (dl.length) { sParams.push(dl); sCond += ` AND UPPER(district_name) = ANY($${sParams.length}::text[])`; }
+  if (opts.from) { sParams.push(opts.from); sCond += ` AND activity_date >= $${sParams.length}::date`; }
+  if (opts.to)   { sParams.push(opts.to);   sCond += ` AND activity_date <= $${sParams.length}::date`; }
+  const salesSql = `
+    SELECT chain,
+           COALESCE(SUM(total_planting_value),0)::numeric AS value,
+           COUNT(DISTINCT shg_participant_id)::int        AS sellers
+    FROM (
+      SELECT CASE
+               WHEN lower(value_chain) IN ('oil seeds','oilseeds') THEN 'Oil seeds'
+               WHEN lower(value_chain) = 'horticulture'
+                 THEN CASE
+                        WHEN horticulture IS NULL OR btrim(horticulture) = '' THEN 'Other horticulture'
+                        WHEN lower(btrim(split_part(horticulture, ',', 1))) LIKE 'other%' THEN 'Other horticulture'
+                        ELSE initcap(btrim(split_part(horticulture, ',', 1)))
+                      END
+               ELSE initcap(coalesce(nullif(btrim(value_chain),''),'Other'))
+             END AS chain,
+             total_planting_value, shg_participant_id, value_chain
+      FROM sales_rows
+      WHERE lower(coalesce(value_chain,'')) <> 'poultry'
+        ${sCond}
+    ) q
+    GROUP BY chain`;
+
+  // poultry_sales_rows: poultry chain value.
+  const pParams: any[] = [];
+  let pCond = '';
+  if (dl.length) { pParams.push(dl); pCond += ` AND UPPER(district_name) = ANY($${pParams.length}::text[])`; }
+  if (opts.from) { pParams.push(opts.from); pCond += ` AND activity_date >= $${pParams.length}::date`; }
+  if (opts.to)   { pParams.push(opts.to);   pCond += ` AND activity_date <= $${pParams.length}::date`; }
+  const poultrySql = `
+    SELECT 'Poultry' AS chain,
+           COALESCE(SUM(total_poultry_value),0)::numeric AS value,
+           COUNT(DISTINCT shg_participant_id)::int       AS sellers
+    FROM poultry_sales_rows
+    WHERE TRUE ${pCond}`;
+
+  const [salesRows, poultryRows] = await Promise.all([
+    neonQuery(env, salesSql, sParams),
+    neonQuery(env, poultrySql, pParams),
+  ]);
+
+  const chains = [...salesRows, ...poultryRows]
+    .map((r) => ({ chain: String(r.chain), value: num(r.value), sellers: num(r.sellers) }))
+    .filter((r) => r.value > 0 || r.sellers > 0)
+    .sort((a, b) => b.value - a.value);
+
+  return { chains };
+}
+
+// --------------------------------------------------------------------------
 // Youth in Production (Mainly Horticulture) — production_and_marketing_tool
 // filtered pdn_level='production', joined to participants + shg profiling.
 // --------------------------------------------------------------------------

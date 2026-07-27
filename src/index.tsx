@@ -11,7 +11,7 @@ import {
   distributionDash, distributionDetail, distributionOptions, refreshDistribution,
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
   shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
-  islaDash, islaOptions, refreshIsla,
+  islaDash, islaOptions, refreshIsla, valueChainSales,
   productionDash, productionOptions, refreshProduction,
   salesDash, salesOptions, refreshSales, Env,
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
@@ -702,6 +702,19 @@ app.get('/api/isla/options', async (c) => {
 app.post('/api/isla/refresh', async (c) => {
   const n = await refreshIsla(storeEnv(c));
   return c.json({ ok: true, rows: n });
+});
+
+// ---- Value-chain total sales (home dashboard panel) -----------------------
+app.get('/api/value-chain-sales', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await valueChainSales(storeEnv(c), {
+    districts: split(q.districts),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
 });
 
 // ---- Youth in Production (Mainly Horticulture) -----------------------------

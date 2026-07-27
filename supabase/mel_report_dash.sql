@@ -88,6 +88,8 @@ BEGIN
   -- ---------- MOBILIZATION ACHIEVED (SHG profiling total) ----------
   mob_ach AS (
     SELECT upper(district) AS district, SUM(total)::int AS achieved,
+           SUM(COALESCE(female,0))::int AS female,
+           SUM(COALESCE(pwd,0))::int    AS pwd,
            COUNT(*)::int AS shgs
     FROM shg_profiling_rows
     WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
@@ -138,6 +140,8 @@ BEGIN
     SELECT a.district,
            COALESCE(rt.reach_target,0)::numeric      AS target,
            COALESCE(rb.achieved,0)::int              AS achieved,
+           COALESCE(rb.female,0)::int                AS female,
+           COALESCE(rb.pwd,0)::int                   AS pwd,
            COALESCE(rt.reach_target,0)::numeric - COALESCE(rb.achieved,0) AS balance
     FROM all_d a
     LEFT JOIN rt ON rt.district=a.district
@@ -147,7 +151,9 @@ BEGIN
   mob_tbl AS (
     SELECT a.district,
            COALESCE(rt.mob_target,0)::numeric        AS target,
-           COALESCE(ma.achieved,0)::int              AS achieved
+           COALESCE(ma.achieved,0)::int              AS achieved,
+           COALESCE(ma.female,0)::int                AS female,
+           COALESCE(ma.pwd,0)::int                   AS pwd
     FROM all_d a
     LEFT JOIN rt ON rt.district=a.district
     LEFT JOIN mob_ach ma ON ma.district=a.district
@@ -176,11 +182,13 @@ BEGIN
   SELECT jsonb_build_object(
     'reach', (SELECT coalesce(jsonb_agg(jsonb_build_object(
                  'district',district,'target',round(target),'achieved',achieved,
+                 'female',female,'pwd',pwd,
                  'balance',round(balance),
                  'pct', CASE WHEN target>0 THEN round(100.0*achieved/target,1) ELSE NULL END
                ) ORDER BY target DESC), '[]'::jsonb) FROM reach_tbl),
     'mobilization', (SELECT coalesce(jsonb_agg(jsonb_build_object(
                  'district',district,'target',round(target),'achieved',achieved,
+                 'female',female,'pwd',pwd,
                  'pct', CASE WHEN target>0 THEN round(100.0*achieved/target,1) ELSE NULL END
                ) ORDER BY target DESC), '[]'::jsonb) FROM mob_tbl),
     'production', (SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -196,8 +204,12 @@ BEGIN
     'totals', jsonb_build_object(
         'reach_target',      (SELECT COALESCE(SUM(target),0) FROM reach_tbl),
         'reach_achieved',    (SELECT COALESCE(SUM(achieved),0) FROM reach_tbl),
+        'reach_female',      (SELECT COALESCE(SUM(female),0) FROM reach_tbl),
+        'reach_pwd',         (SELECT COALESCE(SUM(pwd),0) FROM reach_tbl),
         'mob_target',        (SELECT COALESCE(SUM(target),0) FROM mob_tbl),
         'mob_achieved',      (SELECT COALESCE(SUM(achieved),0) FROM mob_tbl),
+        'mob_female',        (SELECT COALESCE(SUM(female),0) FROM mob_tbl),
+        'mob_pwd',           (SELECT COALESCE(SUM(pwd),0) FROM mob_tbl),
         'prod_target',       (SELECT COALESCE(SUM(target),0) FROM prod_tbl),
         'prod_achieved',     (SELECT COALESCE(SUM(achieved),0) FROM prod_tbl)
     ),

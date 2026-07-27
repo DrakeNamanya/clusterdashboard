@@ -6,7 +6,7 @@
 //   * greeting header with date-range / Filters / Export controls
 //   * dark hero KPI strip (4 KPI tiles + sparklines + Overall-Progress gauge)
 //   * 8 colour-themed summary cards (one per dashboard), each linking through
-//   * bottom row: Performance by District table, Trends line chart, Recent Activity
+//   * bottom row: Performance by District table, Trends line chart, Value Chain Total Sales
 //
 // All headline numbers are pulled live from each dashboard's own JSON API so
 // they always match the underlying dashboard. Every indicator re-fetches when
@@ -125,6 +125,17 @@ export function renderHome(base: string): string {
     .act .ai{ width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff; flex:none; }
     .act .at{ font-size:12.5px; font-weight:600; color:#22332a; line-height:1.25; }
     .act .am{ font-size:10.5px; color:var(--muted); margin-top:2px; }
+    /* Value Chain Total Sales list */
+    .vc-row{ display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid #f1f5f2; }
+    .vc-row:last-child{ border-bottom:0; }
+    .vc-ic{ width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#fff; flex:none; }
+    .vc-main{ flex:1; min-width:0; }
+    .vc-top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+    .vc-name{ font-size:12.5px; font-weight:600; color:#22332a; }
+    .vc-val{ font-size:12.5px; font-weight:700; color:#14432c; white-space:nowrap; }
+    .vc-bar{ height:7px; border-radius:4px; background:#e9efeb; overflow:hidden; margin:5px 0 3px; }
+    .vc-fill{ height:100%; border-radius:4px; }
+    .vc-sub{ font-size:10.5px; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -222,10 +233,10 @@ ${navSidebar('home')}
             <div class="panel-h"><div class="pt">Trends Overview</div><span class="pl">New reach over time</span></div>
             <div class="trend-wrap"><canvas id="trendChart"></canvas></div>
           </div>
-          <!-- Recent Activity -->
+          <!-- Value Chain Total Sales -->
           <div class="panel">
-            <div class="panel-h"><div class="pt">Recent Activity</div><a class="pl" href="/tools">View all →</a></div>
-            <div id="activity"><div style="color:var(--muted);font-size:12px;padding:8px 0">Loading…</div></div>
+            <div class="panel-h"><div class="pt">Value Chain Total Sales</div><span class="pl">UGX sold per chain</span></div>
+            <div id="valueChains"><div style="color:var(--muted);font-size:12px;padding:8px 0">Loading…</div></div>
           </div>
         </section>
 
@@ -461,6 +472,10 @@ ${navSidebar('home')}
         setF('production.unique_shgs', d.unique_shgs);
         setF('production.districts', arrLen(d.districts));
       },
+      async valuechains(){
+        const d=await j(api('/api/value-chain-sales'));
+        renderValueChains(d.chains||[]);
+      },
     };
 
     // Performance-by-District table. Uses district rows that carry a trained
@@ -493,21 +508,35 @@ ${navSidebar('home')}
       body.innerHTML=html;
     }
 
-    // Recent activity — synthesised from the latest data we already load, so it
-    // reflects real districts/actions without needing a new audit table.
-    function renderActivity(){
-      const host=document.getElementById('activity'); if(!host) return;
-      const items=[
-        { i:'fa-chalkboard-user', c:'var(--green)', t:'Cluster training KPIs refreshed', m:'Cluster Trainings · just now' },
-        { i:'fa-box', c:'var(--teal)', t:'Distribution figures updated', m:'Distribution to Participants' },
-        { i:'fa-piggy-bank', c:'var(--red)', t:'ISLA savings totals recomputed', m:'ISLA Savings' },
-        { i:'fa-address-card', c:'var(--orange)', t:'SHG profiling counts updated', m:'SHG Profiling' },
-        { i:'fa-hand-holding-dollar', c:'var(--green-d)', t:'Local leverage contributions synced', m:'Local Leverage' },
-      ];
-      host.innerHTML=items.map(a=>(
-        '<div class="act"><span class="ai" style="background:'+a.c+'"><i class="fas '+a.i+'"></i></span>'
-        +'<div><div class="at">'+a.t+'</div><div class="am">'+a.m+'</div></div></div>'
-      )).join('');
+    // Value Chain Total Sales — real UGX sold per chain (poultry, oil seeds,
+    // tomatoes, watermelon, …), from /api/value-chain-sales. Respects filters.
+    const VC_META = {
+      'Poultry':      { i:'fa-egg',            c:'#e0a23a' },
+      'Oil seeds':    { i:'fa-seedling',       c:'#8a6d3b' },
+      'Groundnuts':   { i:'fa-seedling',       c:'#8a6d3b' },
+      'Soybean':      { i:'fa-seedling',       c:'#b0902f' },
+      'Tomatoes':     { i:'fa-apple-whole',    c:'#d64b3f' },
+      'Watermelon':   { i:'fa-lemon',          c:'#3fae5a' },
+      'Onions':       { i:'fa-layer-group',    c:'#a05ad0' },
+      'Passion Fruit':{ i:'fa-circle',         c:'#7a4fd0' }
+    };
+    function renderValueChains(chains){
+      const host=document.getElementById('valueChains'); if(!host) return;
+      const rows=(chains||[]).filter(x=>x && x.chain);
+      if(!rows.length){ host.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">No sales recorded for this selection.</div>'; return; }
+      const max=Math.max.apply(null, rows.map(r=>Number(r.value)||0)) || 1;
+      const ugxC=(n)=>{ n=Number(n)||0; if(n>=1e9) return 'UGX '+(n/1e9).toFixed(2)+'B'; if(n>=1e6) return 'UGX '+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K'; return 'UGX '+fmt(n); };
+      host.innerHTML=rows.map(r=>{
+        const m=VC_META[r.chain]||{ i:'fa-basket-shopping', c:'var(--teal)' };
+        const w=Math.max(3, Math.round(100*(Number(r.value)||0)/max));
+        return '<div class="vc-row">'+
+          '<span class="vc-ic" style="background:'+m.c+'"><i class="fas '+m.i+'"></i></span>'+
+          '<div class="vc-main">'+
+            '<div class="vc-top"><span class="vc-name">'+r.chain+'</span><span class="vc-val">'+ugxC(r.value)+'</span></div>'+
+            '<div class="vc-bar"><div class="vc-fill" style="width:'+w+'%;background:'+m.c+'"></div></div>'+
+            '<div class="vc-sub">'+fmt(r.sellers)+' youth sellers</div>'+
+          '</div></div>';
+      }).join('');
     }
 
     // ---------------- orchestration ----------------
@@ -520,6 +549,8 @@ ${navSidebar('home')}
       // Show the district table is refreshing too.
       const distBody=document.getElementById('distBody');
       if(distBody) distBody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">Loading…</td></tr>';
+      const vcHost=document.getElementById('valueChains');
+      if(vcHost) vcHost.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">Loading…</div>';
       // baseline sparklines so the strip never looks empty
       drawSpark('youth', null, '#54e08c'); drawSpark('female', null, '#f6b45a');
       drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
@@ -538,7 +569,6 @@ ${navSidebar('home')}
     }
 
     renderCards();
-    renderActivity();
     document.getElementById('refreshBtn').addEventListener('click', loadAll);
     document.getElementById('exportBtn').addEventListener('click', ()=>{ window.location.href='/tools'; });
     // filter controls

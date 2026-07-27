@@ -19,6 +19,12 @@ BEGIN
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
+  -- Participant sex lookup (from the frontliner attendance master) so production /
+  -- sales / poultry youth can be disaggregated by female. PWD comes from each
+  -- fact row's own disability_status.
+  sexmap AS (
+    SELECT DISTINCT participant_id, sex FROM at_rows WHERE participant_id IS NOT NULL
+  ),
   -- ---------- PROFILING & SHG FORMATION (shg_profiling_rows) ----------
   prof AS (
     SELECT * FROM shg_profiling_rows
@@ -80,11 +86,13 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
   prod_tot AS (
-    SELECT COUNT(DISTINCT shg_participant_id)::int AS youth,
-           COUNT(DISTINCT shg_id)::int AS shgs,
-           COUNT(DISTINCT upper(district_name))::int AS districts,
-           string_agg(DISTINCT initcap(lower(district_name)), ', ') AS district_list
-    FROM prod
+    SELECT COUNT(DISTINCT p.shg_participant_id)::int AS youth,
+           COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN p.shg_participant_id END)::int AS female,
+           COUNT(DISTINCT CASE WHEN lower(p.disability_status)='yes' THEN p.shg_participant_id END)::int AS pwd,
+           COUNT(DISTINCT p.shg_id)::int AS shgs,
+           COUNT(DISTINCT upper(p.district_name))::int AS districts,
+           string_agg(DISTINCT initcap(lower(p.district_name)), ', ') AS district_list
+    FROM prod p LEFT JOIN sexmap sm ON sm.participant_id = p.shg_participant_id
   ),
   -- ---------- POULTRY SALES ----------
   ps AS (
@@ -94,24 +102,54 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
   ps_tot AS (
-    SELECT COALESCE(SUM(poultry_sold),0)::numeric AS birds_sold,
-           COUNT(DISTINCT shg_participant_id)::int AS youth,
-           COUNT(DISTINCT shg_id)::int AS shgs,
-           COALESCE(SUM(total_poultry_value),0)::numeric AS value,
-           string_agg(DISTINCT initcap(lower(district_name)), ', ') AS district_list
-    FROM ps
+    SELECT COALESCE(SUM(p.poultry_sold),0)::numeric AS birds_sold,
+           COUNT(DISTINCT p.shg_participant_id)::int AS youth,
+           COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN p.shg_participant_id END)::int AS female,
+           COUNT(DISTINCT CASE WHEN lower(p.disability_status)='yes' THEN p.shg_participant_id END)::int AS pwd,
+           COUNT(DISTINCT p.shg_id)::int AS shgs,
+           COALESCE(SUM(p.total_poultry_value),0)::numeric AS value,
+           string_agg(DISTINCT initcap(lower(p.district_name)), ', ') AS district_list
+    FROM ps p LEFT JOIN sexmap sm ON sm.participant_id = p.shg_participant_id
   ),
   -- ---------- HORTICULTURE / OILSEED SALES ----------
+  -- Youth sellers = Horticulture OR Oil seeds (Poultry sales sit in the poultry
+  -- block), matching the dashboard/CF-card definition.
   hs AS (
     SELECT * FROM sales_rows
-    WHERE (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+    WHERE lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
+      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
   hs_tot AS (
-    SELECT COUNT(DISTINCT shg_participant_id)::int AS youth,
-           COALESCE(SUM(total_planting_value),0)::numeric AS value
-    FROM hs
+    SELECT COUNT(DISTINCT s.shg_participant_id)::int AS youth,
+           COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN s.shg_participant_id END)::int AS female,
+           COUNT(DISTINCT CASE WHEN lower(s.disability_status)='yes' THEN s.shg_participant_id END)::int AS pwd,
+           COALESCE(SUM(s.total_planting_value),0)::numeric AS value
+    FROM hs s LEFT JOIN sexmap sm ON sm.participant_id = s.shg_participant_id
+  ),
+  -- What horticulture produce was sold, by crop + unit, e.g.
+  -- "Watermelon: 727,634 pieces; Tomatoes: 342,023 kg". Only Horticulture rows
+  -- carry a crop name; the measure is KGs / Pieces.
+  hs_items AS (
+    SELECT string_agg(
+             crop || ': ' || to_char(qty,'FM999,999,999') || ' ' || unit,
+             '; ' ORDER BY qty DESC) AS items
+    FROM (
+      SELECT initcap(btrim(horticulture)) AS crop,
+             CASE WHEN lower(qty_harvested_measure) LIKE 'piece%' THEN 'pieces'
+                  WHEN lower(qty_harvested_measure) LIKE 'kg%'    THEN 'kg'
+                  ELSE lower(coalesce(nullif(btrim(qty_harvested_measure),''),'units')) END AS unit,
+             ROUND(SUM(qty_harvested)) AS qty
+      FROM hs
+      WHERE lower(value_chain)='horticulture'
+        AND horticulture IS NOT NULL AND btrim(horticulture) <> ''
+        AND coalesce(qty_harvested,0) > 0
+      GROUP BY 1,2
+      HAVING SUM(qty_harvested) > 0
+      ORDER BY qty DESC
+      LIMIT 8
+    ) q
   ),
   -- ---------- ISLA (savings & loans) ----------
   isla AS (
@@ -148,7 +186,7 @@ BEGIN
     'distribution', (SELECT to_jsonb(dist_tot) || jsonb_build_object('items', (SELECT items FROM dist_items)) FROM dist_tot),
     'production', (SELECT to_jsonb(prod_tot) FROM prod_tot),
     'poultry', (SELECT to_jsonb(ps_tot) FROM ps_tot),
-    'hort_sales', (SELECT to_jsonb(hs_tot) FROM hs_tot),
+    'hort_sales', (SELECT to_jsonb(hs_tot) || jsonb_build_object('items', (SELECT items FROM hs_items)) FROM hs_tot),
     'isla', (SELECT to_jsonb(isla_tot) FROM isla_tot),
     'leverage', (SELECT to_jsonb(lev_tot) FROM lev_tot)
   ) INTO v;

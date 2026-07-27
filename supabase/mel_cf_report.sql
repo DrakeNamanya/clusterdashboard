@@ -124,6 +124,12 @@ BEGIN
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
+  -- Participant sex lookup (frontliner attendance master) so production / sales /
+  -- poultry youth can be disaggregated by female. PWD comes from each fact row's
+  -- own disability_status.
+  sexmap AS (
+    SELECT DISTINCT participant_id, sex FROM at_rows WHERE participant_id IS NOT NULL
+  ),
   -- ---------- SHG PROFILING ----------
   prof AS (
     SELECT * FROM shg_profiling_rows
@@ -137,7 +143,12 @@ BEGIN
            COALESCE(SUM(total),0)::int AS youth_profiled,
            COALESCE(SUM(female),0)::int AS female,
            COALESCE(SUM(male),0)::int AS male,
-           COALESCE(SUM(pwd),0)::int AS pwd
+           COALESCE(SUM(pwd),0)::int AS pwd,
+           -- SHG size split (updates live as profiling changes). Standard SAYE
+           -- group size is ~25 members: below-standard = <25 participants,
+           -- standard/large = >=25 participants.
+           COUNT(*) FILTER (WHERE COALESCE(total,0) < 25)::int  AS shgs_below_25,
+           COUNT(*) FILTER (WHERE COALESCE(total,0) >= 25)::int AS shgs_25_plus
     FROM prof
   ),
   -- ---------- TRAININGS (from SHG profiling — first trainings) ----------
@@ -216,19 +227,30 @@ BEGIN
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
   ),
-  -- Distinct union of production participants + livestock recipients.
+  -- Distinct union of production participants + livestock recipients, carrying
+  -- each pid's max PWD flag (from production disability_status).
   prod_youth_all AS (
-    SELECT shg_participant_id AS pid FROM prod WHERE shg_participant_id IS NOT NULL
+    SELECT shg_participant_id AS pid,
+           MAX(CASE WHEN lower(disability_status)='yes' THEN 1 ELSE 0 END) AS is_pwd
+    FROM prod WHERE shg_participant_id IS NOT NULL GROUP BY shg_participant_id
     UNION
-    SELECT participant_id      AS pid FROM prod_livestock WHERE participant_id IS NOT NULL
+    SELECT participant_id AS pid, 0 AS is_pwd
+    FROM prod_livestock WHERE participant_id IS NOT NULL
+      AND participant_id NOT IN (SELECT shg_participant_id FROM prod WHERE shg_participant_id IS NOT NULL)
   ),
   prod_shg_all AS (
     SELECT shg_id::text AS sid FROM prod WHERE shg_id IS NOT NULL
     UNION
     SELECT shg_name     AS sid FROM prod_livestock WHERE shg_name IS NOT NULL
   ),
-  prod_t AS ( SELECT (SELECT COUNT(*) FROM prod_youth_all)::int AS prod_youth,
-                     (SELECT COUNT(*) FROM prod_shg_all)::int   AS prod_shgs ),
+  prod_t AS (
+    SELECT (SELECT COUNT(DISTINCT pid) FROM prod_youth_all)::int AS prod_youth,
+           (SELECT COUNT(*) FROM prod_shg_all)::int AS prod_shgs,
+           (SELECT COUNT(DISTINCT p.pid) FROM prod_youth_all p
+              LEFT JOIN sexmap sm ON sm.participant_id = p.pid
+              WHERE lower(sm.sex)='female')::int AS female,
+           (SELECT COUNT(DISTINCT pid) FROM prod_youth_all WHERE is_pwd=1)::int AS pwd
+  ),
   -- ---------- SALES HORTICULTURE ----------
   -- Client rule: "youth sellers on sales (horticulture) = youth in the marketing
   -- sheet who sold HORTICULTURE or OIL SEEDS".  The marketing sheet (sales_rows)
@@ -243,8 +265,12 @@ BEGIN
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
-  hs_t AS ( SELECT COUNT(DISTINCT shg_participant_id)::int AS hs_youth,
-                   COALESCE(SUM(total_planting_value),0)::numeric AS hs_value FROM hs ),
+  hs_t AS (
+    SELECT COUNT(DISTINCT s.shg_participant_id)::int AS hs_youth,
+           COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN s.shg_participant_id END)::int AS female,
+           COUNT(DISTINCT CASE WHEN lower(s.disability_status)='yes' THEN s.shg_participant_id END)::int AS pwd,
+           COALESCE(SUM(s.total_planting_value),0)::numeric AS hs_value
+    FROM hs s LEFT JOIN sexmap sm ON sm.participant_id = s.shg_participant_id ),
   -- ---------- SALES POULTRY ----------
   ps AS (
     SELECT * FROM poultry_sales_rows
@@ -253,9 +279,13 @@ BEGIN
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
-  ps_t AS ( SELECT COALESCE(SUM(poultry_sold),0)::numeric AS birds_sold,
-                   COUNT(DISTINCT shg_participant_id)::int AS ps_youth,
-                   COALESCE(SUM(total_poultry_value),0)::numeric AS ps_value FROM ps ),
+  ps_t AS (
+    SELECT COALESCE(SUM(p.poultry_sold),0)::numeric AS birds_sold,
+           COUNT(DISTINCT p.shg_participant_id)::int AS ps_youth,
+           COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN p.shg_participant_id END)::int AS female,
+           COUNT(DISTINCT CASE WHEN lower(p.disability_status)='yes' THEN p.shg_participant_id END)::int AS pwd,
+           COALESCE(SUM(p.total_poultry_value),0)::numeric AS ps_value
+    FROM ps p LEFT JOIN sexmap sm ON sm.participant_id = p.shg_participant_id ),
   -- ---------- ISLA SAVINGS ----------
   isla AS (
     SELECT * FROM isla_final_rows

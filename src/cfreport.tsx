@@ -52,13 +52,16 @@ export function renderCfReport(base: string): string {
     .chip i:hover{ opacity:1; }
 
     .cardsheet{ background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:0 4px 18px rgba(30,50,40,.08); overflow:hidden; }
-    .chead{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px 26px; border-bottom:3px solid var(--green-2); }
-    .chead .logo{ width:46px; height:46px; border-radius:12px; background:var(--green); color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px; }
+    .chead{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 26px; border-bottom:3px solid var(--green); }
+    .chead .brandblock{ display:flex; align-items:center; gap:11px; min-width:150px; }
+    .chead .logo{ width:46px; height:46px; border-radius:11px; background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 2px 6px rgba(0,104,55,.25); }
+    .chead .brandtxt .bn{ font-size:16px; font-weight:800; color:var(--green); line-height:1.1; }
+    .chead .brandtxt .bt{ font-size:9.5px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
     .chead .mid{ flex:1; text-align:center; }
-    .chead .mid .t{ font-size:19px; font-weight:800; color:var(--green); letter-spacing:.01em; }
-    .chead .mid .s{ font-size:12px; color:var(--green-2); font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
-    .chead .meta{ font-size:11px; color:var(--muted); text-align:right; line-height:1.6; }
-    .chead .meta b{ color:var(--ink); }
+    .chead .mid .t{ font-size:20px; font-weight:800; color:var(--ink); letter-spacing:-.01em; }
+    .chead .mid .s{ font-size:11px; color:var(--green-2); font-weight:800; text-transform:uppercase; letter-spacing:.14em; margin-bottom:1px; }
+    .chead .meta{ font-size:10px; color:var(--muted); text-align:right; line-height:1.5; text-transform:uppercase; letter-spacing:.03em; font-weight:700; min-width:130px; }
+    .chead .meta b{ color:var(--ink); font-size:12px; text-transform:none; letter-spacing:0; }
 
     .idrow{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:18px 26px; }
     @media(max-width:820px){ .idrow{ grid-template-columns:repeat(2,1fr); } }
@@ -167,6 +170,8 @@ const CLUSTER_DISTRICTS = {
 const CLUSTER_LABEL = { iganga:'Iganga Cluster', kamuli:'Kamuli Cluster', bugiri:'Bugiri Cluster', central:'Central Cluster', all:'All Clusters' };
 const fmt = n => (n==null||isNaN(n)) ? '0' : Math.round(Number(n)).toLocaleString();
 function ugx(n){ n=Number(n)||0; if(n>=1e9) return 'UGX '+(n/1e9).toFixed(2)+'B'; if(n>=1e6) return 'UGX '+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K'; return 'UGX '+fmt(n); }
+// Female / PWD disaggregation brief, e.g. "43 female · 1 PWD".
+function db(female, pwd){ return fmt(female)+' female · '+fmt(pwd)+' PWD'; }
 function prettyDate(s){ if(!s) return ''; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
 function daysBetween(a,b){ if(!a||!b) return null; const d1=new Date(a), d2=new Date(b); return Math.round((d2-d1)/86400000)+1; }
 function gradeFor(p){
@@ -280,11 +285,11 @@ function buildCard(d, clusterLabel, from, to){
   let rows='';
   rows += actRow(1,'var(--blue)','fa-chalkboard-user','Trainings (first trainings)', fmt(tr.groups_trained)+' groups trained across '+fmt(tr.training_areas)+' areas', fmt(tr.youth_trained)+' youth', tgtGrade(tr.groups_trained, T.groups_trained));
   rows += actRow(2,'var(--green-2)','fa-box-open','Distribution to Participants', fmt(dist.dist_participants)+' participants', (dist.items||'—'), presenceGrade(dist.dist_lines));
-  rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+femalePct+'% F / '+pwdPct+'% PWD)', fmt(prof.shgs_profiled)+' SHGs', tgtGrade(prof.shgs_profiled, T.shgs_profiled));
-  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', tgtGrade(isla.isla_shgs, T.shgs_saving));
-  rows += actRow(5,'var(--green)','fa-seedling','Youth into Production', fmt(prod.prod_shgs)+' SHGs · horticulture + livestock recipients', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
-  rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers · horticulture + oil seeds', ugx(hs.hs_value), presenceGrade(hs.hs_value));
-  rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
+  rows += actRow(3,'var(--amber)','fa-users','SHG Profiling', fmt(prof.youth_profiled)+' youth ('+db(prof.female, prof.pwd)+') · '+fmt(prof.shgs_below_25)+' SHGs &lt;25 · '+fmt(prof.shgs_25_plus)+' SHGs ≥25', fmt(prof.shgs_profiled)+' SHGs', tgtGrade(prof.shgs_profiled, T.shgs_profiled));
+  rows += actRow(4,'var(--purple)','fa-piggy-bank','ISLA Savings & Loans', ugx(isla.savings)+' saved by '+fmt(isla.youth_savers)+' youth · '+ugx(isla.loans_value)+' loans given · '+fmt(isla.youth_loans)+' youth got loans', fmt(isla.isla_shgs)+' SHGs', tgtGrade(isla.isla_shgs, T.shgs_saving));
+  rows += actRow(5,'var(--green)','fa-seedling','Youth into Production', fmt(prod.prod_shgs)+' SHGs · '+db(prod.female, prod.pwd)+' · horticulture + livestock recipients', fmt(prod.prod_youth)+' youth', tgtGrade(prod.prod_youth, T.youth_production));
+  rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers ('+db(hs.female, hs.pwd)+') · horticulture + oil seeds', ugx(hs.hs_value), presenceGrade(hs.hs_value));
+  rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth ('+db(ps.female, ps.pwd)+') · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
   rows += actRow(8,'var(--teal)','fa-handshake','Local Leverage', fmt(lev.lev_count)+' contributions', ugx(lev.lev_amount), presenceGrade(lev.lev_count));
 
   // Key highlights (dynamic)
@@ -292,8 +297,8 @@ function buildCard(d, clusterLabel, from, to){
   if((Number(ps.ps_value)||0)>0) hls.push('Poultry sales generated <b>'+ugx(ps.ps_value)+'</b> from '+fmt(ps.birds_sold)+' birds.');
   if((Number(lev.lev_amount)||0)>0) hls.push('Mobilized <b>'+ugx(lev.lev_amount)+'</b> in local leverage across '+fmt(lev.lev_count)+' contributions.');
   if((Number(isla.savings)||0)>0) hls.push('Strong ISLA performance: <b>'+ugx(isla.savings)+'</b> saved and <b>'+ugx(isla.loans_value)+'</b> in loans given.');
-  if((Number(prof.shgs_profiled)||0)>0) hls.push('Profiled <b>'+fmt(prof.shgs_profiled)+' SHGs</b> reaching '+fmt(prof.youth_profiled)+' youth.');
-  if((Number(prod.prod_youth)||0)>0) hls.push('Engaged <b>'+fmt(prod.prod_youth)+' youth</b> in production.');
+  if((Number(prof.shgs_profiled)||0)>0) hls.push('Profiled <b>'+fmt(prof.shgs_profiled)+' SHGs</b> ('+fmt(prof.shgs_below_25)+' with &lt;25 members, '+fmt(prof.shgs_25_plus)+' with ≥25) reaching '+fmt(prof.youth_profiled)+' youth &mdash; '+db(prof.female, prof.pwd)+'.');
+  if((Number(prod.prod_youth)||0)>0) hls.push('Engaged <b>'+fmt(prod.prod_youth)+' youth</b> in production ('+db(prod.female, prod.pwd)+').');
   if(!hls.length) hls.push('No recorded activity for this facilitator in the selected period.');
 
   const gradeTbl = [
@@ -305,9 +310,10 @@ function buildCard(d, clusterLabel, from, to){
 
   return '<div class="cardsheet">'+
     '<div class="chead">'+
-      '<div class="logo"><i class="fas fa-people-group"></i></div>'+
-      '<div class="mid"><div class="t">COMMUNITY FACILITATOR REPORT CARD</div><div class="s">Performance Summary</div></div>'+
-      '<div class="meta">Date Generated: <b>'+new Date().toLocaleString('en-GB')+'</b><br/>Report Period: <b>'+period+'</b></div>'+
+      '<div class="brandblock"><div class="logo"><i class="fas fa-seedling"></i></div>'+
+        '<div class="brandtxt"><div class="bn">SAYE Uganda</div><div class="bt">MEL</div></div></div>'+
+      '<div class="mid"><div class="s">Community Facilitator</div><div class="t">Performance Report Card</div></div>'+
+      '<div class="meta">Date Generated<br/><b>'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</b><br/>Report Period<br/><b>'+period+'</b></div>'+
     '</div>'+
     '<div class="idrow">'+
       '<div class="idcard"><span class="ic"><i class="fas fa-map-pin"></i></span><div><div class="lb">Cluster</div><div class="vl">'+clusterLabel+'</div></div></div>'+
