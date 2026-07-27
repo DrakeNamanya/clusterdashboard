@@ -232,13 +232,17 @@ All six master tables appear as selectable entity sets and refresh automatically
     Production) — each with a headline figure + 3 sub-metrics, linking to the full dashboard.
   - a **bottom row**: the **District Race — Participant Target Achievement** panel
     (the old "Performance by District" table and "Trends Overview" line chart are now
-    merged into ONE horse-race visualization: each district is a jockey positioned along
-    a track by its % of the new-youth reach target for the reporting year Oct 1 2025 –
-    Sep 30 2026, racing toward a FINISH line at 100%; a legend below lists the exact
-    reached/target figures and %. Rendered as an inline SVG via `renderDistrictRace()`
-    off the `/api/new-youth` `by_district` data — districts with no reach target park at
-    the start marked "no target"), and a **Value Chain Total Sales** panel
-    (UGX sold per chain with proportional bars + youth-seller counts; `GET /api/value-chain-sales?districts=&from=&to=`).
+    merged into ONE horse-race visualization). All districts race along **one shared
+    ground line** — each horse is positioned horizontally by its % of the new-youth
+    reach target for the reporting year Oct 1 2025 – Sep 30 2026 (0% at the start gate,
+    100% at the FINISH; over-target districts finish past the line), and each horse
+    carries its own **"District · NN%" label on top**. Each racer sits on its own tier
+    so they never overlap. The data is the **exact same table as the Report dashboard's
+    "Reach: Targets vs Achieved"** — the race fetches `/api/report` (`reach` array) so
+    the two always agree; districts with no reach target don't race and appear in the
+    legend only. Rendered as an inline SVG via `renderDistrictRace()`. A legend below
+    lists exact achieved/target figures and %. Next to it is a **Value Chain Total Sales**
+    panel (UGX sold per chain with proportional bars + youth-seller counts; `GET /api/value-chain-sales?districts=&from=&to=`).
   Each panel fetches that dashboard's own API in the browser, so the figures always match
   the source dashboard. Charts use Chart.js. The SAYE sidebar/hero greens were lightened
   (~10%) for readability. *(Production-target and reach-target tables are planned —
