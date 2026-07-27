@@ -403,13 +403,18 @@ ${navSidebar('home')}
         setF('hero.target', d.monthly_target);
         // District Race: each district is a jockey positioned by its % of the
         // reach target (Oct 2025 – Sep 2026). Merges the old Performance-by-District
-        // table + Trends chart into one racing visual.
-        renderDistrictRace(d.by_district||[]);
+        // table + Trends chart into one racing visual. Source of truth = the
+        // Report dashboard's "Reach: Targets vs Achieved" table (/api/report → reach),
+        // so the race always matches that table exactly.
+        try{
+          const rep=await j(api('/api/report'));
+          renderDistrictRace((rep&&rep.reach)||d.by_district||[]);
+        }catch(_){ renderDistrictRace(d.by_district||[]); }
         const rsub=document.getElementById('raceSub');
         if(rsub){
           const rf=(document.getElementById('fFrom')||{}).value, rt=(document.getElementById('fTo')||{}).value;
-          const per=(rf&&rt)?(rf+' → '+rt):'reporting year (Oct 2025 – Sep 2026)';
-          rsub.textContent='New youth reached vs reach target · '+per+' · racing to 100% (FINISH)';
+          const per=(rf&&rt)?(rf+' → '+rt):'Oct 1 2025 – Sep 30 2026';
+          rsub.textContent='New Youth Reached vs reach target · '+per+' · racing to 100% (FINISH)';
         }
 
         // by_date is a daily series of {date, value} (new reach per day).
@@ -522,16 +527,21 @@ ${navSidebar('home')}
         '</g></g>';
     }
 
-    // Normalise API district rows → {name, trained, target, pct}. pct may be null
-    // when no reach target exists for that district (shown parked at the start).
+    // Normalise API district rows → {name, trained, target, pct}. Accepts the
+    // /report "reach" shape ({district, achieved, target, pct}) as the source of
+    // truth, and also tolerates the /new-youth by_district shape ({trained,
+    // achieved_pct}). pct is null when no reach target exists for that district.
     function normRaceRows(rows){
       const out=[];
       for(const r of (rows||[])){
         if(typeof r==='string') continue;
         const name=r.district||r.name||r.district_name||r.label||'';
-        const trained=Number(r.trained||r.total_trained||r.youth_trained||r.count||r.total||0);
+        const trained=Number(r.achieved!=null?r.achieved:(r.trained||r.total_trained||r.youth_trained||r.count||r.total||0));
         const target=Number(r.target||r.monthly_target||0);
-        let pct = (r.achieved_pct!=null) ? Number(r.achieved_pct) : (target>0 ? Math.round(100*trained/target) : null);
+        let pct = (r.pct!=null) ? Number(r.pct)
+                : (r.achieved_pct!=null) ? Number(r.achieved_pct)
+                : (target>0 ? (100*trained/target) : null);
+        if(pct!=null) pct=Math.round(pct);
         if(name) out.push({ name: name.replace(/\\b\\w/g,c=>c.toUpperCase()).replace(/City/i,'City'), trained, target, pct });
       }
       // Rank by progress (highest % first); target-less districts sink to the bottom.
@@ -540,61 +550,85 @@ ${navSidebar('home')}
     }
 
     // Draw the horse-race SVG + a legend of exact figures.
+    // ALL districts race along ONE shared ground line; each horse is positioned
+    // by its % of the reach target (0% at startX, 100% at the FINISH). Each
+    // district's name + % sits on TOP of its own horse. Districts that have no
+    // reach target (target = 0) don't race — they're listed in the legend only.
     function renderDistrictRace(rows){
       const track=document.getElementById('raceTrack');
       const legend=document.getElementById('raceLegend');
       if(!track) return;
-      const data=normRaceRows(rows);
-      if(!data.length){
+      const all=normRaceRows(rows);
+      const racers=all.filter(d=>d.pct!=null && d.target>0);   // only target-bearing districts race
+      if(!all.length){
         track.innerHTML='<div style="color:var(--muted);font-size:12px;padding:30px 0;text-align:center">No district reach data for this selection.</div>';
         if(legend) legend.innerHTML=''; return;
       }
-      // Layout geometry (viewBox units).
-      const W=1040, laneH=96, top=40, bottom=54;
-      const startX=150, finishX=850;             // 0% at startX, 100% at finishX (left gutter holds district names)
-      const H = top + data.length*laneH + bottom;
+
+      // Single-track geometry. Every horse stands on ONE shared ground line and is
+      // positioned horizontally by its % (0% at startX, 100%+ at/after the FINISH).
+      // Each district gets its own vertical tier so the horses never overlap and each
+      // horse carries its own "District / NN%" label directly above it. Because most
+      // districts sit near or above 100% (all bunched at the finish), the per-tier
+      // separation is what keeps them individually readable while still sharing the line.
+      const n=racers.length;
+      const W=1060, top=44, bottom=52;
+      const startX=70, finishX=820;              // 0% at startX, 100% at finishX
+      const horseH=150*0.42;                     // rendered horse height
+      const rowH=Math.max(74, horseH+38);        // vertical space per tier (label + horse)
+      const H = top + Math.max(1,n)*rowH + bottom;
+      const groundY = H - bottom;                // shared baseline all horses stand on
       const span=finishX-startX;
-      const xFor=(pct)=>{ const p=Math.max(0,Math.min(100,(pct==null?0:pct))); return startX + span*(p/100); };
-      const scale=0.40;
+      // allow >100% to nudge just past the finish so over-target districts read as "past FINISH"
+      const xFor=(pct)=>{ const p=Math.max(0,Math.min(120,(pct==null?0:pct))); return startX + span*(p/100); };
+      const scale=0.42;
 
       let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="District participant target race" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">';
-      // FINISH banner (100% line)
-      svg+='<rect x="'+(finishX)+'" y="'+(top-14)+'" width="'+(W-finishX-24)+'" height="'+(H-top-bottom+28)+'" fill="#fafafa" stroke="#c9cfd4" stroke-width="2"/>';
-      svg+='<rect x="'+(finishX)+'" y="'+(top-14)+'" width="'+(W-finishX-24)+'" height="34" fill="#eef1f3" stroke="#c9cfd4" stroke-width="2"/>';
-      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(top+9)+'" text-anchor="middle" font-size="17" font-weight="700" letter-spacing="3" fill="#8c9198">FINISH</text>';
-      // checkered flag pole at finish
-      svg+='<line x1="'+finishX+'" y1="'+(top-14)+'" x2="'+finishX+'" y2="'+(H-bottom+14)+'" stroke="#8c9198" stroke-width="2" stroke-dasharray="6 5"/>';
 
-      data.forEach((d,i)=>{
-        const laneY = top + i*laneH;
-        const baseY = laneY + laneH - 20;       // baseline for this lane
-        const color = RACE_COLORS[i%RACE_COLORS.length];
-        // lane baseline + arrow
-        svg+='<line x1="'+startX+'" y1="'+baseY+'" x2="'+(W-24)+'" y2="'+baseY+'" stroke="#e4e9e5" stroke-width="2"/>';
-        // start tick
-        svg+='<line x1="'+startX+'" y1="'+(baseY-10)+'" x2="'+startX+'" y2="'+(baseY+6)+'" stroke="#c9cfd4" stroke-width="2"/>';
-        // progress trail up to the racer
+      // shared ground line
+      svg+='<line x1="'+startX+'" y1="'+groundY+'" x2="'+(W-24)+'" y2="'+groundY+'" stroke="#d5dbd7" stroke-width="3"/>';
+      // % gridlines (25/50/75) + axis labels along the shared line
+      [0,25,50,75].forEach(g=>{ const gx=xFor(g); if(g>0) svg+='<line x1="'+gx+'" y1="'+top+'" x2="'+gx+'" y2="'+groundY+'" stroke="#eef1ef" stroke-width="2"/>'; svg+='<text x="'+gx+'" y="'+(groundY+22)+'" text-anchor="middle" font-size="11" fill="#aeb6b1">'+g+'%</text>'; });
+      // start gate
+      svg+='<line x1="'+startX+'" y1="'+top+'" x2="'+startX+'" y2="'+groundY+'" stroke="#c9cfd4" stroke-width="2" stroke-dasharray="4 4"/>';
+
+      // FINISH banner (100% line, full height)
+      svg+='<rect x="'+(finishX)+'" y="'+top+'" width="'+(W-finishX-24)+'" height="'+(groundY-top)+'" fill="#fafafa" stroke="#c9cfd4" stroke-width="2"/>';
+      svg+='<rect x="'+(finishX)+'" y="'+top+'" width="'+(W-finishX-24)+'" height="28" fill="#eef1f3" stroke="#c9cfd4" stroke-width="2"/>';
+      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(top+19)+'" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="3" fill="#8c9198">FINISH</text>';
+      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(groundY+22)+'" text-anchor="middle" font-size="11" fill="#aeb6b1">100%</text>';
+      svg+='<line x1="'+finishX+'" y1="'+top+'" x2="'+finishX+'" y2="'+groundY+'" stroke="#8c9198" stroke-width="2" stroke-dasharray="6 5"/>';
+
+      // draw racers — highest % on the TOP tier (leader on top), one tier each
+      racers.forEach((d,i)=>{
+        const color=RACE_COLORS[i%RACE_COLORS.length];
         const rx=xFor(d.pct);
-        svg+='<line x1="'+startX+'" y1="'+baseY+'" x2="'+rx+'" y2="'+baseY+'" stroke="'+color+'" stroke-width="3" opacity="0.5" stroke-linecap="round"/>';
-        // the racer (translate so horse hooves sit ~on the baseline)
-        svg+='<g transform="translate('+(rx-70*scale)+' '+(baseY-150*scale)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
-        // district name (left gutter, left-anchored so it never clips the viewBox edge)
-        svg+='<text x="10" y="'+(baseY+4)+'" text-anchor="start" font-size="14" font-weight="700" fill="#2a3b32">'+d.name+'</text>';
-        // pct badge riding just ahead of the horse
-        if(d.pct!=null){
-          const done = d.pct>=100;
-          svg+='<text x="'+(rx+26)+'" y="'+(baseY-34)+'" text-anchor="middle" font-size="15" font-weight="800" fill="'+(done?'#2fae76':color)+'">'+d.pct+'%'+(done?' ✓':'')+'</text>';
-        } else {
-          svg+='<text x="'+(rx+26)+'" y="'+(baseY-34)+'" text-anchor="middle" font-size="12" font-weight="700" fill="#9aa5a0">no target</text>';
-        }
+        const hoofY = top + (i+1)*rowH - 12;             // this tier's ground contact
+        // faint progress trail from the start gate to the horse (along its tier)
+        svg+='<line x1="'+startX+'" y1="'+hoofY+'" x2="'+rx+'" y2="'+hoofY+'" stroke="'+color+'" stroke-width="3" opacity="0.30" stroke-linecap="round"/>';
+        svg+='<line x1="'+startX+'" y1="'+(hoofY-9)+'" x2="'+startX+'" y2="'+(hoofY+3)+'" stroke="#c9cfd4" stroke-width="2"/>';
+        // the racer (hooves ~on hoofY)
+        svg+='<g transform="translate('+(rx-70*scale)+' '+(hoofY-horseH)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
+        // label ON TOP of the horse: "District · NN%". When the horse is at/near the
+        // FINISH (right edge) the label is right-anchored so it extends leftwards and
+        // never collides with the FINISH banner text.
+        const done=d.pct>=100;
+        const labelY=hoofY-horseH-6;                     // just above the rider's head
+        const pcol=done?'#2fae76':color;
+        const nearFinish = rx > finishX-40;
+        const anchor = nearFinish ? 'end' : 'middle';
+        const lx = nearFinish ? finishX-10 : rx;   // park near-finish labels just LEFT of the FINISH box
+        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="14" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
       });
+
       svg+='</svg>';
       track.innerHTML=svg;
 
-      // Legend with exact figures.
+      // Legend with exact figures (all districts, incl. those with no target).
       if(legend){
-        legend.innerHTML=data.map((d,i)=>{
-          const color=RACE_COLORS[i%RACE_COLORS.length];
+        legend.innerHTML=all.map((d)=>{
+          const i=racers.indexOf(d);
+          const color = i>=0 ? RACE_COLORS[i%RACE_COLORS.length] : '#c3cbc6';
           const stat = d.target>0 ? (fmt(d.trained)+' / '+fmt(d.target)) : (fmt(d.trained)+' reached');
           const pc = d.pct==null?'—':(d.pct+'%');
           const pcol = d.pct==null?'#9aa5a0':(d.pct>=100?'#2fae76':(d.pct>=60?'#b46e0a':'#c0392b'));
