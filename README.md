@@ -230,6 +230,15 @@ All six master tables appear as selectable entity sets and refresh automatically
   - **8 colour-themed summary cards** (Cluster Trainings, Monthly New Youth, Frontliners,
     Distribution to Participants, Distribution to SHGs, SHG Profiling, ISLA Savings,
     Production) — each with a headline figure + 3 sub-metrics, linking to the full dashboard.
+  - **Working filters (Cluster + date):** a **Cluster** dropdown (All / Iganga / Kamuli /
+    Bugiri / Central — mapped to district lists), a **Month** quick-picker (pick e.g. "Jul 2026"
+    in one click), and **From / To** date inputs. Every filter **applies immediately** — changing
+    the cluster, the month, or a date reloads all cards at once (no separate Apply click is
+    required; an **Apply** button is still there for convenience). "Reporting year" sets
+    Oct 1 2025 – Sep 30 2026; "All time" clears everything. The filters build a shared
+    `?districts=&from=&to=` querystring (cache-bypassed with `no-store`) that **every** home-card
+    API honours server-side, so picking *Iganga* shows only Iganga-cluster figures and picking
+    *July* shows only July figures. A stamp under the KPIs shows the active cluster + range.
   - a **bottom row**: the **District Race — Participant Target Achievement** panel
     (the old "Performance by District" table and "Trends Overview" line chart are now
     merged into ONE horse-race visualization). All districts race along **one shared
