@@ -174,6 +174,11 @@ ${navSidebar('home')}
               <option value="central">Central Cluster</option>
             </select>
           </div>
+          <div class="fld"><label>Month</label>
+            <select id="fMonth">
+              <option value="">— pick a month —</option>
+            </select>
+          </div>
           <div class="fld"><label>From</label><input type="date" id="fFrom" /></div>
           <div class="fld"><label>To</label><input type="date" id="fTo" /></div>
           <button class="ctl primary" id="fApply"><i class="fas fa-filter"></i> Apply</button>
@@ -713,10 +718,51 @@ ${navSidebar('home')}
     document.getElementById('refreshBtn').addEventListener('click', loadAll);
     document.getElementById('exportBtn').addEventListener('click', ()=>{ window.location.href='/tools'; });
     // filter controls
+    // ---- Month quick-picker ----------------------------------------------
+    // Populate a "pick a month" dropdown spanning the reporting year (Oct 2025 –
+    // Sep 2026) plus the prior calendar year, so "pick July" is a single click.
+    // Selecting a month sets From/To to that month's first/last day and reloads
+    // immediately — the user does NOT have to also click Apply.
+    (function buildMonthPicker(){
+      const sel=document.getElementById('fMonth'); if(!sel) return;
+      const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      // Reporting-year months first (Oct 2025 → Sep 2026), then 2025 calendar months.
+      const list=[];
+      for(let m=9; m<=11; m++) list.push([2025,m]);      // Oct–Dec 2025
+      for(let m=0; m<=8;  m++) list.push([2026,m]);      // Jan–Sep 2026
+      for(let m=0; m<=11; m++) list.push([2025,m]);      // Jan–Dec 2025 (earlier data)
+      const seen={};
+      list.forEach(([y,m])=>{
+        const key=y+'-'+String(m+1).padStart(2,'0');
+        if(seen[key]) return; seen[key]=1;
+        const first=key+'-01';
+        const last =new Date(y, m+1, 0);
+        const lastStr=y+'-'+String(m+1).padStart(2,'0')+'-'+String(last.getDate()).padStart(2,'0');
+        const o=document.createElement('option');
+        o.value=first+'|'+lastStr;
+        o.textContent=MN[m]+' '+y;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', ()=>{
+        const v=sel.value;
+        if(!v){ document.getElementById('fFrom').value=''; document.getElementById('fTo').value=''; loadAll(); return; }
+        const [f,t]=v.split('|');
+        document.getElementById('fFrom').value=f;
+        document.getElementById('fTo').value=t;
+        loadAll();
+      });
+    })();
+
     document.getElementById('fApply').addEventListener('click', loadAll);
     document.getElementById('fCluster').addEventListener('change', loadAll);
-    document.getElementById('fYear').addEventListener('click', ()=>{ document.getElementById('fFrom').value='2025-10-01'; document.getElementById('fTo').value='2026-09-30'; loadAll(); });
-    document.getElementById('fReset').addEventListener('click', ()=>{ document.getElementById('fFrom').value=''; document.getElementById('fTo').value=''; document.getElementById('fCluster').value='all'; loadAll(); });
+    // Date inputs auto-apply on change (match the cluster dropdown behaviour) so
+    // picking a date takes effect immediately — no separate Apply click needed.
+    // Changing a date manually also clears the Month quick-picker so it doesn't
+    // contradict the shown range.
+    document.getElementById('fFrom').addEventListener('change', ()=>{ const m=document.getElementById('fMonth'); if(m) m.value=''; loadAll(); });
+    document.getElementById('fTo').addEventListener('change', ()=>{ const m=document.getElementById('fMonth'); if(m) m.value=''; loadAll(); });
+    document.getElementById('fYear').addEventListener('click', ()=>{ document.getElementById('fFrom').value='2025-10-01'; document.getElementById('fTo').value='2026-09-30'; const m=document.getElementById('fMonth'); if(m) m.value=''; loadAll(); });
+    document.getElementById('fReset').addEventListener('click', ()=>{ document.getElementById('fFrom').value=''; document.getElementById('fTo').value=''; document.getElementById('fCluster').value='all'; const m=document.getElementById('fMonth'); if(m) m.value=''; loadAll(); });
     loadAll();
     window.addEventListener('resize', ()=>{ Object.keys(sparks).forEach(k=>{ const cv=document.querySelector('canvas[data-spark="'+k+'"]'); if(cv){ cv.width=cv.parentElement.clientWidth-28; cv.height=26; } }); });
   </script>
