@@ -139,6 +139,53 @@ async function livestockDistByDistrict(
   return neonQuery(env, sql, params);
 }
 
+// --- poultry re-booking (distribution_rows) -----------------------------------
+// Per the guiding document: a "re-booking" youth is one who received poultry
+// birds MORE THAN ONCE — i.e. they received birds before the reporting window
+// AND again inside it (unique distributees − new distributees = re-bookings).
+// We count, per district, the youth who got Poultry inside [from,to] who ALSO
+// got Poultry strictly before `from`, and the number of birds those repeat
+// recipients received inside the window.
+async function poultryRebookByDistrict(
+  env: Env, districts: string[], from?: string, to?: string
+): Promise<Row[]> {
+  if (!from) return []; // rebooking is only meaningful with a window start
+  const params: any[] = ['Poultry%', from];
+  let dwhere = '';
+  if (districts.length) {
+    params.push(districts.map((d) => d.toUpperCase()));
+    dwhere = ` AND upper(trim(district)) = ANY($${params.length}::text[])`;
+  }
+  let toClause = '';
+  if (to) { params.push(to); toClause = ` AND dist_date <= $${params.length}::date`; }
+  // participants who received Poultry BEFORE the window (the "prior" set)
+  // then re-received inside the window → those are the re-bookings.
+  const sql = `
+    WITH win AS (
+      SELECT upper(trim(district)) AS district, participant_id,
+             SUM(qty_received) AS birds
+      FROM distribution_rows
+      WHERE livestock_type LIKE $1
+        AND participant_id IS NOT NULL
+        AND dist_date >= $2::date ${toClause} ${dwhere}
+      GROUP BY 1,2
+    ),
+    prior AS (
+      SELECT DISTINCT participant_id
+      FROM distribution_rows
+      WHERE livestock_type LIKE $1
+        AND participant_id IS NOT NULL
+        AND dist_date < $2::date
+    )
+    SELECT w.district AS district,
+           COUNT(DISTINCT w.participant_id) AS youth,
+           COALESCE(SUM(w.birds),0)         AS birds
+    FROM win w
+    JOIN prior p ON p.participant_id = w.participant_id
+    GROUP BY 1`;
+  return neonQuery(env, sql, params);
+}
+
 // --- poultry sales (poultry_sales_rows) ---------------------------------------
 async function poultrySalesByDistrict(
   env: Env, districts: string[], from?: string, to?: string
@@ -234,6 +281,7 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     hortM, hortQ,
     poultryDistM, poultryDistQ, goatDistM, goatDistQ,
     poultrySalesM, poultrySalesQ,
+    rebookM, rebookQ,
     islaM, islaQ,
     levM, levQ,
   ] = await Promise.all([
@@ -257,6 +305,8 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     livestockDistByDistrict(env, 'goat', districts, f.qFrom, f.qTo),
     poultrySalesByDistrict(env, districts, f.from, f.to),
     poultrySalesByDistrict(env, districts, f.qFrom, f.qTo),
+    poultryRebookByDistrict(env, districts, f.from, f.to),
+    poultryRebookByDistrict(env, districts, f.qFrom, f.qTo),
     islaByDistrict(env, districts, f.from, f.to),
     islaByDistrict(env, districts, f.qFrom, f.qTo),
     leverageTotal(env, districts, f.from, f.to),
@@ -272,6 +322,7 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     poultryDist: { month: indexByDistrict(poultryDistM), quarter: indexByDistrict(poultryDistQ) },
     goatDist: { month: indexByDistrict(goatDistM), quarter: indexByDistrict(goatDistQ) },
     poultrySales: { month: indexByDistrict(poultrySalesM), quarter: indexByDistrict(poultrySalesQ) },
+    rebooking: { month: indexByDistrict(rebookM), quarter: indexByDistrict(rebookQ) },
     isla: { month: indexByDistrict(islaM), quarter: indexByDistrict(islaQ) },
     leverage: { month: levM, quarter: levQ },
   };

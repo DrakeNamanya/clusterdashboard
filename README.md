@@ -421,8 +421,19 @@ added.
   data table **entirely in the browser** with JSZip — replacing tokens in
   `word/document.xml` with per-district month + quarter figures (Overall-total rows
   are summed client-side), then re-zips and downloads. Tables with **no clean data
-  source** (PSRP, Re-booking/restocking, SACCO) and any unmatched value are left blank
-  and **highlighted yellow** for the user to fill by hand.
+  source** (PSRP, SACCO) and any unmatched value are left blank and **highlighted
+  yellow** for the user to fill by hand.
+  - **Preview Report** button — opens an on-screen modal that renders every auto-filled
+    table as HTML **before** download, using the exact same values written into the
+    .docx, so what you read is what you get. Includes a Summary-of-Outreach-Actuals
+    block (derived per the guiding document: Female %, PWD %, Rural = reached,
+    Refugees = 0), the cluster coordinator contact, and yellow cells for manual entry.
+  - **Guiding document** (`docs/programme_report_guiding_document.docx`) supplied by
+    the programme team drives the data-source rules. Notably it defines the previously
+    blank **poultry re-booking** table = youth who received birds **more than once**
+    (received before the window AND again inside it: *unique distributees − new
+    distributees*), now computed by `poultryRebookByDistrict()`; and confirms **goat
+    distribution** is reported for **Luuka & Kamuli** only.
   - `GET /api/programme-report?districts=&from=&to=&qFrom=&qTo=` → `programmeReport()`
     (src/programme.ts). Runs the district-breakdown queries for BOTH the month and the
     quarter window and returns `{districts, window, profiling{month,quarter},
