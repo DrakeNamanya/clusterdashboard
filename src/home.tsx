@@ -6,7 +6,8 @@
 //   * greeting header with date-range / Filters / Export controls
 //   * dark hero KPI strip (4 KPI tiles + sparklines + Overall-Progress gauge)
 //   * 8 colour-themed summary cards (one per dashboard), each linking through
-//   * bottom row: Performance by District table, Trends line chart, Value Chain Total Sales
+//   * bottom row: District Race (Performance by District + Trends merged into a
+//     horse-race target-achievement visual), Value Chain Total Sales
 //
 // All headline numbers are pulled live from each dashboard's own JSON API so
 // they always match the underlying dashboard. Every indicator re-fetches when
@@ -104,8 +105,19 @@ export function renderHome(base: string): string {
     .skel{ color:#c3d3ca !important; }
 
     /* ---------- bottom row ---------- */
-    .bottom{ display:grid; grid-template-columns:1.15fr 1.25fr 1fr; gap:16px; margin-top:16px; }
+    .bottom{ display:grid; grid-template-columns:2.15fr 1fr; gap:16px; margin-top:16px; }
     @media (max-width:1200px){ .bottom{ grid-template-columns:1fr; } }
+    /* District Race */
+    .race-panel{ display:flex; flex-direction:column; }
+    .race-sub{ font-size:11.5px; color:var(--muted); margin:-4px 0 10px; }
+    .race-wrap{ width:100%; }
+    #raceTrack svg{ display:block; width:100%; height:auto; }
+    .race-legend{ display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px 16px; margin-top:14px; }
+    .rl-row{ display:flex; align-items:center; gap:9px; font-size:12px; }
+    .rl-dot{ width:11px; height:11px; border-radius:50%; flex:none; }
+    .rl-name{ font-weight:700; color:#1a2b22; }
+    .rl-stat{ margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .rl-pct{ font-weight:800; min-width:38px; text-align:right; font-variant-numeric:tabular-nums; }
     .panel{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 1px 3px rgba(20,40,30,.05); }
     .panel-h{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .panel-h .pt{ font-size:14px; font-weight:700; color:#1a2b22; }
@@ -220,18 +232,18 @@ ${navSidebar('home')}
 
         <!-- ---------- BOTTOM ROW ---------- -->
         <section class="bottom">
-          <!-- Performance by District -->
-          <div class="panel">
-            <div class="panel-h"><div class="pt">Performance by District</div><a class="pl" href="/monthly-new-youth">View all →</a></div>
-            <table class="dist">
-              <thead><tr><th>District</th><th class="num" title="Accumulative new youth reached (first-touch)">New Youth</th><th class="num" title="Reach target">Target</th><th class="num">Achv.</th></tr></thead>
-              <tbody id="distBody"><tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">Loading…</td></tr></tbody>
-            </table>
-          </div>
-          <!-- Trends Overview -->
-          <div class="panel">
-            <div class="panel-h"><div class="pt">Trends Overview</div><span class="pl">New reach over time</span></div>
-            <div class="trend-wrap"><canvas id="trendChart"></canvas></div>
+          <!-- District Race — Participant Target Achievement (merges Performance
+               by District + Trends): each district is a jockey positioned along
+               the track by its % of the participant reach target (Oct 2025 – Sep 2026).
+               The one that crosses the FINISH line (100%) has met its target. -->
+          <div class="panel race-panel">
+            <div class="panel-h">
+              <div class="pt"><i class="fas fa-horse-head" style="color:var(--green);margin-right:6px"></i>District Race — Participant Target Achievement</div>
+              <a class="pl" href="/monthly-new-youth">View all →</a>
+            </div>
+            <div class="race-sub" id="raceSub">New youth reached vs reach target · racing to 100% (FINISH)</div>
+            <div class="race-wrap"><div id="raceTrack"><div style="color:var(--muted);font-size:12px;padding:30px 0;text-align:center">Loading race…</div></div></div>
+            <div class="race-legend" id="raceLegend"></div>
           </div>
           <!-- Value Chain Total Sales -->
           <div class="panel">
@@ -389,9 +401,16 @@ ${navSidebar('home')}
         setF('newyouth.monthly_target', d.monthly_target);
         heroState.target=d.monthly_target; heroState.reach=d.new_total_reach;
         setF('hero.target', d.monthly_target);
-        // Performance by District: Trained = accumulative NEW youth reach per
-        // district, Target = reach target (mel_reach_targets), Achieved = %.
-        renderDistricts(d.by_district||[]);
+        // District Race: each district is a jockey positioned by its % of the
+        // reach target (Oct 2025 – Sep 2026). Merges the old Performance-by-District
+        // table + Trends chart into one racing visual.
+        renderDistrictRace(d.by_district||[]);
+        const rsub=document.getElementById('raceSub');
+        if(rsub){
+          const rf=(document.getElementById('fFrom')||{}).value, rt=(document.getElementById('fTo')||{}).value;
+          const per=(rf&&rt)?(rf+' → '+rt):'reporting year (Oct 2025 – Sep 2026)';
+          rsub.textContent='New youth reached vs reach target · '+per+' · racing to 100% (FINISH)';
+        }
 
         // by_date is a daily series of {date, value} (new reach per day).
         const bd=(d.by_date||[]).filter(r=>r && r.date);
@@ -478,34 +497,113 @@ ${navSidebar('home')}
       },
     };
 
-    // Performance-by-District table. Uses district rows that carry a trained
-    // count (+ target if present). Falls back gracefully if fields are missing.
-    function renderDistricts(rows){
-      const body=document.getElementById('distBody'); if(!body) return;
-      // normalise into {name, trained, target}
-      const norm=[];
+    // ---- District Race (horse-race target achievement) --------------------
+    // Palette cycled across districts (distinct, print-friendly).
+    const RACE_COLORS = ['#e08a2b','#d94b3f','#2fae76','#2E9BD6','#7c5cbf','#e0a23a','#1f9e94','#c0392b','#3a5bb0','#8a6d3b'];
+    // A reusable jockey-on-horse symbol (grey horse + colored rider), from the
+    // client's Napkin racing artwork. Scaled to ~0.42 so several fit on the track.
+    function raceHorseSVG(color){
+      return '<g class="racer">'+
+        '<g stroke="#b0b6bc" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round">'+
+          '<path d="M110 55 C130 25 155 8 178 12 C192 15 198 26 190 36 C184 43 172 43 165 35"/>'+
+          '<path d="M190 36 L200 40"/><path d="M150 18 L158 2"/>'+
+          '<path d="M110 55 C80 48 45 46 15 58"/><path d="M15 58 C8 62 2 68 -2 76"/>'+
+          '<path d="M108 58 C104 70 100 82 92 92"/>'+
+          '<path d="M-2 60 C-25 55 -35 72 -28 95 C-24 108 -12 112 -6 104"/>'+
+          '<path d="M92 90 C100 105 108 112 106 135"/><path d="M85 92 C78 106 82 118 70 138"/>'+
+          '<path d="M20 62 C16 80 24 92 14 115"/><path d="M0 72 C-18 82 -28 92 -35 112"/>'+
+        '</g>'+
+        '<g stroke="'+color+'" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round">'+
+          '<circle cx="118" cy="0" r="15"/>'+
+          '<path d="M104 -6 C112 -14 128 -14 134 -4"/>'+
+          '<path d="M112 14 C88 20 72 36 66 55"/>'+
+          '<path d="M92 30 C110 20 130 18 150 14"/>'+
+          '<path d="M70 52 C58 60 54 72 62 82 L82 80"/>'+
+        '</g></g>';
+    }
+
+    // Normalise API district rows → {name, trained, target, pct}. pct may be null
+    // when no reach target exists for that district (shown parked at the start).
+    function normRaceRows(rows){
+      const out=[];
       for(const r of (rows||[])){
-        if(typeof r==='string'){ continue; }
+        if(typeof r==='string') continue;
         const name=r.district||r.name||r.district_name||r.label||'';
         const trained=Number(r.trained||r.total_trained||r.youth_trained||r.count||r.total||0);
         const target=Number(r.target||r.monthly_target||0);
-        if(name) norm.push({name, trained, target});
+        let pct = (r.achieved_pct!=null) ? Number(r.achieved_pct) : (target>0 ? Math.round(100*trained/target) : null);
+        if(name) out.push({ name: name.replace(/\\b\\w/g,c=>c.toUpperCase()).replace(/City/i,'City'), trained, target, pct });
       }
-      norm.sort((a,b)=>b.trained-a.trained);
-      const top=norm; // show ALL districts (was previously capped at 6)
-      if(!top.length){ body.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">No district data.</td></tr>'; return; }
-      let tt=0,tg=0;
-      let html=top.map(d=>{
-        tt+=d.trained; tg+=d.target;
-        const ach = d.target>0 ? Math.round(100*d.trained/d.target) : null;
-        const achCell = ach!=null
-          ? '<div class="ach">'+ach+'%<div class="ach-bar"><div class="ach-fill" style="width:'+Math.min(100,ach)+'%"></div></div></div>'
-          : '<span style="color:var(--muted)">—</span>';
-        return '<tr><td>'+d.name+'</td><td class="num">'+fmt(d.trained)+'</td><td class="num">'+(d.target?fmt(d.target):'—')+'</td><td class="num">'+achCell+'</td></tr>';
-      }).join('');
-      const totAch = tg>0 ? Math.round(100*tt/tg) : null;
-      html += '<tr><td>Total</td><td class="num">'+fmt(tt)+'</td><td class="num">'+(tg?fmt(tg):'—')+'</td><td class="num">'+(totAch!=null?totAch+'%':'—')+'</td></tr>';
-      body.innerHTML=html;
+      // Rank by progress (highest % first); target-less districts sink to the bottom.
+      out.sort((a,b)=>((b.pct==null?-1:b.pct)-(a.pct==null?-1:a.pct)) || (b.trained-a.trained));
+      return out;
+    }
+
+    // Draw the horse-race SVG + a legend of exact figures.
+    function renderDistrictRace(rows){
+      const track=document.getElementById('raceTrack');
+      const legend=document.getElementById('raceLegend');
+      if(!track) return;
+      const data=normRaceRows(rows);
+      if(!data.length){
+        track.innerHTML='<div style="color:var(--muted);font-size:12px;padding:30px 0;text-align:center">No district reach data for this selection.</div>';
+        if(legend) legend.innerHTML=''; return;
+      }
+      // Layout geometry (viewBox units).
+      const W=1040, laneH=96, top=40, bottom=54;
+      const startX=150, finishX=850;             // 0% at startX, 100% at finishX (left gutter holds district names)
+      const H = top + data.length*laneH + bottom;
+      const span=finishX-startX;
+      const xFor=(pct)=>{ const p=Math.max(0,Math.min(100,(pct==null?0:pct))); return startX + span*(p/100); };
+      const scale=0.40;
+
+      let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="District participant target race" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">';
+      // FINISH banner (100% line)
+      svg+='<rect x="'+(finishX)+'" y="'+(top-14)+'" width="'+(W-finishX-24)+'" height="'+(H-top-bottom+28)+'" fill="#fafafa" stroke="#c9cfd4" stroke-width="2"/>';
+      svg+='<rect x="'+(finishX)+'" y="'+(top-14)+'" width="'+(W-finishX-24)+'" height="34" fill="#eef1f3" stroke="#c9cfd4" stroke-width="2"/>';
+      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(top+9)+'" text-anchor="middle" font-size="17" font-weight="700" letter-spacing="3" fill="#8c9198">FINISH</text>';
+      // checkered flag pole at finish
+      svg+='<line x1="'+finishX+'" y1="'+(top-14)+'" x2="'+finishX+'" y2="'+(H-bottom+14)+'" stroke="#8c9198" stroke-width="2" stroke-dasharray="6 5"/>';
+
+      data.forEach((d,i)=>{
+        const laneY = top + i*laneH;
+        const baseY = laneY + laneH - 20;       // baseline for this lane
+        const color = RACE_COLORS[i%RACE_COLORS.length];
+        // lane baseline + arrow
+        svg+='<line x1="'+startX+'" y1="'+baseY+'" x2="'+(W-24)+'" y2="'+baseY+'" stroke="#e4e9e5" stroke-width="2"/>';
+        // start tick
+        svg+='<line x1="'+startX+'" y1="'+(baseY-10)+'" x2="'+startX+'" y2="'+(baseY+6)+'" stroke="#c9cfd4" stroke-width="2"/>';
+        // progress trail up to the racer
+        const rx=xFor(d.pct);
+        svg+='<line x1="'+startX+'" y1="'+baseY+'" x2="'+rx+'" y2="'+baseY+'" stroke="'+color+'" stroke-width="3" opacity="0.5" stroke-linecap="round"/>';
+        // the racer (translate so horse hooves sit ~on the baseline)
+        svg+='<g transform="translate('+(rx-70*scale)+' '+(baseY-150*scale)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
+        // district name (left gutter, left-anchored so it never clips the viewBox edge)
+        svg+='<text x="10" y="'+(baseY+4)+'" text-anchor="start" font-size="14" font-weight="700" fill="#2a3b32">'+d.name+'</text>';
+        // pct badge riding just ahead of the horse
+        if(d.pct!=null){
+          const done = d.pct>=100;
+          svg+='<text x="'+(rx+26)+'" y="'+(baseY-34)+'" text-anchor="middle" font-size="15" font-weight="800" fill="'+(done?'#2fae76':color)+'">'+d.pct+'%'+(done?' ✓':'')+'</text>';
+        } else {
+          svg+='<text x="'+(rx+26)+'" y="'+(baseY-34)+'" text-anchor="middle" font-size="12" font-weight="700" fill="#9aa5a0">no target</text>';
+        }
+      });
+      svg+='</svg>';
+      track.innerHTML=svg;
+
+      // Legend with exact figures.
+      if(legend){
+        legend.innerHTML=data.map((d,i)=>{
+          const color=RACE_COLORS[i%RACE_COLORS.length];
+          const stat = d.target>0 ? (fmt(d.trained)+' / '+fmt(d.target)) : (fmt(d.trained)+' reached');
+          const pc = d.pct==null?'—':(d.pct+'%');
+          const pcol = d.pct==null?'#9aa5a0':(d.pct>=100?'#2fae76':(d.pct>=60?'#b46e0a':'#c0392b'));
+          return '<div class="rl-row"><span class="rl-dot" style="background:'+color+'"></span>'+
+            '<span class="rl-name">'+d.name+'</span>'+
+            '<span class="rl-stat">'+stat+'</span>'+
+            '<span class="rl-pct" style="color:'+pcol+'">'+pc+'</span></div>';
+        }).join('');
+      }
     }
 
     // Value Chain Total Sales — real UGX sold per chain (poultry, oil seeds,
@@ -546,9 +644,11 @@ ${navSidebar('home')}
       // '.skel' selector would match nothing on the 2nd+ load and the cards would
       // never visibly refresh — making filters look like they "do nothing".
       document.querySelectorAll('[data-f]').forEach(el=>{ el.classList.add('skel'); el.textContent='…'; });
-      // Show the district table is refreshing too.
-      const distBody=document.getElementById('distBody');
-      if(distBody) distBody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:16px">Loading…</td></tr>';
+      // Show the district race is refreshing too.
+      const raceTrack=document.getElementById('raceTrack');
+      if(raceTrack) raceTrack.innerHTML='<div style="color:var(--muted);font-size:12px;padding:30px 0;text-align:center">Loading race…</div>';
+      const raceLegend=document.getElementById('raceLegend');
+      if(raceLegend) raceLegend.innerHTML='';
       const vcHost=document.getElementById('valueChains');
       if(vcHost) vcHost.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">Loading…</div>';
       // baseline sparklines so the strip never looks empty
