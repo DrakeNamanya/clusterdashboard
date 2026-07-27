@@ -233,7 +233,8 @@ All six master tables appear as selectable entity sets and refresh automatically
   - a **bottom row**: Performance by District table (ranked, achievement bars — now
     driven by real per-district trained counts via `cluster-trainings.district_stats`),
     a Trends Overview line chart (daily new-reach, rendered in a fixed-height wrapper so
-    the responsive Chart.js canvas always draws), and a Recent Activity feed.
+    the responsive Chart.js canvas always draws), and a **Value Chain Total Sales** panel
+    (UGX sold per chain with proportional bars + youth-seller counts; `GET /api/value-chain-sales?districts=&from=&to=`).
   Each panel fetches that dashboard's own API in the browser, so the figures always match
   the source dashboard. Charts use Chart.js. The SAYE sidebar/hero greens were lightened
   (~10%) for readability. *(Production-target and reach-target tables are planned —
@@ -465,7 +466,14 @@ complete instead of failing mid-way.
 - **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-26
+- **Last Updated**: 2026-07-27
+  - **Gender/PWD disaggregation, produce sold, value-chain sales, SHG-size split, professional report redesign (Phase-2 batch F)**:
+    - **Female + PWD breakdown across all 3 reports**: Weekly Report, CF Report Card, **and** the Report Dashboard now break every people-count into **female** and **persons-with-disability (PWD)**. Gender is sourced from the participant register (`at_rows.sex`, joined on `shg_participant_id`) since the sales/production/poultry fact rows carry only `disability_status`; SHG-profiling and ISLA rows use their own native `female`/`pwd` columns. Report Dashboard adds Female/PWD columns to the Reach & Mobilization tables plus KPI-card gender chips (e.g. Iganga cluster reach 19,931 → **11,632 female · 825 PWD**; mobilization 23,526 → **13,783 female · 1,007 PWD**).
+    - **Weekly – Produce sold in kg/pieces**: Production & Marketing now names the actual horticulture produce moved, e.g. *"Tomatoes: 301,681 kg; Watermelon: 31,079 pieces; Onions: 3,198 kg; …"* (`mel_weekly_report.hs_items` groups by crop + `qty_harvested_measure`).
+    - **Weekly – Youth savers surfaced** in Access to Finance (ISLA) — the count of youth saving (`isla.savers`) was already computed but not shown; it now reads *"… from N youth savers"*.
+    - **Home – "Value Chain Total Sales"** panel replaces the old Recent Activity feed: UGX sold per value chain with a proportional bar and youth-seller count (Oil seeds 4.45B · Poultry 3.20B · Tomatoes 399M · Watermelon 350M · Onions · Passion Fruit · …). Backed by new `valueChainSales()` (`/api/value-chain-sales`) which sums `sales_rows.total_planting_value` per chain (oil seeds as one chain; horticulture split by first crop name) + `poultry_sales_rows.total_poultry_value`.
+    - **CF Report – SHGs profiled split by group size**: SHG Profiling now reports how many profiled SHGs have **<25 members** vs **≥25 members** (`shgs_below_25` / `shgs_25_plus`, updates live as profiling grows). Shown in the activity row and the key-highlights bullet.
+    - **Professional redesign (less "AI-generated")**: all three reports now open with a **formal institutional masthead** (SAYE Uganda logo + "Monitoring, Evaluation & Learning" tagline, document-type label, title, and a meta block of cluster / period / generated-date) and close with a **document footer** (prepared-by + data-source attribution). The weekly report's gradient "hero" banner was replaced with a restrained period band; the Report Dashboard gained numbered section headers with rules; the CF card header now carries the SAYE brand block. Print/PDF layouts updated to keep masthead & footer.
   - **Filter responsiveness, weekly distribution, CF SHGs, ISLA loans (Phase-2 batch E)**:
     - **Home filters now visibly refresh on every change**: `loadAll()` used to re-blank only elements still carrying the `.skel` class, but the value loaders strip `.skel` after the first load — so on the 2nd+ Apply/cluster change nothing was re-shown as "loading…" and the dashboard *looked* frozen even though the APIs were re-querying correctly. It now resets **every** `[data-f]` value (and the Performance-by-District table to a "Loading…" row) at the start of each `loadAll()`, so a filter change is always visible. The APIs already filtered server-side (All 96,286 vs Iganga 33,031 vs Kamuli 26,932 new-youth).
     - **Monthly Target no longer shows a bogus 726 for target-less clusters**: when a cluster/district with **no** `mel_reach_targets` rows is selected (Kamuli / Bugiri / Central), the new-youth Monthly Target now returns **0** instead of falling back to the generic single-district default (726) — which had made the card look static. Iganga cluster still shows its real 2,524 (sum of Iganga+Jinja+Luuka+Mayuge monthly targets).
