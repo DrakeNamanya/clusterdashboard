@@ -118,7 +118,7 @@ as $$
   ),
   f as (
     select r.* from public.shg_profiling_rows r, sel
-    where (sel.dl is null or r.district = any(sel.dl))
+    where (sel.dl is null or upper(trim(r.district)) = any(select upper(trim(x)) from unnest(sel.dl) x))
       and (sel.pl is null or r.profiler_name = any(sel.pl))
       and (p_from is null or r.created_date >= p_from)
       and (p_to   is null or r.created_date <= p_to)

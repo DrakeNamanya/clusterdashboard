@@ -155,7 +155,7 @@ as $$
   ),
   f as (
     select r.* from public.isla_final_rows r, sel
-    where (sel.dl is null or coalesce(r.district_shg,'(Blank)') = any(sel.dl))
+    where (sel.dl is null or upper(trim(coalesce(r.district_shg,'(Blank)'))) = any(select upper(trim(x)) from unnest(sel.dl) x))
       and (sel.pl is null or coalesce(r.profilers_name,'(Blank)') = any(sel.pl))
       and (p_from is null or r.activity_date >= p_from)
       and (p_to   is null or r.activity_date <= p_to)
