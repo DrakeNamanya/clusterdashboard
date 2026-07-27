@@ -402,20 +402,31 @@ ${navSidebar('home')}
         heroState.target=d.monthly_target; heroState.reach=d.new_total_reach;
         setF('hero.target', d.monthly_target);
         // District Race: each district is a jockey positioned by its % of the
-        // reach target (Oct 2025 – Sep 2026). Merges the old Performance-by-District
-        // table + Trends chart into one racing visual. Source of truth = the
-        // Report dashboard's "Reach: Targets vs Achieved" table (/api/report → reach),
-        // so the race always matches that table exactly.
+        // reach target. Merges the old Performance-by-District table + Trends chart
+        // into one racing visual. Source of truth = the Report dashboard's
+        // "Reach: Targets vs Achieved" table (/api/report → reach). That table is a
+        // reporting-year (Oct 1 2025 – Sep 30 2026) achievement, so the race ALWAYS
+        // pins that window — the home page's global date filter defaults to all-time,
+        // which would over-count reach against the Year-3 target and inflate the %.
+        // If the user has explicitly picked a from/to on the home filter, honour it.
         try{
-          const rep=await j(api('/api/report'));
+          const rf=(document.getElementById('fFrom')||{}).value;
+          const rt=(document.getElementById('fTo')||{}).value;
+          const from = rf || '2025-10-01';
+          const to   = rt || '2026-09-30';
+          const cl=(document.getElementById('fCluster')||{}).value||'all';
+          const ds=CLUSTER_DISTRICTS[cl]||[];
+          const qs=new URLSearchParams();
+          if(ds.length) qs.set('districts', ds.join(','));
+          qs.set('from', from); qs.set('to', to);
+          const rep=await j('/api/report?'+qs.toString());
           renderDistrictRace((rep&&rep.reach)||d.by_district||[]);
+          const rsub=document.getElementById('raceSub');
+          if(rsub){
+            const per=(rf&&rt)?(rf+' → '+rt):'Oct 1 2025 – Sep 30 2026';
+            rsub.textContent='New Youth Reached vs reach target · '+per+' · racing to 100% (FINISH)';
+          }
         }catch(_){ renderDistrictRace(d.by_district||[]); }
-        const rsub=document.getElementById('raceSub');
-        if(rsub){
-          const rf=(document.getElementById('fFrom')||{}).value, rt=(document.getElementById('fTo')||{}).value;
-          const per=(rf&&rt)?(rf+' → '+rt):'Oct 1 2025 – Sep 30 2026';
-          rsub.textContent='New Youth Reached vs reach target · '+per+' · racing to 100% (FINISH)';
-        }
 
         // by_date is a daily series of {date, value} (new reach per day).
         const bd=(d.by_date||[]).filter(r=>r && r.date);
@@ -565,60 +576,56 @@ ${navSidebar('home')}
         if(legend) legend.innerHTML=''; return;
       }
 
-      // Single-track geometry. Every horse stands on ONE shared ground line and is
-      // positioned horizontally by its % (0% at startX, 100%+ at/after the FINISH).
-      // Each district gets its own vertical tier so the horses never overlap and each
-      // horse carries its own "District / NN%" label directly above it. Because most
-      // districts sit near or above 100% (all bunched at the finish), the per-tier
-      // separation is what keeps them individually readable while still sharing the line.
-      const n=racers.length;
-      const W=1060, top=44, bottom=52;
-      const startX=70, finishX=820;              // 0% at startX, 100% at finishX
-      const horseH=150*0.42;                     // rendered horse height
-      const rowH=Math.max(74, horseH+38);        // vertical space per tier (label + horse)
-      const H = top + Math.max(1,n)*rowH + bottom;
-      const groundY = H - bottom;                // shared baseline all horses stand on
+      // Single-line geometry (matches the reference artwork): every horse stands on
+      // ONE shared ground line, positioned horizontally by its % of the reach target
+      // (0% at startX, 100% at the FINISH). Horses are small. Each carries its own
+      // "District · NN%" label on top; when two horses sit close, their labels are
+      // stacked at alternating heights so they stay readable.
+      const W=1000, top=120, bottom=52, groundY=380;
+      const startX=60, finishX=690;              // 0% at startX, 100% at FINISH box left edge
+      const scale=0.30;                          // small horses
+      const horseH=150*scale;                    // rendered horse height (~45)
+      const H=groundY+bottom;
       const span=finishX-startX;
-      // allow >100% to nudge just past the finish so over-target districts read as "past FINISH"
-      const xFor=(pct)=>{ const p=Math.max(0,Math.min(120,(pct==null?0:pct))); return startX + span*(p/100); };
-      const scale=0.42;
+      const xFor=(pct)=>{ const p=Math.max(0,Math.min(115,(pct==null?0:pct))); return startX + span*(p/100); };
 
       let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="District participant target race" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">';
 
-      // shared ground line
-      svg+='<line x1="'+startX+'" y1="'+groundY+'" x2="'+(W-24)+'" y2="'+groundY+'" stroke="#d5dbd7" stroke-width="3"/>';
-      // % gridlines (25/50/75) + axis labels along the shared line
-      [0,25,50,75].forEach(g=>{ const gx=xFor(g); if(g>0) svg+='<line x1="'+gx+'" y1="'+top+'" x2="'+gx+'" y2="'+groundY+'" stroke="#eef1ef" stroke-width="2"/>'; svg+='<text x="'+gx+'" y="'+(groundY+22)+'" text-anchor="middle" font-size="11" fill="#aeb6b1">'+g+'%</text>'; });
-      // start gate
-      svg+='<line x1="'+startX+'" y1="'+top+'" x2="'+startX+'" y2="'+groundY+'" stroke="#c9cfd4" stroke-width="2" stroke-dasharray="4 4"/>';
+      // shared ground line + direction arrow
+      svg+='<line x1="'+startX+'" y1="'+groundY+'" x2="'+(W-30)+'" y2="'+groundY+'" stroke="#b8bfba" stroke-width="3"/>';
+      svg+='<polyline points="'+(W-42)+','+(groundY-11)+' '+(W-24)+','+groundY+' '+(W-42)+','+(groundY+11)+'" fill="none" stroke="#b8bfba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>';
+      // % gridlines + axis labels
+      [0,25,50,75].forEach(g=>{ const gx=xFor(g); if(g>0) svg+='<line x1="'+gx+'" y1="'+(top-8)+'" x2="'+gx+'" y2="'+groundY+'" stroke="#eef1ef" stroke-width="2"/>'; svg+='<text x="'+gx+'" y="'+(groundY+24)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">'+g+'%</text>'; });
+      svg+='<line x1="'+startX+'" y1="'+(top-8)+'" x2="'+startX+'" y2="'+groundY+'" stroke="#c9cfd4" stroke-width="2" stroke-dasharray="4 4"/>';
 
-      // FINISH banner (100% line, full height)
-      svg+='<rect x="'+(finishX)+'" y="'+top+'" width="'+(W-finishX-24)+'" height="'+(groundY-top)+'" fill="#fafafa" stroke="#c9cfd4" stroke-width="2"/>';
-      svg+='<rect x="'+(finishX)+'" y="'+top+'" width="'+(W-finishX-24)+'" height="28" fill="#eef1f3" stroke="#c9cfd4" stroke-width="2"/>';
-      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(top+19)+'" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="3" fill="#8c9198">FINISH</text>';
-      svg+='<text x="'+(finishX+(W-finishX-24)/2)+'" y="'+(groundY+22)+'" text-anchor="middle" font-size="11" fill="#aeb6b1">100%</text>';
-      svg+='<line x1="'+finishX+'" y1="'+top+'" x2="'+finishX+'" y2="'+groundY+'" stroke="#8c9198" stroke-width="2" stroke-dasharray="6 5"/>';
+      // FINISH box (100% line)
+      const fbw=W-finishX-30;
+      svg+='<rect x="'+finishX+'" y="'+(top-8)+'" width="'+fbw+'" height="'+(groundY-(top-8))+'" fill="none" stroke="#2b2b2b" stroke-width="2.5"/>';
+      svg+='<rect x="'+finishX+'" y="'+(top-8)+'" width="'+fbw+'" height="40" fill="#f0f0f0" stroke="#2b2b2b" stroke-width="2.5"/>';
+      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(top+19)+'" text-anchor="middle" font-size="18" font-weight="700" letter-spacing="2" fill="#9a9a9a">FINISH</text>';
+      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(groundY+24)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">100%</text>';
 
-      // draw racers — highest % on the TOP tier (leader on top), one tier each
-      racers.forEach((d,i)=>{
+      // draw racers left→right so higher-% horses overlap in front; labels stacked to avoid clashes
+      const ordered=racers.slice().sort((a,b)=>a.pct-b.pct);
+      let lastLx=-999, tierToggle=0;
+      ordered.forEach((d)=>{
+        const i=racers.indexOf(d);                       // stable colour by rank
         const color=RACE_COLORS[i%RACE_COLORS.length];
         const rx=xFor(d.pct);
-        const hoofY = top + (i+1)*rowH - 12;             // this tier's ground contact
-        // faint progress trail from the start gate to the horse (along its tier)
-        svg+='<line x1="'+startX+'" y1="'+hoofY+'" x2="'+rx+'" y2="'+hoofY+'" stroke="'+color+'" stroke-width="3" opacity="0.30" stroke-linecap="round"/>';
-        svg+='<line x1="'+startX+'" y1="'+(hoofY-9)+'" x2="'+startX+'" y2="'+(hoofY+3)+'" stroke="#c9cfd4" stroke-width="2"/>';
-        // the racer (hooves ~on hoofY)
-        svg+='<g transform="translate('+(rx-70*scale)+' '+(hoofY-horseH)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
-        // label ON TOP of the horse: "District · NN%". When the horse is at/near the
-        // FINISH (right edge) the label is right-anchored so it extends leftwards and
-        // never collides with the FINISH banner text.
+        // the small racer, hooves on the shared ground line
+        svg+='<g transform="translate('+(rx-70*scale)+' '+(groundY-horseH)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
+        // label ON TOP; stack alternately if this horse is horizontally close to the previous one
         const done=d.pct>=100;
-        const labelY=hoofY-horseH-6;                     // just above the rider's head
         const pcol=done?'#2fae76':color;
-        const nearFinish = rx > finishX-40;
+        if(rx-lastLx < 110){ tierToggle=(tierToggle+1)%3; } else { tierToggle=0; }
+        lastLx=rx;
+        const labelY=(groundY-horseH-12) - tierToggle*22;   // lift stacked labels higher
+        const nearFinish = rx > finishX-30;
         const anchor = nearFinish ? 'end' : 'middle';
-        const lx = nearFinish ? finishX-10 : rx;   // park near-finish labels just LEFT of the FINISH box
-        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="14" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
+        const lx = nearFinish ? finishX-8 : rx;
+        // small connector when the label is lifted well above the horse
+        if(tierToggle>0) svg+='<line x1="'+rx+'" y1="'+(labelY+6)+'" x2="'+rx+'" y2="'+(groundY-horseH-4)+'" stroke="'+color+'" stroke-width="1" opacity="0.4"/>';
+        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="13.5" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
       });
 
       svg+='</svg>';
