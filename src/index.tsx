@@ -41,6 +41,8 @@ import { renderLocalLeverage } from './local_leverage';
 import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
+import { renderProgrammeReport } from './programmepage';
+import { programmeReport } from './programme';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -922,6 +924,21 @@ app.get('/api/cf-report', async (c) => {
     staff: q.staff || undefined,
     from: q.from || undefined,
     to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- Programme Report (auto-filled SAYE Monthly/Quarterly Word report) ------
+app.get('/programme-report', (c) => c.html(renderProgrammeReport(baseUrl(c.req.url))));
+app.get('/api/programme-report', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await programmeReport(storeEnv(c), {
+    districts: split(q.districts),
+    from: q.from || undefined,
+    to: q.to || undefined,
+    qFrom: q.qFrom || undefined,
+    qTo: q.qTo || undefined,
   });
   return c.json(data);
 });

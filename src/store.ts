@@ -261,7 +261,7 @@ function clusterSql(env: Env): { query: (text: string, params?: any[]) => Promis
  * Returns the plain row array (mirrors the previous Neon `.query()` contract,
  * which returned rows directly rather than pg's `{rows}` wrapper).
  */
-async function neonQuery(
+export async function neonQuery(
   env: Env,
   text: string,
   params: any[] = [],

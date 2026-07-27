@@ -413,6 +413,29 @@ added.
   - `GET /api/cf-report?staff=&districts=&from=&to=` → `mel_cf_report` RPC
     (`staff` may be a single key or pipe-joined keys for merging).
 
+- `GET  /programme-report` — **Programme Report (Word generator)**. Sidebar page
+  (`fa-file-word`) that produces the Heifer SAYE Monthly/Quarterly Progress Report
+  as an **editable Word (.docx)**. Filters: **Cluster** + **Reporting Month** (from/to)
+  + **Reporting Quarter** (qFrom/qTo). The page fetches live data, loads a tokenized
+  Word template (`/static/programme_template.docx`, 521 `{{tokens}}`), and fills every
+  data table **entirely in the browser** with JSZip — replacing tokens in
+  `word/document.xml` with per-district month + quarter figures (Overall-total rows
+  are summed client-side), then re-zips and downloads. Tables with **no clean data
+  source** (PSRP, Re-booking/restocking, SACCO) and any unmatched value are left blank
+  and **highlighted yellow** for the user to fill by hand.
+  - `GET /api/programme-report?districts=&from=&to=&qFrom=&qTo=` → `programmeReport()`
+    (src/programme.ts). Runs the district-breakdown queries for BOTH the month and the
+    quarter window and returns `{districts, window, profiling{month,quarter},
+    training{vbhcd,gender,nutrition,social,life,mental,srh,animal,crop,isla},
+    horticulture, poultryDist, goatDist, poultrySales, isla, leverage}`. All district
+    matching is case-insensitive. Verified vs the printed doc (Gender Iganga 270/148/18,
+    ISLA Iganga savers 2,720 / saved 14,854,820, Profiling Iganga 32 SHGs/465 youth).
+  - Data sources per table: training tables ← `at_rows` (by `training_type`);
+    profiling ← `shg_profiling_rows`; horticulture (Tomatoes KGs / Watermelon Pieces /
+    Sales) ← `sales_rows`; poultry & goat distribution ← `distribution_rows`
+    (`livestock_type LIKE 'Poultry%' / 'Goat%'`); poultry sales ← `poultry_sales_rows`;
+    ISLA savings ← `isla_final_rows`; leverage ← `local_leverage_rows`.
+
 **ISLA loan/savings rules** (applied in `isla_dash`, `mel_weekly_report`,
 `mel_cf_report`): *amount saved* = `SUM(savings_value)`; *loans given (value)* =
 `SUM(youth_loans_value_given)`; *youth who got loans* = `SUM(loans)` with each row
