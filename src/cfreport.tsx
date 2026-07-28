@@ -25,7 +25,7 @@ export function renderCfReport(base: string): string {
     :root{
       --green:#0F4C3A; --green-2:#00A859; --lgreen:#e9f5ee; --ink:#25352c;
       --muted:#7f8c85; --line:#e2e9e4; --amber:#F6921E; --blue:#2E9BD6;
-      --band:#0f5132; --cream:#fbf6e3; --purple:#7c5cbf; --red:#c0392b; --teal:#1f9e94; --yellow:#e6b400;
+      --band:#0f5132; --cream:#fbf6e3; --purple:#7c5cbf; --red:#c0392b; --teal:#1f9e94; --yellow:#e6b400; --indigo:#4f46e5;
     }
     body{ background:#eef3f0; color:var(--ink); font-family:"Segoe UI",Calibri,Arial,system-ui,sans-serif; margin:0; }
     .wrap{ max-width:1080px; margin:0 auto; padding:22px 20px 60px; }
@@ -235,6 +235,7 @@ function actRow(idx, color, icon, area, indicatorText, achievedHtml, grade){
 
 function buildCard(d, clusterLabel, from, to){
   const prof=d.profiling||{}, tr=d.training||{}, dist=d.distribution||{}, prod=d.production||{}, hs=d.hort_sales||{}, ps=d.poultry||{}, isla=d.isla||{}, lev=d.leverage||{};
+  const yiw=d.youthInWork||{};
   const name=d.staff_name||'—';
   const days=daysBetween(from,to);
   const period = (from&&to) ? (prettyDate(from)+' – '+prettyDate(to)) : 'All available data';
@@ -260,7 +261,8 @@ function buildCard(d, clusterLabel, from, to){
     {ic:'fa-wheelchair', c:'var(--teal)', label:'PWD Share', ach:pwdPct, tgt:Number(T.pwd_pct)||3, unit:'%', isPct:true},
     {ic:'fa-piggy-bank', c:'var(--purple)', label:'SHGs Saving (ISLA)', ach:Number(isla.isla_shgs)||0, tgt:Number(T.shgs_saving)||16, unit:'SHGs'},
     {ic:'fa-seedling', c:'var(--green)', label:'Youth into Production', ach:Number(prod.prod_youth)||0, tgt:Number(T.youth_production)||400, unit:'youth'},
-    {ic:'fa-chalkboard-user', c:'var(--green-2)', label:'Groups Trained', ach:Number(tr.groups_trained)||0, tgt:Number(T.groups_trained)||16, unit:'groups'}
+    {ic:'fa-chalkboard-user', c:'var(--green-2)', label:'Groups Trained', ach:Number(tr.groups_trained)||0, tgt:Number(T.groups_trained)||16, unit:'groups'},
+    {ic:'fa-briefcase', c:'var(--indigo)', label:'Youth in Work', ach:Number(yiw.employedYouth)||0, tgt:Number(yiw.yiwTarget)||0, unit:'youth'}
   ].map(r=>{ r.pct = r.tgt>0 ? Math.round(100*r.ach/r.tgt) : 0; r.grade=gradeFor(Math.min(100,r.pct)); return r; });
 
   // Overall = average % achievement across the client targets (capped at 100 each).
@@ -291,6 +293,7 @@ function buildCard(d, clusterLabel, from, to){
   rows += actRow(6,'var(--red)','fa-basket-shopping','Sales (Horticulture)', fmt(hs.hs_youth)+' youth sellers ('+db(hs.female, hs.pwd)+') · horticulture + oil seeds', ugx(hs.hs_value), presenceGrade(hs.hs_value));
   rows += actRow(7,'var(--yellow)','fa-egg','Sales (Poultry)', fmt(ps.ps_youth)+' youth ('+db(ps.female, ps.pwd)+') · '+ugx(ps.ps_value), fmt(ps.birds_sold)+' birds', presenceGrade(ps.birds_sold));
   rows += actRow(8,'var(--teal)','fa-handshake','Local Leverage', fmt(lev.lev_count)+' contributions', ugx(lev.lev_amount), presenceGrade(lev.lev_count));
+  rows += actRow(9,'var(--indigo)','fa-briefcase','Youth in Work', 'Of '+fmt(prof.youth_profiled)+' youth mobilized, '+fmt(yiw.employedYouth)+' are in work ('+((Number(prof.youth_profiled)||0)>0?Math.round(100*(Number(yiw.employedYouth)||0)/(Number(prof.youth_profiled)||1)):0)+'% of mobilized) · '+fmt(yiw.selfEmployed)+' self-employed · '+fmt(yiw.wageEmployed)+' wage-employed · '+ugx(yiw.totalIncome)+' income', fmt(yiw.employedYouth)+' in work', tgtGrade(yiw.employedYouth, yiw.yiwTarget));
 
   // Key highlights (dynamic)
   const hls=[];
@@ -299,6 +302,7 @@ function buildCard(d, clusterLabel, from, to){
   if((Number(isla.savings)||0)>0) hls.push('Strong ISLA performance: <b>'+ugx(isla.savings)+'</b> saved and <b>'+ugx(isla.loans_value)+'</b> in loans given.');
   if((Number(prof.shgs_profiled)||0)>0) hls.push('Profiled <b>'+fmt(prof.shgs_profiled)+' SHGs</b> ('+fmt(prof.shgs_below_25)+' with &lt;25 members, '+fmt(prof.shgs_25_plus)+' with ≥25) reaching '+fmt(prof.youth_profiled)+' youth &mdash; '+db(prof.female, prof.pwd)+'.');
   if((Number(prod.prod_youth)||0)>0) hls.push('Engaged <b>'+fmt(prod.prod_youth)+' youth</b> in production ('+db(prod.female, prod.pwd)+').');
+  if((Number(yiw.employedYouth)||0)>0) hls.push('Of the youth mobilized, <b>'+fmt(yiw.employedYouth)+'</b> are now in work'+((Number(yiw.yiwTarget)||0)>0?' ('+Math.round(100*(Number(yiw.employedYouth)||0)/(Number(yiw.yiwTarget)||1))+'% of the Youth-in-Work target)':'')+'.');
   if(!hls.length) hls.push('No recorded activity for this facilitator in the selected period.');
 
   const gradeTbl = [
@@ -376,8 +380,16 @@ async function load(){
   if(from) qs.set('from', from);
   if(to) qs.set('to', to);
   try{
-    const res=await fetch('/api/cf-report?'+qs.toString());
+    const yqs=new URLSearchParams();
+    if(districts.length) yqs.set('districts', districts.join(','));
+    if(from) yqs.set('from', from);
+    if(to) yqs.set('to', to);
+    const [res, yres]=await Promise.all([
+      fetch('/api/cf-report?'+qs.toString()),
+      fetch('/api/youth-in-work?'+yqs.toString()).catch(()=>null)
+    ]);
     const d=await res.json();
+    try{ if(yres && yres.ok){ const yd=await yres.json(); d.youthInWork=(yd&&yd.kpi)?{ employedYouth:yd.kpi.employedYouth, youthTracked:yd.kpi.youthTracked, selfEmployed:yd.kpi.selfEmployed, wageEmployed:yd.kpi.wageEmployed, totalIncome:yd.kpi.totalIncome, yiwTarget:(yd.byDistrict||[]).reduce((a,r)=>a+(Number(r.yiwTarget)||0),0) }:{}; } }catch(_){}
     document.getElementById('report').innerHTML=buildCard(d, label, from, to);
   }catch(e){
     document.getElementById('report').innerHTML='<div class="cardsheet"><div class="loading">Failed to generate report card.</div></div>';

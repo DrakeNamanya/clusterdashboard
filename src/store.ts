@@ -149,6 +149,7 @@ const NEON_TEMPLATES = new Set<string>([
   'participants_shg',
   'distribution_form_v2',
   'agrihubs',
+  'job_tracking',
 ]);
 
 /** True when this template's records should be stored/queried on the Cluster-2
@@ -2290,6 +2291,199 @@ export async function refreshLocalLeverage(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_local_leverage_rows');
 }
 
+// --------------------------------------------------------------------------
+// Youth in Work — combined_job_tracking_tool_view.
+// Reads the flattened job_tracking_rows fact table. Targets come from
+// mel_reach_targets (annual reach target = SUM of monthly_target per district):
+//   YiW target        = 70% of reach target       (same % as the female target)
+//   female YiW target = 70% of the YiW target
+//   pwd YiW target    = 3%  of the YiW target
+// Achieved = distinct participant_id whose (latest) status_after = 'Employed'.
+// --------------------------------------------------------------------------
+export interface YiwFilters {
+  districts?: string[];  // matched case-insensitively (UPPERCASE in fact table)
+  from?: string;
+  to?: string;
+}
+
+/** Rebuild job_tracking_rows from records (call after MIS sync). [Oracle VM] */
+export async function refreshJobTracking(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_job_tracking_rows');
+}
+
+/**
+ * Youth in Work dashboard aggregate. Returns:
+ *  - kpis: job-tracked (rows), distinct youth job-tracked, employed youth
+ *          (distinct, status_after=Employed), total income, employ-youth jobs.
+ *  - byDistrict: per-district target vs achieved (employed youth) + female/pwd
+ *  - statusFlow: status_before -> status_after transition counts
+ *  - employmentStatus: Self/Wage employed distinct-youth counts
+ *  - valueChain: distinct youth + income per value chain
+ *  - table: per-district full breakdown (for the master sheet)
+ */
+export async function youthInWorkDash(env: Env, opts: YiwFilters = {}): Promise<any> {
+  const districts = opts.districts && opts.districts.length ? opts.districts : null;
+  // WHERE clause (district IN uppercased list) AND submission_date window.
+  const params: any[] = [districts, opts.from || null, opts.to || null];
+  const where = `
+    ( $1::text[] IS NULL OR district = ANY(SELECT upper(trim(x)) FROM unnest($1::text[]) x) )
+    AND ( $2::date IS NULL OR submission_date >= $2::date )
+    AND ( $3::date IS NULL OR submission_date <= $3::date )
+  `;
+
+  // Per-participant latest status (dedupe a youth to their most recent record).
+  const latestCte = `
+    latest AS (
+      SELECT DISTINCT ON (participant_id)
+             participant_id, district, status_before, status_after,
+             employed_change, employment_status, value_chain, total_income,
+             employ_youth, jobs_female, jobs_male, jobs_pwd, submission_date
+      FROM public.job_tracking_rows
+      WHERE ${where} AND participant_id IS NOT NULL
+      ORDER BY participant_id, submission_date DESC NULLS LAST
+    )
+  `;
+
+  // 1) KPIs
+  const kpiRows = await neonQuery(env, `
+    WITH base AS (SELECT * FROM public.job_tracking_rows WHERE ${where}),
+    ${latestCte}
+    SELECT
+      (SELECT count(*) FROM base)                                             AS job_tracked_rows,
+      (SELECT count(DISTINCT participant_id) FROM base WHERE participant_id IS NOT NULL) AS youth_tracked,
+      (SELECT count(*) FROM latest WHERE status_after = 'Employed')           AS employed_youth,
+      (SELECT count(*) FROM latest WHERE employment_status ILIKE 'Self%')     AS self_employed,
+      (SELECT count(*) FROM latest WHERE employment_status ILIKE 'Wage%')     AS wage_employed,
+      (SELECT coalesce(sum(total_income),0) FROM base)                        AS total_income,
+      (SELECT coalesce(sum(jobs_female),0) FROM base)                         AS jobs_female,
+      (SELECT coalesce(sum(jobs_male),0) FROM base)                           AS jobs_male,
+      (SELECT coalesce(sum(jobs_pwd),0) FROM base)                            AS jobs_pwd
+  `, params);
+  const kpi = kpiRows[0] || {};
+
+  // 2) Per-district: employed youth (achieved) vs targets from mel_reach_targets.
+  const byDistrict = await neonQuery(env, `
+    WITH ${latestCte},
+    ach AS (
+      SELECT district,
+             count(*)                                                     AS youth_tracked,
+             count(*) FILTER (WHERE status_after='Employed')              AS employed_youth,
+             count(*) FILTER (WHERE status_after='Employed' AND jobs_female > 0) AS female_ind,
+             coalesce(sum(total_income),0)                                AS total_income
+      FROM latest GROUP BY district
+    ),
+    tgt AS (
+      SELECT upper(trim(district)) AS district,
+             sum(monthly_target)   AS reach_target
+      FROM public.mel_reach_targets GROUP BY upper(trim(district))
+    )
+    SELECT
+      d.district,
+      coalesce(a.youth_tracked,0)                         AS youth_tracked,
+      coalesce(a.employed_youth,0)                        AS employed_youth,
+      coalesce(a.total_income,0)                          AS total_income,
+      round(coalesce(t.reach_target,0) * 0.70)            AS yiw_target,
+      round(coalesce(t.reach_target,0) * 0.70 * 0.70)     AS female_target,
+      round(coalesce(t.reach_target,0) * 0.70 * 0.03)     AS pwd_target,
+      coalesce(t.reach_target,0)                          AS reach_target
+    FROM (
+      SELECT district FROM ach
+      UNION SELECT district FROM tgt WHERE district IS NOT NULL
+    ) d
+    LEFT JOIN ach a ON a.district = d.district
+    LEFT JOIN tgt t ON t.district = d.district
+    WHERE ( $1::text[] IS NULL OR d.district = ANY(SELECT upper(trim(x)) FROM unnest($1::text[]) x) )
+    ORDER BY d.district
+  `, params);
+
+  // 3) Status before -> after transition matrix
+  const statusFlow = await neonQuery(env, `
+    WITH ${latestCte}
+    SELECT coalesce(status_before,'(blank)') AS status_before,
+           coalesce(status_after,'(blank)')  AS status_after,
+           count(*) AS youth
+    FROM latest
+    GROUP BY 1,2 ORDER BY youth DESC
+  `, params);
+
+  // 4) Employment status (distinct youth)
+  const employmentStatus = await neonQuery(env, `
+    WITH ${latestCte}
+    SELECT coalesce(nullif(employment_status,''),'(none)') AS employment_status,
+           count(*) AS youth
+    FROM latest GROUP BY 1 ORDER BY youth DESC
+  `, params);
+
+  // 5) Value chain engaged (distinct youth + income)
+  const valueChain = await neonQuery(env, `
+    WITH ${latestCte}
+    SELECT coalesce(nullif(value_chain,''),'(none)') AS value_chain,
+           count(*)                       AS youth,
+           coalesce(sum(total_income),0)  AS total_income
+    FROM latest GROUP BY 1 ORDER BY youth DESC
+  `, params);
+
+  // 6) Employed change categories (New / Improved / Sustained job)
+  const employedChange = await neonQuery(env, `
+    WITH ${latestCte}
+    SELECT coalesce(nullif(employed_change,''),'(none)') AS employed_change,
+           count(*) AS youth
+    FROM latest GROUP BY 1 ORDER BY youth DESC
+  `, params);
+
+  // District slicer list
+  const distRows = await neonQuery(env,
+    `SELECT DISTINCT district FROM public.job_tracking_rows WHERE district IS NOT NULL ORDER BY district`);
+
+  const num = (v: any) => Number(v ?? 0);
+  return {
+    kpi: {
+      jobTrackedRows: num(kpi.job_tracked_rows),
+      youthTracked: num(kpi.youth_tracked),
+      employedYouth: num(kpi.employed_youth),
+      selfEmployed: num(kpi.self_employed),
+      wageEmployed: num(kpi.wage_employed),
+      totalIncome: num(kpi.total_income),
+      jobsFemale: num(kpi.jobs_female),
+      jobsMale: num(kpi.jobs_male),
+      jobsPwd: num(kpi.jobs_pwd),
+    },
+    byDistrict: byDistrict.map((r: any) => ({
+      district: r.district,
+      youthTracked: num(r.youth_tracked),
+      employedYouth: num(r.employed_youth),
+      totalIncome: num(r.total_income),
+      yiwTarget: num(r.yiw_target),
+      femaleTarget: num(r.female_target),
+      pwdTarget: num(r.pwd_target),
+      reachTarget: num(r.reach_target),
+      pct: num(r.yiw_target) > 0 ? Math.round((num(r.employed_youth) / num(r.yiw_target)) * 1000) / 10 : null,
+    })),
+    statusFlow: statusFlow.map((r: any) => ({ before: r.status_before, after: r.status_after, youth: num(r.youth) })),
+    employmentStatus: employmentStatus.map((r: any) => ({ label: r.employment_status, youth: num(r.youth) })),
+    valueChain: valueChain.map((r: any) => ({ label: r.value_chain, youth: num(r.youth), totalIncome: num(r.total_income) })),
+    employedChange: employedChange.map((r: any) => ({ label: r.employed_change, youth: num(r.youth) })),
+    districts: distRows.map((r: any) => r.district).filter(Boolean),
+  };
+}
+
+/** Youth-in-Work summary for reports (weekly / CF / programme). [Oracle VM] */
+export async function youthInWorkSummary(env: Env, opts: YiwFilters = {}): Promise<any> {
+  const d = await youthInWorkDash(env, opts);
+  const tot = (arr: any[], k: string) => arr.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  return {
+    youthTracked: d.kpi.youthTracked,
+    employedYouth: d.kpi.employedYouth,
+    selfEmployed: d.kpi.selfEmployed,
+    wageEmployed: d.kpi.wageEmployed,
+    totalIncome: d.kpi.totalIncome,
+    yiwTarget: tot(d.byDistrict, 'yiwTarget'),
+    femaleTarget: tot(d.byDistrict, 'femaleTarget'),
+    pwdTarget: tot(d.byDistrict, 'pwdTarget'),
+    byDistrict: d.byDistrict,
+  };
+}
+
 /** Delete all rows for a template (reset a master table). */
 export async function clearTable(env: Env, schema: SheetSchema): Promise<void> {
   if (usesNeon(env, schema.key)) {
@@ -2711,6 +2905,7 @@ const MIS_VIEW_MAP: Record<string, string> = {
   youth_profiling: 'youth_profiling_form',
   shg_profiling_form: 'shg_profiling_form',
   production_and_marketing_tool: 'production_and_marketing_tool',
+  job_tracking: 'combined_job_tracking_tool_view',
 };
 
 /** Fetch one page of an ARBITRARY MIS view (1-indexed pages). */

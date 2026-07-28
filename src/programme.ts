@@ -14,7 +14,7 @@
 // All district matching is case-insensitive (rows are stored in mixed casing:
 // at_rows UPPERCASE, shg_profiling_rows Title Case, isla district_shg Title Case).
 // ---------------------------------------------------------------------------
-import { neonQuery, type Env } from './store';
+import { neonQuery, youthInWorkSummary, type Env } from './store';
 
 export interface ProgFilters {
   districts?: string[]; // e.g. ['IGANGA','JINJA','MAYUGE','LUUKA']
@@ -288,6 +288,7 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     rebookM, rebookQ,
     islaM, islaQ,
     levM, levQ,
+    yiwM, yiwQ,
   ] = await Promise.all([
     profilingByDistrict(env, districts, f.from, f.to),
     profilingByDistrict(env, districts, f.qFrom, f.qTo),
@@ -315,6 +316,8 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     islaByDistrict(env, districts, f.qFrom, f.qTo),
     leverageTotal(env, districts, f.from, f.to),
     leverageTotal(env, districts, f.qFrom, f.qTo),
+    youthInWorkSummary(env, { districts, from: f.from, to: f.to }),
+    youthInWorkSummary(env, { districts, from: f.qFrom, to: f.qTo }),
   ]);
 
   return {
@@ -329,5 +332,6 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     rebooking: { month: indexByDistrict(rebookM), quarter: indexByDistrict(rebookQ) },
     isla: { month: indexByDistrict(islaM), quarter: indexByDistrict(islaQ) },
     leverage: { month: levM, quarter: levQ },
+    youthInWork: { month: yiwM, quarter: yiwQ },
   };
 }

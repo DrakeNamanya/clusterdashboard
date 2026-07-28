@@ -339,6 +339,28 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  {
+    // Youth in Work — combined_job_tracking_tool_view. Job-tracking submissions
+    // for youth (status before vs after, employment status, value chain, income).
+    // Synced from the MIS view; flattened into job_tracking_rows by
+    // refresh_job_tracking_rows(). Dedup on the MIS `_id`.
+    key: 'job_tracking',
+    label: 'combined_job_tracking_tool_view',
+    filenameHints: ['job_tracking', 'combined_job_tracking', 'youth in work', 'youth_in_work'],
+    dedupKey: '_id',
+    columns: cols(
+      '_id,docId,participant_name,participant_id,ip_name,interviewer,interviewer_title,interviewer_contact,district_name,Subcounty_name,participant_type,primary_contact,shg_name,shg_id,status_before,status_after,employed,employment_status,employment_nature,value_chain_engaged,total_income,employ_youth,employ_youth_nature,full_time,part_time,female,male,pwds,full_time_pay,part_time_pay,submission_date,submitterName,createdBy',
+      {
+        total_income: 'number',
+        female: 'int',
+        male: 'int',
+        pwds: 'int',
+        full_time: 'int',
+        part_time: 'int',
+        submission_date: 'date',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(

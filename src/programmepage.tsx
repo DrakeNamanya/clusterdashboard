@@ -431,6 +431,16 @@ ${navSidebar('programme')}
     T['kpi.loan_youth']=fmtNum(loanYouth);
     T['kpi.leverage']=fmtMoney(leverage);
 
+    // Youth in Work KPIs (quarter window is the reporting figure)
+    var yiwQ = (data.youthInWork && data.youthInWork.quarter) || {};
+    T['kpi.yiw_target']=fmtNum(yiwQ.yiwTarget);
+    T['kpi.yiw_employed']=fmtNum(yiwQ.employedYouth);
+    T['kpi.yiw_female_target']=fmtNum(yiwQ.femaleTarget);
+    T['kpi.yiw_pwd_target']=fmtNum(yiwQ.pwdTarget);
+    T['kpi.yiw_self']=fmtNum(yiwQ.selfEmployed);
+    T['kpi.yiw_wage']=fmtNum(yiwQ.wageEmployed);
+    T['kpi.yiw_income']=fmtMoney(yiwQ.totalIncome);
+
     return T;
   }
 
@@ -730,6 +740,21 @@ ${navSidebar('programme')}
       h += '<table><tr class="grp-head"><th style="text-align:left">Indicator</th><th>Month</th><th>Quarter</th></tr>'
          + '<tr><td class="dist">Local leverage (UGX)</td><td>'+Math.round(Number(lm)).toLocaleString('en-US')
          + '</td><td>'+Math.round(Number(lq)).toLocaleString('en-US')+'</td></tr></table>';
+    })();
+
+    // --- Youth in Work indicator ----------------------------------------------
+    (function(){
+      var ym = (data.youthInWork&&data.youthInWork.month)||{}, yq=(data.youthInWork&&data.youthInWork.quarter)||{};
+      var n=function(v){return Math.round(Number(v)||0).toLocaleString('en-US');};
+      h += '<h3>Youth in Work</h3>';
+      h += '<table><tr class="grp-head"><th style="text-align:left">Indicator</th><th>Month</th><th>Quarter</th></tr>'
+         + '<tr><td class="dist">Youth in Work target (70% of reach)</td><td>'+n(ym.yiwTarget)+'</td><td>'+n(yq.yiwTarget)+'</td></tr>'
+         + '<tr><td class="dist">Youth in work (employed)</td><td>'+n(ym.employedYouth)+'</td><td>'+n(yq.employedYouth)+'</td></tr>'
+         + '<tr><td class="dist">Female YiW target (70% of YiW)</td><td>'+n(ym.femaleTarget)+'</td><td>'+n(yq.femaleTarget)+'</td></tr>'
+         + '<tr><td class="dist">PWD YiW target (3% of YiW)</td><td>'+n(ym.pwdTarget)+'</td><td>'+n(yq.pwdTarget)+'</td></tr>'
+         + '<tr><td class="dist">Self-employed</td><td>'+n(ym.selfEmployed)+'</td><td>'+n(yq.selfEmployed)+'</td></tr>'
+         + '<tr><td class="dist">Wage-employed</td><td>'+n(ym.wageEmployed)+'</td><td>'+n(yq.wageEmployed)+'</td></tr>'
+         + '<tr><td class="dist">Total income (UGX)</td><td>'+n(ym.totalIncome)+'</td><td>'+n(yq.totalIncome)+'</td></tr></table>';
     })();
 
     return h;

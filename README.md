@@ -135,7 +135,7 @@ CockroachDB Serverless free tier = **50M Request Units/month**. Heavy migrations
 + frequent refreshes can exhaust it, after which the cluster is disabled until
 the cycle resets or a spend limit is raised in the CockroachDB Cloud console.
 
-## Supported Templates (11)
+## Supported Templates (12)
 Detection is automatic (by column fingerprint + filename hint). Each maps to a
 fixed output schema and a master table.
 
@@ -152,6 +152,7 @@ fixed output schema and a master table.
 | `isla_participants`    | isla_form.shg_participants_odata_view | `refID` | **external OData feed** |
 | `participants`         | Profile (participants_odata_view) | `refID` | source for `Dim_Profile`; **external OData feed** |
 | `youth_profiling`      | youth_profiling_form_odata_view (79 cols) | `refID` | **external OData feed** |
+| `job_tracking`         | combined_job_tracking_tool_view (33 cols) | `_id` | **Youth in Work** master; **MIS view sync**; fact = `job_tracking_rows` |
 
 ## Importing from an external OData feed (`shg_profiling_form`)
 `shg_profiling_form` is populated by **pulling** from an external OData v4 feed
@@ -331,8 +332,13 @@ All six master tables appear as selectable entity sets and refresh automatically
   - `GET  /api/local-leverage` — KPIs (total_amount, total_contributions, categories_count, districts_count) + `by_category` + `by_district` (ranked desc by amount) + detail rows + slicer lists
   - `GET  /api/local-leverage/options` — lightweight slicer option lists + date bounds
   - `POST /api/local-leverage/refresh` — rebuild `local_leverage_rows`
+- `GET  /youth-in-work` — **YOUTH IN WORK** — from `combined_job_tracking_tool_view` (MIS view, `job_tracking` template → `job_tracking_rows`, ~79,272 rows). Tracks job-tracked youth by district, employment status **before vs after**, employment status (self-/wage-employed), **Value Chain Engaged**, and **total income**. A youth is counted once at their **latest** record (`DISTINCT ON (participant_id) … ORDER BY submission_date DESC`); *employed* = latest `status_after = 'Employed'`.
+  - **Targets** (per user's exact formula): **YiW target = 70% of the district reach target** (`SUM(mel_reach_targets.monthly_target)` per district); **female YiW target = 70% of YiW**; **PWD YiW target = 3% of YiW**. Compared vs **unique employed youth**. Example: Iganga reach target 8705 → YiW target = 0.70×8705 = **6094** (female 4265, PWD 183).
+  - Page: KPI strip (youth job-tracked, in-work/YiW, YiW target, self-employed, wage-employed, total income), **target-vs-achieved-by-district** table (reach target, YiW/female/PWD targets, youth tracked, employed, income, % of YiW target), **status before→after** (Chart.js), **Value Chain Engaged** (doughnut), employment-status & nature-of-change tables, district slicer + date range.
+  - `GET  /api/youth-in-work?districts=&from=&to=` → `youthInWorkDash()` (`{kpi, byDistrict, statusFlow, employmentStatus, valueChain, employedChange, districts}`).
+  - `POST /api/youth-in-work/refresh` — rebuild `job_tracking_rows` (`refresh_job_tracking_rows()`).
 - **Dim_Profile** — `SUMMARIZE(participants filtered to name_ip='HEIFER', participant_id, MAX(...))`; materialized as `dim_profile` (RPC `refresh_dim_profile()`). Participant dimension (full_name, district, sex, disability, shg_name) for profiling analysis.
-- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,itemsnotsold,localleverage,frontliners`)
+- `POST /api/refresh-all` — rebuild every dashboard summary (optional `?only=cluster,newyouth,distribution,shgdistribution,shgprofiling,isla,production,sales,poultrysales,itemsnotsold,localleverage,jobtracking,frontliners`)
 
 ### Automated Reports (Targets vs Achieved · Weekly · CF Report Card)
 Three automated report deliverables driven by **cluster + date** filters. Cluster
@@ -375,6 +381,9 @@ added.
     verification stamp** (circular red "SAYE UGANDA · M & E VERIFIED · date")
     plus sign-off lines at the foot of the report.
   - `GET /api/weekly?districts=&from=&to=` → `mel_weekly_report` RPC.
+  - **Youth in Work** section (fetched in parallel from `/api/youth-in-work`):
+    youth job-tracked, youth in work (employed), self-/wage-employed, total income,
+    and **% of the Youth-in-Work target** (70% of the cluster reach target).
 - `GET  /cf-report` — **Community Facilitator (CF) Report Card**. Cluster +
   **field-staff (CF)** + date filters. Report card matching the SAYE design:
   branded header, identity row (Cluster / CF / Report Period / Days), KPI tiles
@@ -417,6 +426,11 @@ added.
     facilitator list for the cluster, with activity counts).
   - `GET /api/cf-report?staff=&districts=&from=&to=` → `mel_cf_report` RPC
     (`staff` may be a single key or pipe-joined keys for merging).
+  - **Youth in Work** is added as a 9th activity row + a target row: *"of the youth
+    mobilised, how many are youth in work"* — relates **employed youth**
+    (from `/api/youth-in-work`, fetched in parallel and merged into the card) to
+    **youth mobilized** (`youth_profiled`), with a % share and grading against the
+    Youth-in-Work target.
 
 - `GET  /programme-report` — **Programme Report (Word generator)**. Sidebar page
   (`fa-file-word`) that produces the Heifer SAYE Monthly/Quarterly Progress Report
@@ -449,8 +463,13 @@ added.
     (src/programme.ts). Runs the district-breakdown queries for BOTH the month and the
     quarter window and returns `{districts, window, profiling{month,quarter},
     training{vbhcd,gender,nutrition,social,life,mental,srh,animal,crop,isla},
-    horticulture, poultryDist, goatDist, poultrySales, rebooking, isla, leverage}`. All
-    district matching is case-insensitive. ISLA **savers** apply the MEL outlier cap
+    horticulture, poultryDist, goatDist, poultrySales, rebooking, isla, leverage,
+    youthInWork{month,quarter}}`. All district matching is case-insensitive. The
+    **Youth in Work indicator** (`youthInWork`) carries per-window totals — YiW target
+    (70% of reach), youth in work (employed), female YiW target (70% of YiW), PWD YiW
+    target (3% of YiW), self-/wage-employed, total income — rendered as a table in the
+    on-screen **Preview** and exposed as `{{kpi.yiw_*}}` docx tokens (surface only if the
+    template carries the matching placeholders). ISLA **savers** apply the MEL outlier cap
     (per-row `youth_group_saving > 35 → 30`, since a group has 1–35 youth) so a stray
     data-entry outlier can no longer inflate a district (e.g. Luuka June went 16,150 → 79,
     Jinja July 26,515 → 1,241). `savings_value`/`loans_value_given` are monetary and left
@@ -534,7 +553,11 @@ complete instead of failing mid-way.
 - **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-28
+- **Last Updated**: 2026-07-29
+  - **Youth in Work feature (Phase-2 batch G)**:
+    - **New master + dashboard tab**: ingested `combined_job_tracking_tool_view` (81,815 raw → 79,272 after `_id` dedup) via the **MIS view-sync** path (`job_tracking` template → `job_tracking_rows` fact table + `refresh_job_tracking_rows()` SECURITY DEFINER). New sidebar page **`/youth-in-work`** (`fa-briefcase`): KPI strip, target-vs-achieved-by-district table, status before→after chart, Value Chain Engaged doughnut, employment-status & nature-of-change tables, district + date slicers. A youth is counted once at their **latest** record; *employed* = latest `status_after='Employed'`.
+    - **Targets** (user's exact formula): **YiW target = 70% of the district reach target**, **female YiW = 70% of YiW**, **PWD YiW = 3% of YiW**, compared vs unique employed youth. Verified Iganga 8705 → YiW **6094** / female 4265 / PWD 183.
+    - **Woven into the three reports**: **Weekly Report** gained a Youth in Work section (youth tracked, in-work, self-/wage-employed, income, % of YiW target); **CF Report Card** gained a Youth-in-Work activity + target row answering *"of the youth mobilised, how many are youth in work"* (employed youth vs `youth_profiled`); **Programme Report** gained a `youthInWork{month,quarter}` indicator rendered in the Preview and exposed as `{{kpi.yiw_*}}` docx tokens. All three fetch `/api/youth-in-work` in parallel.
   - **Gender/PWD disaggregation, produce sold, value-chain sales, SHG-size split, professional report redesign (Phase-2 batch F)**:
     - **Female + PWD breakdown across all 3 reports**: Weekly Report, CF Report Card, **and** the Report Dashboard now break every people-count into **female** and **persons-with-disability (PWD)**. Gender is sourced from the participant register (`at_rows.sex`, joined on `shg_participant_id`) since the sales/production/poultry fact rows carry only `disability_status`; SHG-profiling and ISLA rows use their own native `female`/`pwd` columns. Report Dashboard adds Female/PWD columns to the Reach & Mobilization tables plus KPI-card gender chips (e.g. Iganga cluster reach 19,931 → **11,632 female · 825 PWD**; mobilization 23,526 → **13,783 female · 1,007 PWD**).
     - **Weekly – Produce sold in kg/pieces**: Production & Marketing now names the actual horticulture produce moved, e.g. *"Tomatoes: 301,681 kg; Watermelon: 31,079 pieces; Onions: 3,198 kg; …"* (`mel_weekly_report.hs_items` groups by crop + `qty_harvested_measure`).

@@ -266,6 +266,17 @@ export function buildTokens(data: any, clusterKey: string,
   T['kpi.loan_youth'] = nf(saversQ);
   T['kpi.leverage'] = money(leverageQ);
 
+  // Youth in Work KPIs (quarter window). These only surface in the .docx when
+  // the template contains the matching {{kpi.yiw_*}} placeholders; harmless otherwise.
+  const yiwQ = (data.youthInWork && data.youthInWork.quarter) || {};
+  T['kpi.yiw_target'] = nf(Number(yiwQ.yiwTarget) || 0);
+  T['kpi.yiw_employed'] = nf(Number(yiwQ.employedYouth) || 0);
+  T['kpi.yiw_female_target'] = nf(Number(yiwQ.femaleTarget) || 0);
+  T['kpi.yiw_pwd_target'] = nf(Number(yiwQ.pwdTarget) || 0);
+  T['kpi.yiw_self'] = nf(Number(yiwQ.selfEmployed) || 0);
+  T['kpi.yiw_wage'] = nf(Number(yiwQ.wageEmployed) || 0);
+  T['kpi.yiw_income'] = money(Number(yiwQ.totalIncome) || 0);
+
   // -------------------------------------------------------------------------
   // NARRATIVE tokens (monthly figures unless the para is explicitly quarterly).
   // These plug into the prose paragraphs so the text matches the tables.

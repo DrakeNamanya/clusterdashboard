@@ -202,7 +202,7 @@ function sec(color, icon, title, bodyHtml){
   return '<section class="card sec"><h2><span class="ic" style="background:'+color+'"><i class="fas '+icon+'"></i></span>'+title+'</h2>'+bodyHtml+'</section>';
 }
 
-function buildNarrative(d, clusterLabel){
+function buildNarrative(d, clusterLabel, yiw){
   const p=d.profiling||{}, dist=d.distribution||{}, prod=d.production||{}, poul=d.poultry||{}, hs=d.hort_sales||{}, isla=d.isla||{}, lev=d.leverage||{};
   const trBy=d.training_by||[]; const trained=d.training_total||0;
   let out='';
@@ -254,6 +254,16 @@ function buildNarrative(d, clusterLabel){
     '<p><b>'+fmt(isla.shgs)+' SHGs</b> mobilized <b>'+ugx(isla.savings)+'</b> in savings from <b>'+fmt(isla.savers)+' youth savers</b>, with <b>'+ugx(isla.loans_value)+'</b> in loans given to <b>'+fmt(isla.loans_count)+'</b> youth.</p>'+
     '<div class="chips"><span class="chip">Youth saving <b>'+fmt(isla.savers)+'</b></span><span class="chip">Amount saved <b>'+ugx(isla.savings)+'</b></span><span class="chip">Loans given <b>'+ugx(isla.loans_value)+'</b></span><span class="chip">Youth who got loans <b>'+fmt(isla.loans_count)+'</b></span></div>');
 
+  // Youth in Work (job tracking)
+  if(yiw){
+    const k=yiw.kpi||{}; const bd=yiw.byDistrict||[];
+    const yiwTgt=bd.reduce((s,r)=>s+(Number(r.yiwTarget)||0),0);
+    const empPct = yiwTgt>0 ? Math.round(100*(Number(k.employedYouth)||0)/yiwTgt)+'%' : '—';
+    out += sec('var(--blue)','fa-briefcase','Youth in Work',
+      '<p>During the period, <b>'+fmt(k.youthTracked)+' youth</b> were job-tracked, of whom <b>'+fmt(k.employedYouth)+'</b> are <b>employed</b> (Youth in Work) — <b>'+fmt(k.selfEmployed)+'</b> self-employed and <b>'+fmt(k.wageEmployed)+'</b> wage-employed, generating <b>'+ugx(k.totalIncome)+'</b> in income. This is <b>'+empPct+'</b> of the Youth-in-Work target ('+fmt(yiwTgt)+', i.e. 70% of the cluster reach target).</p>'+
+      '<div class="chips"><span class="chip">Job-tracked <b>'+fmt(k.youthTracked)+'</b></span><span class="chip">Employed (YiW) <b>'+fmt(k.employedYouth)+'</b></span><span class="chip">YiW target <b>'+fmt(yiwTgt)+'</b></span><span class="chip">Self-employed <b>'+fmt(k.selfEmployed)+'</b></span><span class="chip">Wage-employed <b>'+fmt(k.wageEmployed)+'</b></span><span class="chip">Income <b>'+ugx(k.totalIncome)+'</b></span></div>');
+  }
+
   // Leverage
   out += sec('var(--teal)','fa-handshake','Leverage Contributions',
     '<p>Local leverage contributions totalled <b>'+ugx(lev.amount)+'</b> during the reporting period.</p>');
@@ -298,11 +308,15 @@ async function load(){
   if(from) qs.set('from', from);
   if(to) qs.set('to', to);
   try{
-    const res=await fetch('/api/weekly?'+qs.toString());
+    const [res, yiwRes]=await Promise.all([
+      fetch('/api/weekly?'+qs.toString()),
+      fetch('/api/youth-in-work?'+qs.toString()).catch(()=>null)
+    ]);
     const d=await res.json();
+    let yiw=null; try{ if(yiwRes && yiwRes.ok) yiw=await yiwRes.json(); }catch(e){}
     const range = (from&&to) ? (prettyDate(from)+' → '+prettyDate(to)) : 'All available data';
     document.getElementById('heroMeta').textContent = range;
-    buildNarrative(d, label);
+    buildNarrative(d, label, yiw);
     document.getElementById('noteBox').innerHTML='';
   }catch(e){
     document.getElementById('heroMeta').textContent='Error loading data';

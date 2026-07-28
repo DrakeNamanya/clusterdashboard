@@ -19,6 +19,7 @@ import {
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
   melReportDash, weeklyReport, cfReport, cfStaffList,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
+  youthInWorkDash, youthInWorkSummary, refreshJobTracking,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -42,6 +43,7 @@ import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
 import { renderProgrammeReport } from './programmepage';
+import { renderYouthInWork } from './youthinwork';
 import { programmeReport } from './programme';
 import { buildTokens as buildDocTokens, generateDocx } from './programmedoc';
 
@@ -1001,6 +1003,28 @@ app.get('/api/cf-report/staff', async (c) => {
   return c.json(data);
 });
 
+// ---- Youth in Work (combined_job_tracking_tool_view) -----------------------
+app.get('/youth-in-work', (c) => c.html(renderYouthInWork(baseUrl(c.req.url))));
+app.get('/api/youth-in-work', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await youthInWorkDash(storeEnv(c), {
+    districts: split(q.districts),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+// Rebuild the job_tracking_rows fact table (call after a MIS sync of the view).
+app.all('/api/youth-in-work/refresh', async (c) => {
+  try {
+    const rows = await refreshJobTracking(storeEnv(c));
+    return c.json({ ok: true, rows });
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
 // ---- Refresh ALL dashboards after a master-sheet update --------------------
 // Rebuilds every pre-aggregated summary table so all pages reflect new data.
 // Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
@@ -1024,6 +1048,7 @@ app.post('/api/refresh-all', async (c) => {
   if (want('poultrysales')) jobs.push({ key: 'poultrysales', fn: () => refreshPoultrySales(env) });
   if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
   if (want('localleverage')) jobs.push({ key: 'localleverage', fn: () => refreshLocalLeverage(env) });
+  if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
 
