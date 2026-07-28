@@ -43,6 +43,7 @@ import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
 import { renderProgrammeReport } from './programmepage';
 import { programmeReport } from './programme';
+import { buildTokens as buildDocTokens, generateDocx } from './programmedoc';
 
 // Cloudflare env: Supabase creds are injected as secrets / vars.
 type Bindings = Env;
@@ -942,6 +943,57 @@ app.get('/api/programme-report', async (c) => {
   });
   return c.json(data);
 });
+
+// ---- Programme Report: server-side filled .docx download -------------------
+// Fetches the template, replaces every token (tables + KPI + narratives + meta)
+// and re-zips with fflate (media copied STORED). Reliable, unlike the browser
+// JSZip path which stalled recompressing the 4 MB template.
+app.get('/api/programme-report/docx', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const districts = split(q.districts);
+  const cluster = q.cluster || 'iganga';
+  const mFrom = q.from || undefined;
+  const qFrom = q.qFrom || undefined;
+  const qTo = q.qTo || undefined;
+
+  const data = await programmeReport(storeEnv(c), {
+    districts,
+    from: mFrom,
+    to: q.to || undefined,
+    qFrom,
+    qTo,
+  });
+
+  // Load the template. Prefer the ASSETS binding (avoids a self-fetch that can
+  // deadlock the single-threaded local wrangler dev server); fall back to an
+  // absolute origin fetch if the binding is unavailable.
+  const assetPath = '/static/programme_template.docx';
+  let tplRes: Response;
+  const assets = (c.env as any).ASSETS;
+  if (assets && typeof assets.fetch === 'function') {
+    tplRes = await assets.fetch(new URL(assetPath, baseUrl(c.req.url)).toString());
+  } else {
+    tplRes = await fetch(baseUrl(c.req.url) + assetPath);
+  }
+  if (!tplRes.ok) {
+    return c.text('Template load failed (' + tplRes.status + ')', 500);
+  }
+  const tplBytes = new Uint8Array(await tplRes.arrayBuffer());
+
+  const tokens = buildDocTokens(data, cluster, mFrom, qFrom, qTo);
+  const out = generateDocx(tplBytes, tokens);
+
+  const fname = 'SAYE_Programme_Report_' + (mFrom || 'report') + '.docx';
+  return new Response(out, {
+    headers: {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="${fname}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
 app.get('/api/cf-report/staff', async (c) => {
   const q = c.req.query();
   const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);

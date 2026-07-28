@@ -25,7 +25,6 @@ export function renderProgrammeReport(base: string): string {
   <title>Programme Report — Word Generator</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
     :root{
       --green:#006837; --green-2:#00A859; --lgreen:#e9f5ee; --ink:#25352c;
@@ -491,41 +490,27 @@ ${navSidebar('programme')}
 
     btn.disabled = true;
     try {
-      setStatus('Fetching programme data…','busy');
+      // Server-side generation: the Worker fetches the template, fills every
+      // token (tables + KPI + narratives) and re-zips with fflate. Reliable on
+      // the 4 MB template where in-browser JSZip re-zipping used to stall.
+      setStatus('Generating filled Word document on the server…','busy');
       var slots = CLUSTER_DISTRICTS[cluster] || CLUSTER_DISTRICTS.iganga;
       var qs = new URLSearchParams({
+        cluster: cluster,
         districts: slots.join(','),
         from: mFrom, to: mTo, qFrom: qFrom, qTo: qTo
       });
-      var apiRes = await fetch('/api/programme-report?' + qs.toString());
-      if(!apiRes.ok) throw new Error('API returned ' + apiRes.status);
-      var data = await apiRes.json();
-
-      setStatus('Loading Word template…','busy');
-      var tplRes = await fetch(TEMPLATE_URL);
-      if(!tplRes.ok) throw new Error('Template load failed (' + tplRes.status + ')');
-      var tplBuf = await tplRes.arrayBuffer();
-
-      setStatus('Filling document…','busy');
-      var zip = await JSZip.loadAsync(tplBuf);
-      var docFile = zip.file('word/document.xml');
-      if(!docFile) throw new Error('document.xml missing from template');
-      var xml = await docFile.async('string');
-
-      var tokens = buildTokens(data, cluster, mFrom, qFrom, qTo);
-      xml = fillXml(xml, tokens);
-      zip.file('word/document.xml', xml);
-
-      setStatus('Packaging .docx…','busy');
-      var out = await zip.generateAsync({
-        type: 'blob',
-        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        compression: 'DEFLATE'
-      });
+      var res = await fetch('/api/programme-report/docx?' + qs.toString());
+      if(!res.ok){
+        var txt = '';
+        try { txt = await res.text(); } catch(e){}
+        throw new Error('Server returned ' + res.status + (txt ? (': ' + txt) : ''));
+      }
+      var out = await res.blob();
 
       var fname = 'SAYE_Programme_Report_' + (mFrom||'report') + '.docx';
       download(out, fname);
-      setStatus('Downloaded ' + fname + ' — tables auto-filled; yellow cells need manual input.','ok');
+      setStatus('Downloaded ' + fname + ' — tables & narratives auto-filled; any yellow cells need manual input.','ok');
     } catch(err){
       console.error(err);
       setStatus('Error: ' + (err && err.message ? err.message : err), 'err');

@@ -239,13 +239,18 @@ All six master tables appear as selectable entity sets and refresh automatically
     `?districts=&from=&to=` querystring (cache-bypassed with `no-store`) that **every** home-card
     API honours server-side, so picking *Iganga* shows only Iganga-cluster figures and picking
     *July* shows only July figures. A stamp under the KPIs shows the active cluster + range.
+    - **No more blank cards on filter:** after all card loaders settle, a failsafe sweep
+      converts any value cell still showing the loading skeleton (`…`) — i.e. a loader that
+      errored, timed out, or genuinely had no data for the selection — into a real **`0`**
+      (or `UGX 0`), so a cluster+date filter never "brings empty cards".
   - a **bottom row**: the **District Race — Participant Target Achievement** panel
     (the old "Performance by District" table and "Trends Overview" line chart are now
-    merged into ONE horse-race visualization). All districts race along **one shared
-    ground line** with small horses — each horse is positioned horizontally by its % of
-    the new-youth reach target (0% at the start gate, 100% at the FINISH box), and each
-    horse carries its own **"District · NN%" label on top** (labels auto-stack when two
-    horses sit close). The data is the **exact same table as the Report dashboard's
+    merged into ONE horse-race visualization). **Each district now runs in its OWN lane**
+    (a separate horizontal row, ~64 px apart) so the horses are spread out vertically and
+    never squeeze on top of each other when their % are close (they used to all sit on one
+    shared ground line and pile up). A horse's **horizontal** position still encodes its %
+    of the new-youth reach target (0% at the start gate, 100% at the FINISH box), and each
+    carries its own **"District · NN%" label** just above it. The data is the **exact same table as the Report dashboard's
     "Reach: Targets vs Achieved"** — the race fetches `/api/report` (`reach` array) and
     **pins the reporting-year window Oct 1 2025 – Sep 30 2026** (the home page's global
     date filter defaults to all-time, which would over-count reach against the Year-3
@@ -416,13 +421,19 @@ added.
 - `GET  /programme-report` — **Programme Report (Word generator)**. Sidebar page
   (`fa-file-word`) that produces the Heifer SAYE Monthly/Quarterly Progress Report
   as an **editable Word (.docx)**. Filters: **Cluster** + **Reporting Month** (from/to)
-  + **Reporting Quarter** (qFrom/qTo). The page fetches live data, loads a tokenized
-  Word template (`/static/programme_template.docx`, 521 `{{tokens}}`), and fills every
-  data table **entirely in the browser** with JSZip — replacing tokens in
-  `word/document.xml` with per-district month + quarter figures (Overall-total rows
-  are summed client-side), then re-zips and downloads. Tables with **no clean data
-  source** (PSRP, SACCO) and any unmatched value are left blank and **highlighted
-  yellow** for the user to fill by hand.
+  + **Reporting Quarter** (qFrom/qTo). The template `/static/programme_template.docx`
+  carries **581 `{{tokens}}`** (521 data-table cells + 26 `{{narr.*}}` narrative values +
+  `{{meta.month|monthname|quarter}}`). Tables with **no clean data source** (PSRP, SACCO)
+  and any unmatched value are left blank and **highlighted yellow** for manual entry.
+  - **Download is generated SERVER-SIDE** via `GET /api/programme-report/docx` (Worker,
+    src/programmedoc.ts + fflate). The Worker loads the template through the `ASSETS`
+    binding, replaces **every** token in `word/document.xml` (data tables + KPI summary +
+    narrative paragraphs), and re-zips copying all media entries **STORED** (no
+    recompression) so only the document XML changes. This replaced the old in-browser
+    JSZip path, which stalled re-zipping the 4 MB template so the tables never filled.
+    Narrative prose is auto-rewritten to match the tables (e.g. *"ISLA activity in June
+    reached 880 savers … UGX 2,314,816 … UGX 1,260,500"*). Monetary `narr.*` values are
+    plain numbers because the prose already prints "UGX".
   - **Preview Report** button — opens an on-screen modal that renders every auto-filled
     table as HTML **before** download, using the exact same values written into the
     .docx, so what you read is what you get. Includes a Summary-of-Outreach-Actuals
@@ -438,9 +449,13 @@ added.
     (src/programme.ts). Runs the district-breakdown queries for BOTH the month and the
     quarter window and returns `{districts, window, profiling{month,quarter},
     training{vbhcd,gender,nutrition,social,life,mental,srh,animal,crop,isla},
-    horticulture, poultryDist, goatDist, poultrySales, isla, leverage}`. All district
-    matching is case-insensitive. Verified vs the printed doc (Gender Iganga 270/148/18,
-    ISLA Iganga savers 2,720 / saved 14,854,820, Profiling Iganga 32 SHGs/465 youth).
+    horticulture, poultryDist, goatDist, poultrySales, rebooking, isla, leverage}`. All
+    district matching is case-insensitive. ISLA **savers** apply the MEL outlier cap
+    (per-row `youth_group_saving > 35 → 30`, since a group has 1–35 youth) so a stray
+    data-entry outlier can no longer inflate a district (e.g. Luuka June went 16,150 → 79,
+    Jinja July 26,515 → 1,241). `savings_value`/`loans_value_given` are monetary and left
+    uncapped. Verified vs the printed doc (Gender Iganga 270/148/18, Profiling Iganga
+    32 SHGs/465 youth).
   - Data sources per table: training tables ← `at_rows` (by `training_type`);
     profiling ← `shg_profiling_rows`; horticulture (Tomatoes KGs / Watermelon Pieces /
     Sales) ← `sales_rows`; poultry & goat distribution ← `distribution_rows`
@@ -519,7 +534,7 @@ complete instead of failing mid-way.
 - **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-27
+- **Last Updated**: 2026-07-28
   - **Gender/PWD disaggregation, produce sold, value-chain sales, SHG-size split, professional report redesign (Phase-2 batch F)**:
     - **Female + PWD breakdown across all 3 reports**: Weekly Report, CF Report Card, **and** the Report Dashboard now break every people-count into **female** and **persons-with-disability (PWD)**. Gender is sourced from the participant register (`at_rows.sex`, joined on `shg_participant_id`) since the sales/production/poultry fact rows carry only `disability_status`; SHG-profiling and ISLA rows use their own native `female`/`pwd` columns. Report Dashboard adds Female/PWD columns to the Reach & Mobilization tables plus KPI-card gender chips (e.g. Iganga cluster reach 19,931 → **11,632 female · 825 PWD**; mobilization 23,526 → **13,783 female · 1,007 PWD**).
     - **Weekly – Produce sold in kg/pieces**: Production & Marketing now names the actual horticulture produce moved, e.g. *"Tomatoes: 301,681 kg; Watermelon: 31,079 pieces; Onions: 3,198 kg; …"* (`mel_weekly_report.hs_items` groups by crop + `qty_harvested_measure`).

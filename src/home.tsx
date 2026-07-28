@@ -581,56 +581,59 @@ ${navSidebar('home')}
         if(legend) legend.innerHTML=''; return;
       }
 
-      // Single-line geometry (matches the reference artwork): every horse stands on
-      // ONE shared ground line, positioned horizontally by its % of the reach target
-      // (0% at startX, 100% at the FINISH). Horses are small. Each carries its own
-      // "District · NN%" label on top; when two horses sit close, their labels are
-      // stacked at alternating heights so they stay readable.
-      const W=1000, top=120, bottom=52, groundY=380;
-      const startX=60, finishX=690;              // 0% at startX, 100% at FINISH box left edge
-      const scale=0.30;                          // small horses
-      const horseH=150*scale;                    // rendered horse height (~45)
-      const H=groundY+bottom;
+      // Lane geometry: give EVERY district its OWN horizontal lane (row) so the
+      // horses are spread out vertically and never squeeze on top of each other
+      // (they used to all sit on ONE ground line and pile up when their % were
+      // close). Each horse's HORIZONTAL position still encodes its % of the reach
+      // target (0% at startX → 100% at the FINISH line). Lane height scales with
+      // the number of racers so the panel breathes.
+      const ordered=racers.slice().sort((a,b)=>b.pct-a.pct);   // leader in top lane
+      const n=ordered.length;
+      const top=64, startX=70, finishX=760;      // 0% at startX, 100% at FINISH box left edge
+      const laneH=64;                             // generous vertical spacing per horse
+      const scale=0.32;                           // horse size
+      const horseH=150*scale;                     // rendered horse height (~48)
+      const tracksTop=top+20;
+      const tracksH=Math.max(laneH, n*laneH);
+      const bottomPad=44;
+      const W=1080, H=tracksTop+tracksH+bottomPad;
       const span=finishX-startX;
       const xFor=(pct)=>{ const p=Math.max(0,Math.min(115,(pct==null?0:pct))); return startX + span*(p/100); };
+      const laneMid=(idx)=>tracksTop + idx*laneH + laneH/2;    // vertical centre of lane idx
 
       let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="District participant target race" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">';
 
-      // shared ground line + direction arrow
-      svg+='<line x1="'+startX+'" y1="'+groundY+'" x2="'+(W-30)+'" y2="'+groundY+'" stroke="#b8bfba" stroke-width="3"/>';
-      svg+='<polyline points="'+(W-42)+','+(groundY-11)+' '+(W-24)+','+groundY+' '+(W-42)+','+(groundY+11)+'" fill="none" stroke="#b8bfba" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>';
-      // % gridlines + axis labels
-      [0,25,50,75].forEach(g=>{ const gx=xFor(g); if(g>0) svg+='<line x1="'+gx+'" y1="'+(top-8)+'" x2="'+gx+'" y2="'+groundY+'" stroke="#eef1ef" stroke-width="2"/>'; svg+='<text x="'+gx+'" y="'+(groundY+24)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">'+g+'%</text>'; });
-      svg+='<line x1="'+startX+'" y1="'+(top-8)+'" x2="'+startX+'" y2="'+groundY+'" stroke="#c9cfd4" stroke-width="2" stroke-dasharray="4 4"/>';
+      // vertical % gridlines spanning all lanes + axis labels along the bottom
+      const gridTop=top, gridBottom=tracksTop+tracksH;
+      [0,25,50,75].forEach(g=>{ const gx=xFor(g); if(g>0) svg+='<line x1="'+gx+'" y1="'+gridTop+'" x2="'+gx+'" y2="'+gridBottom+'" stroke="#eef1ef" stroke-width="2"/>'; svg+='<text x="'+gx+'" y="'+(gridBottom+26)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">'+g+'%</text>'; });
+      svg+='<line x1="'+startX+'" y1="'+gridTop+'" x2="'+startX+'" y2="'+gridBottom+'" stroke="#c9cfd4" stroke-width="2" stroke-dasharray="4 4"/>';
 
-      // FINISH box (100% line)
+      // FINISH box (100% line) spanning the full lane stack
       const fbw=W-finishX-30;
-      svg+='<rect x="'+finishX+'" y="'+(top-8)+'" width="'+fbw+'" height="'+(groundY-(top-8))+'" fill="none" stroke="#2b2b2b" stroke-width="2.5"/>';
-      svg+='<rect x="'+finishX+'" y="'+(top-8)+'" width="'+fbw+'" height="40" fill="#f0f0f0" stroke="#2b2b2b" stroke-width="2.5"/>';
-      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(top+19)+'" text-anchor="middle" font-size="18" font-weight="700" letter-spacing="2" fill="#9a9a9a">FINISH</text>';
-      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(groundY+24)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">100%</text>';
+      svg+='<rect x="'+finishX+'" y="'+gridTop+'" width="'+fbw+'" height="'+(gridBottom-gridTop)+'" fill="none" stroke="#2b2b2b" stroke-width="2.5"/>';
+      svg+='<rect x="'+finishX+'" y="'+gridTop+'" width="'+fbw+'" height="34" fill="#f0f0f0" stroke="#2b2b2b" stroke-width="2.5"/>';
+      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(gridTop+23)+'" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="2" fill="#9a9a9a">FINISH</text>';
+      svg+='<text x="'+(finishX+fbw/2)+'" y="'+(gridBottom+26)+'" text-anchor="middle" font-size="12" fill="#aeb6b1">100%</text>';
 
-      // draw racers left→right so higher-% horses overlap in front; labels stacked to avoid clashes
-      const ordered=racers.slice().sort((a,b)=>a.pct-b.pct);
-      let lastLx=-999, tierToggle=0;
-      ordered.forEach((d)=>{
+      // one lane per district: a thin ground line + the horse + its label
+      ordered.forEach((d, idx)=>{
         const i=racers.indexOf(d);                       // stable colour by rank
         const color=RACE_COLORS[i%RACE_COLORS.length];
         const rx=xFor(d.pct);
-        // the small racer, hooves on the shared ground line
+        const laneY=laneMid(idx);                        // horse hooves rest on this lane's ground line
+        const groundY=laneY + horseH*0.28;               // slight drop so hooves touch the line
+        // faint lane separator ground line
+        svg+='<line x1="'+startX+'" y1="'+groundY+'" x2="'+(finishX)+'" y2="'+groundY+'" stroke="#e5eae7" stroke-width="2"/>';
+        // the racer, hooves on its own lane line
         svg+='<g transform="translate('+(rx-70*scale)+' '+(groundY-horseH)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
-        // label ON TOP; stack alternately if this horse is horizontally close to the previous one
+        // label sits just above the horse in its own lane — no more stacking clashes
         const done=d.pct>=100;
         const pcol=done?'#2fae76':color;
-        if(rx-lastLx < 110){ tierToggle=(tierToggle+1)%3; } else { tierToggle=0; }
-        lastLx=rx;
-        const labelY=(groundY-horseH-12) - tierToggle*22;   // lift stacked labels higher
-        const nearFinish = rx > finishX-30;
+        const nearFinish = rx > finishX-40;
         const anchor = nearFinish ? 'end' : 'middle';
-        const lx = nearFinish ? finishX-8 : rx;
-        // small connector when the label is lifted well above the horse
-        if(tierToggle>0) svg+='<line x1="'+rx+'" y1="'+(labelY+6)+'" x2="'+rx+'" y2="'+(groundY-horseH-4)+'" stroke="'+color+'" stroke-width="1" opacity="0.4"/>';
-        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="13.5" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
+        const lx = nearFinish ? finishX-6 : rx;
+        const labelY=groundY-horseH-6;
+        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="13" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
       });
 
       svg+='</svg>';
@@ -702,6 +705,15 @@ ${navSidebar('home')}
       drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
       const jobs=Object.entries(loaders).map(([k,fn])=>fn().catch(err=>{ console.error(k,err); }));
       Promise.allSettled(jobs).then(()=>{
+        // Failsafe: any value cell still showing the loading skeleton means its
+        // loader errored (or the API returned nothing) for this selection.
+        // Show a real "0" instead of leaving a blank/… card, so a filter that
+        // legitimately has no data (or an endpoint that hiccuped) never looks
+        // like the dashboard "brought empty cards".
+        document.querySelectorAll('[data-f].skel').forEach(el=>{
+          el.classList.remove('skel');
+          el.textContent = el.hasAttribute('data-money') ? 'UGX 0' : '0';
+        });
         const cl=(document.getElementById('fCluster')||{}).value||'all';
         const clLbl={all:'All clusters',iganga:'Iganga Cluster',kamuli:'Kamuli Cluster',bugiri:'Bugiri Cluster',central:'Central Cluster'}[cl]||'All clusters';
         const from=(document.getElementById('fFrom')||{}).value, to=(document.getElementById('fTo')||{}).value;

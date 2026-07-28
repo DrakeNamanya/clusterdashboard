@@ -222,9 +222,13 @@ async function islaByDistrict(
   }
   if (from) { params.push(from); where += ` AND activity_date >= $${params.length}::date`; }
   if (to)   { params.push(to);   where += ` AND activity_date <= $${params.length}::date`; }
+  // MEL outlier rule (per client, matches isla_dash / mel_weekly_report /
+  // mel_cf_report): a group has 1-35 youth, so any per-row youth_group_saving > 35
+  // is a data-entry outlier and is capped to the group average of 30 BEFORE summing.
+  // Same cap applies to the per-row `loans` (youth who received loans) count.
   const sql = `
     SELECT upper(trim(district_shg)) AS district,
-           COALESCE(SUM(youth_group_saving),0) AS savers,
+           COALESCE(SUM(CASE WHEN youth_group_saving > 35 THEN 30 ELSE youth_group_saving END),0) AS savers,
            COALESCE(SUM(savings_value),0)      AS saved,
            COALESCE(SUM(loans_value_given),0)  AS loans
     FROM isla_final_rows
