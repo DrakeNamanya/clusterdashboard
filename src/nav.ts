@@ -25,6 +25,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'report', href: '/report', label: 'Report Dashboard', icon: 'fa-bullseye' },
   { key: 'weekly', href: '/weekly-report', label: 'Weekly Report', icon: 'fa-calendar-week' },
   { key: 'cfreport', href: '/cf-report', label: 'CF Report Card', icon: 'fa-id-badge' },
+  { key: 'cfleague', href: '/cf-premier-league', label: 'CF Premier League', icon: 'fa-ranking-star' },
   { key: 'programme', href: '/programme-report', label: 'Programme Report', icon: 'fa-file-word' },
   { key: 'youthinwork', href: '/youth-in-work', label: 'Youth in Work', icon: 'fa-briefcase' },
   { key: 'cluster', href: '/cluster-trainings', label: 'Cluster Trainings', icon: 'fa-chart-simple' },

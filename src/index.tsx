@@ -17,7 +17,7 @@ import {
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
-  melReportDash, weeklyReport, cfReport, cfStaffList,
+  melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
 } from './store';
@@ -42,6 +42,8 @@ import { renderLocalLeverage } from './local_leverage';
 import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
+import { renderCfPremierLeague } from './cfleague';
+import { clusterDistricts } from './clusters';
 import { renderProgrammeReport } from './programmepage';
 import { renderYouthInWork } from './youthinwork';
 import { programmeReport } from './programme';
@@ -925,6 +927,21 @@ app.get('/api/cf-report', async (c) => {
   const data = await cfReport(storeEnv(c), {
     districts: split(q.districts),
     staff: q.staff || undefined,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- CF Premier League (ranks all CFs in a cluster by overall grade) -------
+app.get('/cf-premier-league', (c) => c.html(renderCfPremierLeague(baseUrl(c.req.url))));
+app.get('/api/cf-premier-league', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  // Accept either an explicit districts list or a cluster key (resolved here).
+  const districts = q.districts ? split(q.districts) : clusterDistricts(q.cluster);
+  const data = await cfPremierLeague(storeEnv(c), {
+    districts,
     from: q.from || undefined,
     to: q.to || undefined,
   });

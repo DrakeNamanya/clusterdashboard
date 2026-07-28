@@ -2139,6 +2139,24 @@ export async function cfReport(env: Env, opts: CfReportFilters = {}): Promise<an
 }
 
 // --------------------------------------------------------------------------
+// CF Premier League — ranks every CF in a cluster by overall CF-report grade.
+// mel_cf_premier_league(districts text[], from date, to date) -> jsonb[]
+// (rows already sorted best → worst). [Oracle VM]
+// --------------------------------------------------------------------------
+export async function cfPremierLeague(env: Env, opts: MelReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_premier_league',
+    '$1::text[], $2::date, $3::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+// --------------------------------------------------------------------------
 // Sales in Horticulture/Oilseeds — production_and_marketing_tool filtered
 // pdn_level='marketing', joined to participants + shg profiling.
 // --------------------------------------------------------------------------

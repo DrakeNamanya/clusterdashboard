@@ -431,6 +431,28 @@ added.
     (from `/api/youth-in-work`, fetched in parallel and merged into the card) to
     **youth mobilized** (`youth_profiled`), with a % share and grading against the
     Youth-in-Work target.
+  - **Distribution & Youth-into-Production fix (2026-07-30)**: the *Distribution to
+    Participants* row is now **Distribution to Participants(birds)** = distinct youth
+    who received **real birds** (`distribution_rows` where `material_type='Livestock'`
+    AND `livestock_type ILIKE '%poultry%'` AND `unit='Number'`) — poultry *feeds*
+    (KGs/Grams, stored as `material_type='Other'`) are **not** birds. **Youth into
+    Production** = **Youth into Production(horticulture)** (`production_rows`) **+
+    Distribution to Participants(birds)**, distinct union, with the breakdown
+    (`prod_youth_hort` + `prod_youth_birds`) shown on the card. RPC returns
+    `distribution.dist_birds` and `production.prod_youth/prod_youth_hort/prod_youth_birds`.
+
+- `GET  /cf-premier-league` — **CF Premier League** (sidebar `fa-ranking-star`).
+  A live league table ranking **every CF in a cluster from #1 (best) to last** by
+  their **overall CF-report performance grade** (average of the 7 client targets:
+  SHGs profiled/16, youth mobilized/400, female share/70%, PWD share/3%, SHGs
+  saving/16, youth into production/400, groups trained/16, each capped at 100).
+  Filters: **Cluster + date range**. Gold/silver/bronze medals for the top 3, an
+  A–E grade + progress bar per CF, and summary KPIs (CFs ranked, average grade,
+  best performer, total youth mobilized). **Download PDF** = browser Print → Save
+  as PDF for the monthly table. Updates live on any filter change.
+  - `GET /api/cf-premier-league?cluster=&districts=&from=&to=` → `mel_cf_premier_league`
+    RPC (a single **set-based** pass — ~6 s for 176 CFs, vs ~4 min if it called the
+    per-CF report in a loop). Numbers tie out exactly to each CF's Report Card.
 
 - `GET  /programme-report` — **Programme Report (Word generator)**. Sidebar page
   (`fa-file-word`) that produces the Heifer SAYE Monthly/Quarterly Progress Report
@@ -553,7 +575,7 @@ complete instead of failing mid-way.
 - **Frontliner D1**: Cloudflare D1 `shg-data-cleaner-production` (id `7c5c130e-c9fb-4f06-ac16-e41ffd0ea290`) — being retired in favour of `at_rows` on Oracle
 - **MIS source**: Heifer SAYE gateway `https://azure.saye-ug.heifer.org/gateway/api/v1`; 5-min VM cron keeps master sheets fresh
 - **Status**: ✅ Active
-- **Last Updated**: 2026-07-29
+- **Last Updated**: 2026-07-30
   - **Youth in Work refinements (Phase-2 batch G2)**:
     - **Charts now carry data labels** (chartjs-plugin-datalabels): the **status before→after** bar chart prints the youth count on top of each bar; the **Value Chain Engaged** pie prints count + % on each slice.
     - **Value Chain categorised** into the 5 programme chains — **Horticulture · Oil seeds · Poultry · Beef · Dairy**. The raw `value_chain` is a comma-separated multi-select, so a youth is counted toward **each** chain their latest record mentions (via `ILIKE` category patterns); "Other Source Of Income" and blanks are excluded.
