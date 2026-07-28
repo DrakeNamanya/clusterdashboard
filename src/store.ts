@@ -2304,6 +2304,11 @@ export interface YiwFilters {
   districts?: string[];  // matched case-insensitively (UPPERCASE in fact table)
   from?: string;
   to?: string;
+  // Optional CF filter: normalized name keys (mel_norm_name output). When set,
+  // only job-tracking rows whose `interviewer` matches one of these CFs count —
+  // and matching is order-independent (sorted name tokens), so "Biribawa
+  // Christine" (interviewer) still matches "Christine Biribawa" (profiler key).
+  staff?: string[];
 }
 
 /** Rebuild job_tracking_rows from records (call after MIS sync). [Oracle VM] */
@@ -2323,12 +2328,29 @@ export async function refreshJobTracking(env: Env): Promise<number> {
  */
 export async function youthInWorkDash(env: Env, opts: YiwFilters = {}): Promise<any> {
   const districts = opts.districts && opts.districts.length ? opts.districts : null;
-  // WHERE clause (district IN uppercased list) AND submission_date window.
-  const params: any[] = [districts, opts.from || null, opts.to || null];
+  // Optional CF filter — normalise each supplied key into a SORTED-token key so
+  // that word order between the profiler name and the job-tracking `interviewer`
+  // name doesn't matter (e.g. "biribawa christine" == "christine biribawa").
+  const sortTokens = (s: string) =>
+    (s || '').toLowerCase().replace(/[^a-z ]/g, ' ').trim().split(/\s+/).filter(Boolean).sort().join(' ');
+  const staffKeys = opts.staff && opts.staff.length
+    ? opts.staff.map(sortTokens).filter(Boolean)
+    : null;
+  // WHERE clause (district IN uppercased list) AND submission_date window AND CF.
+  const params: any[] = [districts, opts.from || null, opts.to || null, staffKeys];
+  // Sorted-token key for the interviewer, built inline in SQL to mirror sortTokens().
+  const interviewerKey = `
+    (SELECT string_agg(w, ' ' ORDER BY w)
+       FROM unnest(regexp_split_to_array(
+              trim(regexp_replace(regexp_replace(lower(coalesce(interviewer,'')), '[^a-z ]', ' ', 'g'), '\\s+', ' ', 'g')),
+              ' ')) AS w
+       WHERE w <> '')
+  `;
   const where = `
     ( $1::text[] IS NULL OR district = ANY(SELECT upper(trim(x)) FROM unnest($1::text[]) x) )
     AND ( $2::date IS NULL OR submission_date >= $2::date )
     AND ( $3::date IS NULL OR submission_date <= $3::date )
+    AND ( $4::text[] IS NULL OR ${interviewerKey} = ANY($4::text[]) )
   `;
 
   // Per-participant latest status (dedupe a youth to their most recent record).
@@ -2414,13 +2436,25 @@ export async function youthInWorkDash(env: Env, opts: YiwFilters = {}): Promise<
     FROM latest GROUP BY 1 ORDER BY youth DESC
   `, params);
 
-  // 5) Value chain engaged (distinct youth + income)
+  // 5) Value chain engaged — categorised into the 5 programme value chains
+  //    (Horticulture, Oil seeds, Poultry, Beef, Dairy). value_chain is a
+  //    comma-separated multi-select, so a youth is counted toward EACH chain
+  //    their latest record mentions. "Other Source Of Income" / blanks excluded.
   const valueChain = await neonQuery(env, `
-    WITH ${latestCte}
-    SELECT coalesce(nullif(value_chain,''),'(none)') AS value_chain,
-           count(*)                       AS youth,
-           coalesce(sum(total_income),0)  AS total_income
-    FROM latest GROUP BY 1 ORDER BY youth DESC
+    WITH ${latestCte},
+    cat(label, pat) AS (
+      VALUES ('Horticulture','%horticulture%'),
+             ('Oil seeds','%oil seed%'),
+             ('Poultry','%poultry%'),
+             ('Beef','%beef%'),
+             ('Dairy','%dairy%')
+    )
+    SELECT c.label                                      AS value_chain,
+           count(*) FILTER (WHERE l.value_chain ILIKE c.pat)                       AS youth,
+           coalesce(sum(l.total_income) FILTER (WHERE l.value_chain ILIKE c.pat),0) AS total_income
+    FROM cat c LEFT JOIN latest l ON l.value_chain ILIKE c.pat
+    GROUP BY c.label
+    ORDER BY youth DESC
   `, params);
 
   // 6) Employed change categories (New / Improved / Sustained job)
@@ -2453,6 +2487,7 @@ export async function youthInWorkDash(env: Env, opts: YiwFilters = {}): Promise<
       youthTracked: num(r.youth_tracked),
       employedYouth: num(r.employed_youth),
       totalIncome: num(r.total_income),
+      monthlyIncome: num(r.employed_youth) > 0 ? Math.round(num(r.total_income) / num(r.employed_youth)) : 0,
       yiwTarget: num(r.yiw_target),
       femaleTarget: num(r.female_target),
       pwdTarget: num(r.pwd_target),

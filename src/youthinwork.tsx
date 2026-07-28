@@ -18,6 +18,7 @@ export function renderYouthInWork(base: string): string {
   <title>Youth in Work</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
     :root{
@@ -104,10 +105,11 @@ ${navSidebar('youthinwork')}
                   <th class="num">Youth tracked</th>
                   <th class="num">Employed (YiW)</th>
                   <th class="num">Total income</th>
+                  <th class="num">Monthly income</th>
                   <th style="min-width:150px">% of YiW target</th>
                 </tr>
               </thead>
-              <tbody id="distBody"><tr><td colspan="9" class="text-center text-[var(--muted)] py-8">Loading…</td></tr></tbody>
+              <tbody id="distBody"><tr><td colspan="10" class="text-center text-[var(--muted)] py-8">Loading…</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -200,7 +202,7 @@ ${navSidebar('youthinwork')}
 
     function renderDistTable(rows){
       const b=document.getElementById('distBody');
-      if(!rows.length){ b.innerHTML='<tr><td colspan="9" class="text-center text-[var(--muted)] py-8">No data.</td></tr>'; return; }
+      if(!rows.length){ b.innerHTML='<tr><td colspan="10" class="text-center text-[var(--muted)] py-8">No data.</td></tr>'; return; }
       let tR=0,tY=0,tYt=0,tF=0,tP=0,tE=0,tI=0;
       let html='';
       for(const r of rows){
@@ -214,10 +216,12 @@ ${navSidebar('youthinwork')}
           +'<td class="num">'+fmt(r.youthTracked)+'</td>'
           +'<td class="num font-semibold text-[var(--green)]">'+fmt(r.employedYouth)+'</td>'
           +'<td class="num">'+money(r.totalIncome)+'</td>'
+          +'<td class="num">'+money(r.monthlyIncome||0)+'</td>'
           +'<td><div class="flex items-center gap-2"><div class="bar flex-1"><span style="width:'+Math.min(100,p||0)+'%;background:'+pctColor(p)+'"></span></div><span class="pill" style="color:'+pctColor(p)+'">'+(p==null?'—':p.toFixed(1)+'%')+'</span></div></td></tr>';
       }
       const tp = tY>0 ? Math.round(tE/tY*1000)/10 : null;
-      html += '<tr class="total-row"><td>Total</td><td class="num">'+fmt(tR)+'</td><td class="num">'+fmt(tY)+'</td><td class="num">'+fmt(tF)+'</td><td class="num">'+fmt(tP)+'</td><td class="num">'+fmt(tYt)+'</td><td class="num">'+fmt(tE)+'</td><td class="num">'+money(tI)+'</td><td>'+(tp==null?'—':tp.toFixed(1)+'%')+'</td></tr>';
+      const tmi = tE>0 ? Math.round(tI/tE) : 0;
+      html += '<tr class="total-row"><td>Total</td><td class="num">'+fmt(tR)+'</td><td class="num">'+fmt(tY)+'</td><td class="num">'+fmt(tF)+'</td><td class="num">'+fmt(tP)+'</td><td class="num">'+fmt(tYt)+'</td><td class="num">'+fmt(tE)+'</td><td class="num">'+money(tI)+'</td><td class="num">'+money(tmi)+'</td><td>'+(tp==null?'—':tp.toFixed(1)+'%')+'</td></tr>';
       document.getElementById('distBody').innerHTML=html;
     }
 
@@ -227,17 +231,46 @@ ${navSidebar('youthinwork')}
       b.innerHTML = rows.map(r=>'<tr>'+cols.map(c=>'<td class="'+(c.num?'num':'')+'">'+(c.money?money(r[c.k]):(c.num?fmt(r[c.k]):(r[c.k]==null?'':r[c.k])))+'</td>').join('')+'</tr>').join('');
     }
 
+    // Register the datalabels plugin once (guarded — it may already be present).
+    try{ if(window.ChartDataLabels){ Chart.register(window.ChartDataLabels); } }catch(_){}
+    const nfmt = (v)=> (Number(v)||0).toLocaleString('en-US');
+
     function drawChart(id, type, labels, data, colors){
       if(charts[id]) charts[id].destroy();
       const ctx=document.getElementById(id); if(!ctx) return;
+      const isPie = (type==='doughnut'||type==='pie');
+      const total = data.reduce((a,b)=>a+(Number(b)||0),0);
+      const dl = {
+        // Data labels on top of bars / on pie slices.
+        color: isPie ? '#fff' : '#243b2e',
+        anchor: isPie ? 'center' : 'end',
+        align: isPie ? 'center' : 'end',
+        offset: isPie ? 0 : 2,
+        clamp: true,
+        font: { size: isPie ? 10 : 10, weight: '700' },
+        formatter: (v)=>{
+          if(!v) return '';
+          if(isPie){
+            const pct = total>0 ? Math.round(v/total*100) : 0;
+            return pct>=4 ? (nfmt(v)+'\\n'+pct+'%') : '';
+          }
+          return nfmt(v);
+        }
+      };
       charts[id]=new Chart(ctx,{ type, data:{ labels, datasets:[{ data, backgroundColor:colors, borderWidth:0 }] },
-        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:type!=='bar', position:'bottom', labels:{ font:{size:10} } } },
-          scales: type==='bar' ? { x:{ ticks:{font:{size:9}} }, y:{ beginAtZero:true, ticks:{font:{size:9}} } } : {} } });
+        options:{ responsive:true, maintainAspectRatio:false,
+          layout:{ padding:{ top: isPie?4:16 } },
+          plugins:{
+            legend:{ display:type!=='bar', position:'bottom', labels:{ font:{size:10} } },
+            datalabels: dl,
+            tooltip:{ callbacks:{ label:(c)=> c.label+': '+nfmt(c.parsed.y ?? c.parsed) } }
+          },
+          scales: type==='bar' ? { x:{ ticks:{font:{size:9}} }, y:{ beginAtZero:true, grace:'12%', ticks:{font:{size:9}} } } : {} } });
     }
 
     async function load(){
       const p=filterParams();
-      document.getElementById('distBody').innerHTML='<tr><td colspan="9" class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
+      document.getElementById('distBody').innerHTML='<tr><td colspan="10" class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
       try{
         const res=await fetch('/api/youth-in-work?'+p.toString());
         if(!res.ok) throw new Error('HTTP '+res.status);
@@ -266,7 +299,7 @@ ${navSidebar('youthinwork')}
         simpleTable('empBody', (d.employmentStatus||[]).map(r=>({s:r.label,y:r.youth})), [{k:'s'},{k:'y',num:true}]);
         simpleTable('chgBody', (d.employedChange||[]).map(r=>({c:r.label,y:r.youth})), [{k:'c'},{k:'y',num:true}]);
       }catch(err){
-        document.getElementById('distBody').innerHTML='<tr><td colspan="9" class="text-center text-red-500 py-8">Failed to load: '+err.message+'</td></tr>';
+        document.getElementById('distBody').innerHTML='<tr><td colspan="10" class="text-center text-red-500 py-8">Failed to load: '+err.message+'</td></tr>';
       }
     }
 

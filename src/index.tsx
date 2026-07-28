@@ -1012,6 +1012,8 @@ app.get('/api/youth-in-work', async (c) => {
     districts: split(q.districts),
     from: q.from || undefined,
     to: q.to || undefined,
+    // Optional CF filter: pipe-joined normalized name keys (from the CF report).
+    staff: (q.staff || '').split('|').map((x) => x.trim()).filter(Boolean),
   });
   return c.json(data);
 });

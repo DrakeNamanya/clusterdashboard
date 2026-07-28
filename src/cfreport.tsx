@@ -262,7 +262,7 @@ function buildCard(d, clusterLabel, from, to){
     {ic:'fa-piggy-bank', c:'var(--purple)', label:'SHGs Saving (ISLA)', ach:Number(isla.isla_shgs)||0, tgt:Number(T.shgs_saving)||16, unit:'SHGs'},
     {ic:'fa-seedling', c:'var(--green)', label:'Youth into Production', ach:Number(prod.prod_youth)||0, tgt:Number(T.youth_production)||400, unit:'youth'},
     {ic:'fa-chalkboard-user', c:'var(--green-2)', label:'Groups Trained', ach:Number(tr.groups_trained)||0, tgt:Number(T.groups_trained)||16, unit:'groups'},
-    {ic:'fa-briefcase', c:'var(--indigo)', label:'Youth in Work', ach:Number(yiw.employedYouth)||0, tgt:Number(yiw.yiwTarget)||0, unit:'youth'}
+    {ic:'fa-briefcase', c:'var(--indigo)', label:'Youth in Work (70% of mobilized)', ach:Number(yiw.employedYouth)||0, tgt:Number(yiw.yiwTarget)||0, unit:'youth'}
   ].map(r=>{ r.pct = r.tgt>0 ? Math.round(100*r.ach/r.tgt) : 0; r.grade=gradeFor(Math.min(100,r.pct)); return r; });
 
   // Overall = average % achievement across the client targets (capped at 100 each).
@@ -302,7 +302,7 @@ function buildCard(d, clusterLabel, from, to){
   if((Number(isla.savings)||0)>0) hls.push('Strong ISLA performance: <b>'+ugx(isla.savings)+'</b> saved and <b>'+ugx(isla.loans_value)+'</b> in loans given.');
   if((Number(prof.shgs_profiled)||0)>0) hls.push('Profiled <b>'+fmt(prof.shgs_profiled)+' SHGs</b> ('+fmt(prof.shgs_below_25)+' with &lt;25 members, '+fmt(prof.shgs_25_plus)+' with ≥25) reaching '+fmt(prof.youth_profiled)+' youth &mdash; '+db(prof.female, prof.pwd)+'.');
   if((Number(prod.prod_youth)||0)>0) hls.push('Engaged <b>'+fmt(prod.prod_youth)+' youth</b> in production ('+db(prod.female, prod.pwd)+').');
-  if((Number(yiw.employedYouth)||0)>0) hls.push('Of the youth mobilized, <b>'+fmt(yiw.employedYouth)+'</b> are now in work'+((Number(yiw.yiwTarget)||0)>0?' ('+Math.round(100*(Number(yiw.employedYouth)||0)/(Number(yiw.yiwTarget)||1))+'% of the Youth-in-Work target)':'')+'.');
+  if((Number(yiw.employedYouth)||0)>0) hls.push('Of the <b>'+fmt(prof.youth_profiled)+'</b> youth this CF mobilized, <b>'+fmt(yiw.employedYouth)+'</b> are now in work'+((Number(yiw.yiwTarget)||0)>0?' ('+Math.round(100*(Number(yiw.employedYouth)||0)/(Number(yiw.yiwTarget)||1))+'% of the 70% Youth-in-Work target)':'')+'.');
   if(!hls.length) hls.push('No recorded activity for this facilitator in the selected period.');
 
   const gradeTbl = [
@@ -381,6 +381,7 @@ async function load(){
   if(to) qs.set('to', to);
   try{
     const yqs=new URLSearchParams();
+    yqs.set('staff', keys.join('|'));   // YiW filtered to THIS CF's job-tracking
     if(districts.length) yqs.set('districts', districts.join(','));
     if(from) yqs.set('from', from);
     if(to) yqs.set('to', to);
@@ -389,7 +390,10 @@ async function load(){
       fetch('/api/youth-in-work?'+yqs.toString()).catch(()=>null)
     ]);
     const d=await res.json();
-    try{ if(yres && yres.ok){ const yd=await yres.json(); d.youthInWork=(yd&&yd.kpi)?{ employedYouth:yd.kpi.employedYouth, youthTracked:yd.kpi.youthTracked, selfEmployed:yd.kpi.selfEmployed, wageEmployed:yd.kpi.wageEmployed, totalIncome:yd.kpi.totalIncome, yiwTarget:(yd.byDistrict||[]).reduce((a,r)=>a+(Number(r.yiwTarget)||0),0) }:{}; } }catch(_){}
+    try{ if(yres && yres.ok){ const yd=await yres.json();
+      // Per-CF YiW target = 70% of the youth this CF mobilised (SHG profiling).
+      const mobilized=Number((d.profiling&&d.profiling.youth_profiled)||0);
+      d.youthInWork=(yd&&yd.kpi)?{ employedYouth:yd.kpi.employedYouth, youthTracked:yd.kpi.youthTracked, selfEmployed:yd.kpi.selfEmployed, wageEmployed:yd.kpi.wageEmployed, totalIncome:yd.kpi.totalIncome, mobilized:mobilized, yiwTarget:Math.round(mobilized*0.70) }:{ mobilized:mobilized, yiwTarget:Math.round(mobilized*0.70) }; } }catch(_){}
     document.getElementById('report').innerHTML=buildCard(d, label, from, to);
   }catch(e){
     document.getElementById('report').innerHTML='<div class="cardsheet"><div class="loading">Failed to generate report card.</div></div>';
