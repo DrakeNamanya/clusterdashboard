@@ -90,6 +90,15 @@ export function renderCfPremierLeague(base: string): string {
     table.lg thead th.c{ text-align:center; }
     table.lg tbody td{ padding:7px 8px; border-bottom:1px solid var(--border); font-size:9px; vertical-align:middle; }
     table.lg tbody tr:nth-child(odd){ background:rgba(238,242,251,.45); }
+    /* zone row tints — colour-code the standings for quick reading:
+       champions (top 3) royal-blue wash, contenders (4–6) green wash,
+       support-needed (bottom 3) red wash. These override the zebra. */
+    table.lg tbody tr.row-champ{ background:rgba(0,51,153,.075); }
+    table.lg tbody tr.row-champ:hover{ background:rgba(0,51,153,.12); }
+    table.lg tbody tr.row-cont{ background:rgba(31,138,76,.075); }
+    table.lg tbody tr.row-releg{ background:rgba(198,47,47,.06); }
+    /* leading medal accent on the #1–#3 position numbers */
+    .posn.gold{ color:#b8860b; } .posn.silver{ color:#7d8794; } .posn.bronze{ color:#a5682a; }
     .poscell{ position:relative; text-align:center; }
     .zonebar{ position:absolute; inset:0 auto 0 0; width:3px; }
     .z-champ{ background:var(--primary); } .z-cont{ background:var(--good); } .z-releg{ background:var(--bad); }
@@ -132,12 +141,17 @@ export function renderCfPremierLeague(base: string): string {
     .loading{ text-align:center; color:var(--muted-fg); padding:60px 0; font-size:13px; }
 
     @media print{
-      @page{ size:A4; margin:0; }
-      body{ background:#fff; }
+      /* Real page margin so nothing is clipped at the physical edge, and the
+         sheet flows to the printable width instead of a hard 210mm overflow. */
+      @page{ size:A4; margin:8mm; }
+      html,body{ background:#fff; }
       .toolbar, .shg-nav, .shg-nav-open, .no-print{ display:none !important; }
       body.shg-has-nav{ padding-right:0 !important; }
-      .sheet{ box-shadow:none !important; margin:0 !important; width:210mm !important; page-break-after:always; break-after:page; }
+      .sheet{ box-shadow:none !important; margin:0 !important; width:100% !important; min-height:0 !important; page-break-after:always; break-after:page; }
       .sheet:last-of-type{ page-break-after:auto; break-after:auto; }
+      /* internal padding relative to the (already-margined) page edge */
+      .mast{ padding-left:10mm; padding-right:10mm; }
+      .metastrip, .body, .foot, .conthead{ padding-left:10mm; padding-right:10mm; }
       *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
     }
   </style>
@@ -168,14 +182,19 @@ export function renderCfPremierLeague(base: string): string {
     function prettyDate(s){ if(!s) return ''; try{ return new Date(s+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return s; } }
     function initials(name){ return String(name||'').trim().split(/\\s+/).slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase(); }
     function gradeLetter(p){ p=Number(p)||0; if(p>=80)return'A'; if(p>=60)return'B'; if(p>=40)return'C'; if(p>=20)return'D'; return'E'; }
-    function gradeTone(g){ if(g==='A'||g==='B')return 'var(--good)'; if(g==='C'||g==='D')return 'var(--warn)'; return 'var(--bad)'; }
+    function gradeTone(g){ if(g==='A'||g==='B')return '#1f8a4c'; if(g==='C'||g==='D')return '#c07d12'; return '#c62f2f'; }
+    function gradeTint(g){ if(g==='A'||g==='B')return '#eaf6ef'; if(g==='C'||g==='D')return '#fbf2e3'; return '#fbe9e9'; }
 
     // Build one standings row. n = total CFs (for relegation zone).
     function leagueRow(r, n){
       var rank=r.rank;
       var zone = rank<=3 ? 'z-champ' : (rank<=6 ? 'z-cont' : (rank>n-3 ? 'z-releg' : ''));
-      var g=gradeLetter(r.overall), tone=gradeTone(g);
+      var rowCls = rank<=3 ? 'row-champ' : (rank<=6 ? 'row-cont' : (rank>n-3 ? 'row-releg' : ''));
+      var medal = rank===1 ? 'gold' : (rank===2 ? 'silver' : (rank===3 ? 'bronze' : ''));
+      var g=gradeLetter(r.overall), tone=gradeTone(g), tint=gradeTint(g);
       var ov=Math.min(100,Number(r.overall)||0);
+      // avatar colour follows the zone so the leaderboard reads at a glance
+      var avColor = rank<=3 ? '#003399' : (rank<=6 ? '#1f8a4c' : (rank>n-3 ? '#c62f2f' : '#5a6480'));
       // 7 metric string cells + dim styling when zero / dash
       var cells=[
         fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled)+' SHGs',
@@ -190,11 +209,11 @@ export function renderCfPremierLeague(base: string): string {
         var dim = (v==='—' || /^0[^0-9]/.test(v) || v==='0');
         return '<td class="mnum'+(dim?' dim':'')+'">'+esc(v)+'</td>';
       }).join('');
-      return '<tr>'+
-        '<td class="poscell">'+(zone?'<span class="zonebar '+zone+'"></span>':'')+'<span class="posn">'+rank+'</span></td>'+
-        '<td><div class="cf"><span class="avatar">'+esc(initials(r.name))+'</span><span class="cfname">'+esc(r.name)+'</span></div></td>'+
-        '<td><div class="ovc"><div class="ovbar"><div class="ovbar-f" style="width:'+ov+'%"></div></div><span class="ovpct">'+(Number(r.overall)||0)+'%</span></div></td>'+
-        '<td style="text-align:center"><span class="gbox" style="color:'+tone+';border-color:'+tone+'">'+g+'</span></td>'+
+      return '<tr class="'+rowCls+'">'+
+        '<td class="poscell">'+(zone?'<span class="zonebar '+zone+'"></span>':'')+'<span class="posn '+medal+'">'+rank+'</span></td>'+
+        '<td><div class="cf"><span class="avatar" style="background:'+avColor+'">'+esc(initials(r.name))+'</span><span class="cfname">'+esc(r.name)+'</span></div></td>'+
+        '<td><div class="ovc"><div class="ovbar"><div class="ovbar-f" style="width:'+ov+'%;background:'+tone+'"></div></div><span class="ovpct" style="color:'+tone+'">'+(Number(r.overall)||0)+'%</span></div></td>'+
+        '<td style="text-align:center"><span class="gbox" style="color:'+tone+';border-color:'+tone+';background:'+tint+'">'+g+'</span></td>'+
         cellHtml+
       '</tr>';
     }

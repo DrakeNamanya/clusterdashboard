@@ -117,15 +117,17 @@ export function renderWeeklyReport(base: string): string {
     .loading{ font-family:var(--font-mono); font-size:.8125rem; color:var(--muted); padding:8px; }
     .note{ background:var(--primary-wash); border:1px solid var(--border); border-left:4px solid var(--primary); color:var(--primary-deep); font-size:.8125rem; padding:8px 12px; margin-bottom:16px; }
 
-    /* PRINT — A4 portrait white paper */
-    @page{ size:A4 portrait; margin:10mm 10mm 9mm; }
+    /* PRINT — A4 portrait white paper. Generous page margin keeps the drop-cap,
+       masthead wordmark and right-edge figures off the physical page edge. */
+    @page{ size:A4 portrait; margin:12mm 12mm 10mm; }
     @media print{
       html,body{ background:#fff !important; font-size:8.6pt; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
       *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
       body.shg-has-nav{ padding-right:0 !important; }
       .shg-nav,.shg-nav-open,.toolbar,#noteBox,.no-print{ display:none !important; }
-      main{ max-width:none !important; padding:0 !important; }
-      .sec,.datum,.signoff,header,footer{ break-inside:avoid; page-break-inside:avoid; }
+      /* let content reflow to the printable width; small side pad as safety */
+      main{ max-width:none !important; width:100% !important; padding:0 2mm !important; }
+      .sec,.datum,.signoff,header,footer,.datums{ break-inside:avoid; page-break-inside:avoid; }
     }
   </style>
 </head>
