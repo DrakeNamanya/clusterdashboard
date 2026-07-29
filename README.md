@@ -443,16 +443,24 @@ added.
 
 - `GET  /cf-premier-league` — **CF Premier League** (sidebar `fa-ranking-star`).
   A live league table ranking **every CF in a cluster from #1 (best) to last** by
-  their **overall CF-report performance grade** (average of the 7 client targets:
-  SHGs profiled/16, youth mobilized/400, female share/70%, PWD share/3%, SHGs
-  saving/16, youth into production/400, groups trained/16, each capped at 100).
+  an **overall grade = average of 7 CF-report metrics** (all period-filtered, each
+  capped at 100), the same metrics graded on the CF Report Card:
+  1. **SHGs Saving / SHGs Profiled** (% ratio),
+  2. **Youth into Production** (achieved / 400),
+  3. **Trainings (first trainings)** = Groups Trained (achieved / 16),
+  4. **Youth in Work** (employed youth / (0.70 × mobilized youth)),
+  5. **Sales (Poultry)** — **pass/fail** (100 if any birds sold, else 0),
+  6. **Sales (Horticulture)** — **pass/fail** (100 if any planting value, else 0),
+  7. **Local Leverage** — **pass/fail** (100 if any contribution, else 0).
   Filters: **Cluster + date range**. Gold/silver/bronze medals for the top 3, an
-  A–E grade + progress bar per CF, and summary KPIs (CFs ranked, average grade,
-  best performer, total youth mobilized). **Download PDF** = browser Print → Save
-  as PDF for the monthly table. Updates live on any filter change.
+  A–E grade + progress bar per CF, and each of the 7 metrics shown as its graded
+  % (or PASS/—) with the raw achieved value below. **Download PDF** = browser
+  Print → Save as PDF for the monthly table. Updates live on any filter change.
   - `GET /api/cf-premier-league?cluster=&districts=&from=&to=` → `mel_cf_premier_league`
-    RPC (a single **set-based** pass — ~6 s for 176 CFs, vs ~4 min if it called the
-    per-CF report in a loop). Numbers tie out exactly to each CF's Report Card.
+    RPC (a single **set-based** pass — ~6-8 s for 170+ CFs, vs ~4 min if it called
+    the per-CF report in a loop). Each metric ties out exactly to that CF's Report
+    Card. Youth-in-Work is matched to the CF via the job-tracking `interviewer`
+    field using the same order-independent sorted-token key as the CF card.
 
 - `GET  /programme-report` — **Programme Report (Word generator)**. Sidebar page
   (`fa-file-word`) that produces the Heifer SAYE Monthly/Quarterly Progress Report

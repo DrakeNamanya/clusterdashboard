@@ -67,6 +67,13 @@ export function renderCfPremierLeague(base: string): string {
     .rnum{ width:26px; text-align:center; color:var(--muted); }
     tr.top1 td{ background:#fffbe9; } tr.top2 td{ background:#f6f8fa; } tr.top3 td{ background:#fbf3ea; }
     .cfname{ font-weight:800; }
+    table.lg thead th .thsub{ font-weight:600; opacity:.85; font-size:9.5px; text-transform:none; letter-spacing:0; }
+    td.mc{ text-align:center; white-space:nowrap; }
+    .mpct{ font-weight:800; font-size:13px; font-variant-numeric:tabular-nums; }
+    .msub{ display:block; font-size:10px; color:var(--muted); margin-top:1px; }
+    .pf{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; }
+    .pf.pass{ color:#1a7a3d; background:#e4f4ea; }
+    .pf.fail{ color:#9aa4ad; background:#f1f3f6; }
     .pbar{ display:inline-block; width:74px; height:8px; border-radius:6px; background:#eef2ef; vertical-align:middle; overflow:hidden; }
     .pbar-f{ height:100%; border-radius:6px; }
     .pval{ font-size:12px; font-weight:800; margin-left:8px; font-variant-numeric:tabular-nums; }
@@ -97,7 +104,7 @@ export function renderCfPremierLeague(base: string): string {
 </head>
 <body>
   <div class="wrap">
-    <div class="note"><i class="fas fa-circle-info"></i> League ranks every CF in the cluster by their <b>overall CF-report performance grade</b> (average of the 7 client targets). It updates live as data is submitted. Use <b>Download PDF</b> for the monthly table.</div>
+    <div class="note"><i class="fas fa-circle-info"></i> League ranks every CF in the cluster by an <b>overall grade = average of 7 CF-report metrics</b> (period-filtered): SHGs&nbsp;Saving/Profiled, Youth into Production (/400), Trainings/Groups Trained (/16), Youth in Work (/70% of mobilized), and <b>pass/fail</b> for Sales (Poultry), Sales (Horticulture) &amp; Local Leverage. It updates live as data is submitted. Use <b>Download PDF</b> for the monthly table.</div>
 
     <div class="filters">
       <div class="fld">
@@ -156,22 +163,35 @@ export function renderCfPremierLeague(base: string): string {
           ? '<span class="medal m'+rank+'">'+rank+'</span>'
           : '<span class="rnum">'+rank+'</span>';
         var trCls = rank<=3 ? ' class="top'+rank+'"' : '';
+        // A metric cell: graded % on top (grade-coloured) + raw achieved below.
+        function mcell(pct, sub){
+          var mg=gradeFor(pct);
+          return '<td class="mc"><span class="mpct" style="color:'+mg.c+'">'+(Number(pct)||0)+'%</span>'+
+                 (sub!=null?'<span class="msub">'+sub+'</span>':'')+'</td>';
+        }
+        // Pass/fail metric cell (poultry / hort sales / leverage).
+        function pfcell(pct, sub){
+          var pass=(Number(pct)||0)>=100;
+          return '<td class="mc"><span class="pf '+(pass?'pass':'fail')+'">'+(pass?'PASS':'—')+'</span>'+
+                 (sub!=null?'<span class="msub">'+sub+'</span>':'')+'</td>';
+        }
         return '<tr'+trCls+'>'+
           '<td><div class="rankcell">'+rankCell+'</div></td>'+
           '<td><span class="cfname">'+r.name+'</span></td>'+
           '<td><div class="pbar"><div class="pbar-f" style="width:'+barPct+'%;background:'+g.c+'"></div></div><span class="pval" style="color:'+g.c+'">'+(Number(r.overall)||0)+'%</span></td>'+
           '<td><span class="grade" style="color:'+g.c+';background:'+g.bg+'">'+g.g+'</span></td>'+
-          '<td class="num">'+fmt(r.shgs_profiled)+'</td>'+
-          '<td class="num">'+fmt(r.youth_mobilized)+'</td>'+
-          '<td class="num">'+(Number(r.female_pct)||0)+'%</td>'+
-          '<td class="num">'+fmt(r.shgs_saving)+'</td>'+
-          '<td class="num">'+fmt(r.youth_production)+'</td>'+
-          '<td class="num">'+fmt(r.groups_trained)+'</td>'+
+          mcell(r.p1_saving, fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled)+' SHGs')+
+          mcell(r.p2_production, fmt(r.youth_production)+' youth')+
+          mcell(r.p3_trained, fmt(r.groups_trained)+' groups')+
+          mcell(r.p4_yiw, fmt(r.employed_youth)+' in work')+
+          pfcell(r.p5_poultry, fmt(r.birds_sold)+' birds')+
+          pfcell(r.p6_hortsales, r.hs_value>0?'UGX '+fmt(r.hs_value):'—')+
+          pfcell(r.p7_leverage, fmt(r.lev_count)+' contrib.')+
         '</tr>';
       }).join('');
 
       if(!n){
-        body = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px">No CF data for this cluster / period.</td></tr>';
+        body = '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px">No CF data for this cluster / period.</td></tr>';
       }
 
       return '<div class="chead">'+
@@ -192,11 +212,16 @@ export function renderCfPremierLeague(base: string): string {
           '<div class="kpi"><div class="ic"><i class="fas fa-crown"></i></div><div class="v" style="font-size:15px">'+topName+'</div><div class="l">Best Performer</div></div>'+
           '<div class="kpi"><div class="ic"><i class="fas fa-seedling"></i></div><div class="v">'+fmt(totalYouth)+'</div><div class="l">Youth Mobilized</div></div>'+
         '</div>'+
-        '<div class="secttl"><i class="fas fa-list-ol"></i> League Table <span class="secsub">(ranked #1 → last by overall performance grade)</span></div>'+
+        '<div class="secttl"><i class="fas fa-list-ol"></i> League Table <span class="secsub">(ranked #1 → last by overall grade — average of the 7 CF-report metrics below, period-filtered)</span></div>'+
         '<div class="tblwrap"><table class="lg"><thead><tr>'+
           '<th>Rank</th><th>Community Facilitator</th><th>Overall</th><th>Grade</th>'+
-          '<th class="num">SHGs</th><th class="num">Youth</th><th class="num">Female %</th>'+
-          '<th class="num">SHGs Saving</th><th class="num">Into Production</th><th class="num">Groups Trained</th>'+
+          '<th>SHGs Saving<br/><span class="thsub">/ profiled</span></th>'+
+          '<th>Youth into<br/><span class="thsub">Production</span></th>'+
+          '<th>Trainings<br/><span class="thsub">(first)</span></th>'+
+          '<th>Youth in<br/><span class="thsub">Work</span></th>'+
+          '<th>Sales<br/><span class="thsub">(Poultry)</span></th>'+
+          '<th>Sales<br/><span class="thsub">(Horti.)</span></th>'+
+          '<th>Local<br/><span class="thsub">Leverage</span></th>'+
         '</tr></thead><tbody>'+body+'</tbody></table></div>';
     }
 
