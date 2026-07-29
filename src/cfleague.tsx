@@ -1,12 +1,12 @@
 import { clusterOptions } from './clusters';
 import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
-// CF PREMIER LEAGUE TABLE
-//   Ranks every Community Facilitator in a cluster from #1 (best) to last by
-//   their OVERALL CF-report performance grade. Live-updating: re-fetches on any
-//   filter change and reflects whatever data has been submitted so far.
-//   Filters: Cluster + Date range. Download: browser Print → Save as PDF
-//   (monthly league table), matching the CF report / weekly report pattern.
+// CF PREMIER LEAGUE TABLE  —  "Everton" print-first design (Royal Blue #003399)
+//   Football-standings styled A4 sheet: full-bleed blue masthead, champion
+//   callout, 5-column meta strip, standings table with promotion/relegation
+//   zones, initials avatars, mono figures, boxed grade letters, grading scale
+//   + verification note. Ranks every CF in a cluster #1 → last by an overall
+//   grade = average of 7 CF-report metrics (period-filtered). Live-updating.
 //   Data from /api/cf-premier-league (mel_cf_premier_league RPC).
 // ---------------------------------------------------------------------------
 
@@ -16,233 +16,303 @@ export function renderCfPremierLeague(base: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CF Premier League — SAYE</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>CF Premier League — SAYE Uganda MEL</title>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
   <style>
+    /* ===== "Everton" design system — Royal Blue #003399 on white paper =====
+       Cloned from the Lovable reference: A4 sheet on a light desk, full-bleed
+       royal-blue masthead, standings zones, mono figures, small radii.
+       Prints ink-accurate on white A4.                                     */
     :root{
-      --green:#0F4C3A; --green-2:#00A859; --lgreen:#e9f5ee; --ink:#25352c;
-      --muted:#7f8c85; --line:#e2e9e4; --amber:#F6921E; --blue:#2E9BD6;
-      --band:#0f5132; --gold:#d4af37; --silver:#9aa4ad; --bronze:#c48a3f;
+      --primary:#003399; --primary-deep:#001f5c; --primary-tint:#eef2fb;
+      --pf:#ffffff;
+      --fg:#1b2437; --muted-fg:#5a6480; --card:#ffffff;
+      --muted:#f1f3f9; --border:#d7deee; --rule:#b9c4e4;
+      --good:#1f8a4c; --warn:#c07d12; --bad:#c62f2f;
+      --desk:#eceff6;
+      --sans:"Inter Tight",ui-sans-serif,system-ui,sans-serif;
+      --mono:"IBM Plex Mono",ui-monospace,monospace;
     }
-    body{ background:#eef3f0; color:var(--ink); font-family:"Segoe UI",Calibri,Arial,system-ui,sans-serif; margin:0; }
-    .wrap{ max-width:1080px; margin:0 auto; padding:22px 20px 60px; }
-    .filters{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:18px; }
+    *{ box-sizing:border-box; }
+    body{ background:var(--desk); color:var(--fg); font-family:var(--sans); margin:0; -webkit-font-smoothing:antialiased; }
+    .num{ font-family:var(--mono); font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+
+    /* toolbar (screen only) */
+    .toolbar{ max-width:210mm; margin:0 auto 14px; padding:16px 0 0; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
     .fld{ display:flex; flex-direction:column; gap:4px; }
-    .fld label{ font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
-    .fld select, .fld input{ border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; background:#fff; min-width:160px; }
-    .btn{ background:var(--green); color:#fff; border:0; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer; }
-    .btn:hover{ background:var(--green-2); }
-    .btn.ghost{ background:#fff; color:var(--green); border:1px solid var(--line); }
+    .fld label{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted-fg); }
+    .fld select, .fld input{ border:1px solid var(--border); border-radius:2px; padding:8px 10px; font-size:13px; background:#fff; min-width:150px; color:var(--fg); font-family:inherit; }
+    .fld select:focus, .fld input:focus{ outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(0,51,153,.12); }
+    .btn{ background:var(--primary); color:#fff; border:0; border-radius:2px; padding:9px 16px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.12em; cursor:pointer; font-family:var(--sans); }
+    .btn:hover{ background:var(--primary-deep); }
+    .btn.ghost{ background:#fff; color:var(--primary); border:1px solid var(--border); }
+    .toolnote{ margin-left:auto; font-size:11px; color:var(--muted-fg); align-self:center; }
 
-    .cardsheet{ background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:0 4px 18px rgba(30,50,40,.08); overflow:hidden; }
-    .chead{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 26px; border-bottom:3px solid var(--green); }
-    .chead .brandblock{ display:flex; align-items:center; gap:11px; min-width:150px; }
-    .chead .logo{ width:46px; height:46px; border-radius:11px; background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 2px 6px rgba(0,104,55,.25); }
-    .chead .brandtxt .bn{ font-size:16px; font-weight:800; color:var(--green); line-height:1.1; }
-    .chead .brandtxt .bt{ font-size:9.5px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
-    .chead .mid{ flex:1; text-align:center; }
-    .chead .mid .t{ font-size:20px; font-weight:800; color:var(--ink); letter-spacing:-.01em; }
-    .chead .mid .s{ font-size:11px; color:var(--green-2); font-weight:800; text-transform:uppercase; letter-spacing:.14em; margin-bottom:1px; }
-    .chead .meta{ font-size:10px; color:var(--muted); text-align:right; line-height:1.5; text-transform:uppercase; letter-spacing:.03em; font-weight:700; min-width:130px; }
-    .chead .meta b{ color:var(--ink); font-size:12px; text-transform:none; letter-spacing:0; }
+    /* A4 sheet */
+    .sheet{ width:210mm; min-height:297mm; background:var(--pf); margin:0 auto 28px; box-shadow:0 1px 2px rgba(0,0,0,.08), 0 24px 48px -24px rgba(0,0,0,.25); display:flex; flex-direction:column; }
+    .pad{ padding:0 14mm; }
 
-    .idrow{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:18px 26px; }
-    @media(max-width:820px){ .idrow{ grid-template-columns:repeat(2,1fr); } }
-    .idcard{ border:1px solid #cfe6d8; background:#f6fbf8; border-radius:12px; padding:12px 14px; display:flex; gap:11px; align-items:center; }
-    .idcard .ic{ width:34px; height:34px; border-radius:9px; background:var(--green); color:#fff; display:flex; align-items:center; justify-content:center; font-size:14px; }
-    .idcard .lb{ font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
-    .idcard .vl{ font-size:14px; font-weight:800; color:var(--ink); }
+    /* masthead (blue band) */
+    .mast{ background:var(--primary); color:#fff; padding:28px 14mm 24px; }
+    .brand{ display:flex; align-items:center; gap:12px; }
+    .brand .mark{ width:44px; height:44px; display:grid; place-items:center; background:#fff; }
+    .brand .mark span{ font-family:var(--mono); font-size:13px; font-weight:700; letter-spacing:-.02em; color:var(--primary); }
+    .brand .bn{ font-size:13px; font-weight:600; letter-spacing:.22em; }
+    .brand .bt{ font-size:9px; letter-spacing:.3em; opacity:.72; margin-top:2px; }
+    .mastrow{ margin-top:30px; display:flex; align-items:flex-end; justify-content:space-between; gap:24px; }
+    .mastrow .eyebrow{ font-size:10px; letter-spacing:.34em; opacity:.72; }
+    .mastrow h1{ margin:8px 0 0; font-size:42px; font-weight:600; line-height:1.03; letter-spacing:-.03em; }
+    .champbox{ border-left:1px solid rgba(255,255,255,.3); padding-left:20px; text-align:right; margin-bottom:4px; }
+    .champbox .cl{ font-size:9px; letter-spacing:.24em; opacity:.62; }
+    .champbox .cn{ margin-top:4px; font-size:19px; font-weight:600; line-height:1.1; }
+    .champbox .cs{ font-family:var(--mono); margin-top:4px; font-size:10px; letter-spacing:.16em; opacity:.82; }
 
-    .tblwrap{ padding:0 26px 22px; }
-    table.lg{ border-collapse:collapse; width:100%; }
-    table.lg thead th{ background:var(--band); color:#fff; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:10px 12px; text-align:left; position:sticky; top:0; }
-    table.lg thead th.num{ text-align:right; }
-    table.lg tbody td{ padding:10px 12px; font-size:13px; border-bottom:1px solid #eef2ef; vertical-align:middle; }
-    table.lg tbody td.num{ text-align:right; font-variant-numeric:tabular-nums; }
-    table.lg tbody tr:hover{ background:#f7fbf8; }
-    .rankcell{ display:flex; align-items:center; gap:8px; font-weight:800; }
-    .medal{ width:26px; height:26px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:800; flex:none; }
-    .m1{ background:var(--gold); } .m2{ background:var(--silver); } .m3{ background:var(--bronze); }
-    .rnum{ width:26px; text-align:center; color:var(--muted); }
-    tr.top1 td{ background:#fffbe9; } tr.top2 td{ background:#f6f8fa; } tr.top3 td{ background:#fbf3ea; }
-    .cfname{ font-weight:800; }
-    table.lg thead th .thsub{ font-weight:600; opacity:.85; font-size:9.5px; text-transform:none; letter-spacing:0; }
-    td.mc{ text-align:center; white-space:nowrap; }
-    .mpct{ font-weight:800; font-size:13px; font-variant-numeric:tabular-nums; }
-    .msub{ display:block; font-size:10px; color:var(--muted); margin-top:1px; }
-    .pf{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; }
-    .pf.pass{ color:#1a7a3d; background:#e4f4ea; }
-    .pf.fail{ color:#9aa4ad; background:#f1f3f6; }
-    .pbar{ display:inline-block; width:74px; height:8px; border-radius:6px; background:#eef2ef; vertical-align:middle; overflow:hidden; }
-    .pbar-f{ height:100%; border-radius:6px; }
-    .pval{ font-size:12px; font-weight:800; margin-left:8px; font-variant-numeric:tabular-nums; }
-    .grade{ display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:800; }
+    /* meta strip */
+    .metastrip{ display:grid; grid-template-columns:repeat(5,1fr); border-bottom:1px solid var(--border); background:var(--primary-tint); }
+    .metastrip .cell{ border-right:1px solid rgba(0,51,153,.12); padding:11px 12px; }
+    .metastrip .cell:last-child{ border-right:0; }
+    .metastrip .k{ font-family:var(--mono); font-size:8px; text-transform:uppercase; letter-spacing:.18em; color:var(--muted-fg); }
+    .metastrip .v{ margin-top:4px; font-size:10.5px; font-weight:600; line-height:1.3; color:var(--primary-deep); }
 
-    .kpis{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:0 26px 18px; }
-    @media(max-width:900px){ .kpis{ grid-template-columns:repeat(2,1fr); } }
-    .kpi{ border:1px solid var(--line); border-radius:12px; padding:14px; text-align:center; }
-    .kpi .ic{ font-size:16px; color:var(--green-2); }
-    .kpi .v{ font-size:22px; font-weight:800; color:var(--ink); margin-top:6px; line-height:1; }
-    .kpi .l{ font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); font-weight:700; margin-top:5px; }
+    /* section head */
+    .body{ padding:22px 14mm; flex:1; }
+    .secthead{ display:flex; align-items:baseline; gap:12px; border-bottom:2px solid var(--primary); padding-bottom:5px; margin-bottom:12px; }
+    .secthead .no{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--primary); }
+    .secthead h2{ margin:0; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.16em; color:var(--primary); }
+    .secthead .rng{ margin-left:auto; font-size:9px; color:var(--muted-fg); }
 
-    .loading{ text-align:center; color:var(--muted); padding:40px; font-size:14px; }
-    .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
-    .secttl{ font-size:13px; font-weight:800; color:var(--green); display:flex; align-items:center; gap:8px; margin:14px 0 10px; padding:0 26px; flex-wrap:wrap; }
-    .secttl .secsub{ font-weight:600; color:var(--muted); font-size:11px; }
+    /* standings table */
+    table.lg{ width:100%; border-collapse:collapse; }
+    table.lg thead th{ background:var(--primary-deep); color:rgba(255,255,255,.86); font-size:7.5px; text-transform:uppercase; letter-spacing:.12em; font-weight:600; text-align:left; padding:6px 8px; line-height:1.15; }
+    table.lg thead th.c{ text-align:center; }
+    table.lg tbody td{ padding:7px 8px; border-bottom:1px solid var(--border); font-size:9px; vertical-align:middle; }
+    table.lg tbody tr:nth-child(odd){ background:rgba(238,242,251,.45); }
+    .poscell{ position:relative; text-align:center; }
+    .zonebar{ position:absolute; inset:0 auto 0 0; width:3px; }
+    .z-champ{ background:var(--primary); } .z-cont{ background:var(--good); } .z-releg{ background:var(--bad); }
+    .posn{ font-family:var(--mono); font-size:11px; font-weight:700; color:var(--primary-deep); }
+    .cf{ display:flex; align-items:center; gap:8px; }
+    .avatar{ width:18px; height:18px; display:grid; place-items:center; background:var(--primary); color:#fff; font-family:var(--mono); font-size:7.5px; font-weight:700; flex:none; }
+    .cfname{ font-size:10px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
+    .ovc{ display:flex; align-items:center; gap:8px; }
+    .ovbar{ height:6px; flex:1; background:var(--muted); min-width:44px; }
+    .ovbar-f{ height:100%; background:var(--primary); }
+    .ovpct{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--primary-deep); width:30px; text-align:right; }
+    .gbox{ display:inline-grid; place-items:center; width:18px; height:18px; border:1px solid; font-family:var(--mono); font-size:9px; font-weight:700; }
+    td.mnum{ font-family:var(--mono); font-size:9px; }
+    td.mnum.dim{ color:var(--muted-fg); }
+
+    /* grading scale + verification */
+    .footgrid{ margin-top:26px; display:grid; grid-template-columns:1.5fr 1fr; gap:32px; }
+    .scaletitle, .vtitle{ border-bottom:2px solid var(--primary); padding-bottom:5px; margin-bottom:10px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.16em; color:var(--primary); }
+    .scalegrid{ display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--border); }
+    .scalecell{ background:var(--card); padding:10px 6px; text-align:center; }
+    .scalecell .g{ font-family:var(--mono); font-size:19px; font-weight:700; color:var(--primary); line-height:1; }
+    .scalecell .l{ margin-top:6px; font-size:7.5px; font-weight:500; line-height:1.15; }
+    .scalecell .r{ font-family:var(--mono); margin-top:3px; font-size:8px; color:var(--muted-fg); }
+    .legend{ margin-top:12px; display:flex; flex-wrap:wrap; gap:6px 20px; font-size:8.5px; color:var(--muted-fg); }
+    .legend span{ display:inline-flex; align-items:center; gap:6px; }
+    .legend i{ width:3px; height:10px; display:inline-block; }
+    .verif{ border-left:2px solid var(--primary); background:var(--primary-tint); padding:14px 20px; }
+    .verif .vk{ font-size:8px; text-transform:uppercase; letter-spacing:.2em; color:var(--muted-fg); }
+    .verif p{ margin:8px 0 0; font-size:10px; line-height:1.5; color:var(--primary-deep); }
+
+    /* footer */
+    .foot{ margin-top:auto; display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding:10px 14mm; font-size:8px; text-transform:uppercase; letter-spacing:.2em; color:var(--muted-fg); }
+
+    /* continuation header for pages 2+ */
+    .conthead{ display:flex; align-items:center; justify-content:space-between; border-bottom:4px solid var(--primary); padding:16px 14mm; }
+    .conthead .ce{ font-size:9px; letter-spacing:.3em; color:var(--muted-fg); }
+    .conthead .ct{ font-size:15px; font-weight:600; color:var(--primary); letter-spacing:-.01em; }
+    .conthead .cm{ text-align:right; font-size:9px; text-transform:uppercase; letter-spacing:.18em; color:var(--muted-fg); line-height:1.5; }
+
+    .loading{ text-align:center; color:var(--muted-fg); padding:60px 0; font-size:13px; }
 
     @media print{
-      @page{ size:A4 portrait; margin:12mm; }
-      body{ background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-      .shg-nav, .shg-nav-open, .filters, .note, .noprint{ display:none !important; }
+      @page{ size:A4; margin:0; }
+      body{ background:#fff; }
+      .toolbar, .shg-nav, .shg-nav-open, .no-print{ display:none !important; }
       body.shg-has-nav{ padding-right:0 !important; }
-      .wrap{ max-width:none; padding:0; }
-      .cardsheet{ box-shadow:none; border:0; }
-      table.lg thead th{ position:static; }
+      .sheet{ box-shadow:none !important; margin:0 !important; width:210mm !important; page-break-after:always; break-after:page; }
+      .sheet:last-of-type{ page-break-after:auto; break-after:auto; }
+      *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="note"><i class="fas fa-circle-info"></i> League ranks every CF in the cluster by an <b>overall grade = average of 7 CF-report metrics</b> (period-filtered): SHGs&nbsp;Saving/Profiled, Youth into Production (/400), Trainings/Groups Trained (/16), Youth in Work (/70% of mobilized), and <b>pass/fail</b> for Sales (Poultry), Sales (Horticulture) &amp; Local Leverage. It updates live as data is submitted. Use <b>Download PDF</b> for the monthly table.</div>
+  <div class="toolbar no-print">
+    <div class="fld"><label>Cluster</label><select id="cluster">${clusterOptions('iganga')}</select></div>
+    <div class="fld"><label>From</label><input type="date" id="from" /></div>
+    <div class="fld"><label>To</label><input type="date" id="to" /></div>
+    <button class="btn" id="apply"><i class="fas fa-rotate"></i> Update</button>
+    <button class="btn ghost" id="clearDates">Clear dates</button>
+    <button class="btn" id="print"><i class="fas fa-print"></i> Print league table</button>
+    <span class="toolnote">A4 · print-ready · royal blue / white</span>
+  </div>
 
-    <div class="filters">
-      <div class="fld">
-        <label>Cluster</label>
-        <select id="cluster">${clusterOptions('iganga')}</select>
-      </div>
-      <div class="fld">
-        <label>From</label>
-        <input type="date" id="from" />
-      </div>
-      <div class="fld">
-        <label>To</label>
-        <input type="date" id="to" />
-      </div>
-      <button class="btn" id="apply"><i class="fas fa-rotate"></i> Update</button>
-      <button class="btn ghost" id="clearDates"><i class="fas fa-eraser"></i> Clear dates</button>
-      <button class="btn" id="print" style="margin-left:auto"><i class="fas fa-file-pdf"></i> Download PDF</button>
-    </div>
-
-    <div id="sheet" class="cardsheet">
-      <div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading league table…</div>
-    </div>
+  <div id="sheets">
+    <div class="sheet"><div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading league table…</div></div>
   </div>
 
   ${navSidebar('cfleague')}
 
   <script>
-    // Use relative fetch paths so the browser inherits the page's scheme/host
-    // (avoids mixed-content when the page is served over HTTPS).
+    var PAGE_SIZE = 16;
     var CLUSTER_LABELS = { all:'All clusters', iganga:'Iganga Cluster', kamuli:'Kamuli Cluster', bugiri:'Bugiri Cluster', central:'Central Cluster' };
 
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function fmt(n){ n=Number(n)||0; return n.toLocaleString('en-US'); }
     function prettyDate(s){ if(!s) return ''; try{ return new Date(s+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return s; } }
-    function gradeFor(p){
-      p=Number(p)||0;
-      if(p>=80) return {g:'A',c:'#1a7a3d',bg:'#e4f4ea'};
-      if(p>=60) return {g:'B',c:'#2E9BD6',bg:'#e3f2fb'};
-      if(p>=40) return {g:'C',c:'#b46e0a',bg:'#fbf0dc'};
-      if(p>=20) return {g:'D',c:'#c9791b',bg:'#fbeeda'};
-      return {g:'E',c:'#c0392b',bg:'#fbe6e2'};
+    function initials(name){ return String(name||'').trim().split(/\\s+/).slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase(); }
+    function gradeLetter(p){ p=Number(p)||0; if(p>=80)return'A'; if(p>=60)return'B'; if(p>=40)return'C'; if(p>=20)return'D'; return'E'; }
+    function gradeTone(g){ if(g==='A'||g==='B')return 'var(--good)'; if(g==='C'||g==='D')return 'var(--warn)'; return 'var(--bad)'; }
+
+    // Build one standings row. n = total CFs (for relegation zone).
+    function leagueRow(r, n){
+      var rank=r.rank;
+      var zone = rank<=3 ? 'z-champ' : (rank<=6 ? 'z-cont' : (rank>n-3 ? 'z-releg' : ''));
+      var g=gradeLetter(r.overall), tone=gradeTone(g);
+      var ov=Math.min(100,Number(r.overall)||0);
+      // 7 metric string cells + dim styling when zero / dash
+      var cells=[
+        fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled)+' SHGs',
+        fmt(r.youth_production)+' youth',
+        fmt(r.groups_trained)+' groups',
+        fmt(r.employed_youth)+' in work',
+        fmt(r.birds_sold)+' birds',
+        (Number(r.hs_value)>0?'UGX '+fmt(r.hs_value):'—'),
+        fmt(r.lev_count)+' contrib.'
+      ];
+      var cellHtml=cells.map(function(v){
+        var dim = (v==='—' || /^0[^0-9]/.test(v) || v==='0');
+        return '<td class="mnum'+(dim?' dim':'')+'">'+esc(v)+'</td>';
+      }).join('');
+      return '<tr>'+
+        '<td class="poscell">'+(zone?'<span class="zonebar '+zone+'"></span>':'')+'<span class="posn">'+rank+'</span></td>'+
+        '<td><div class="cf"><span class="avatar">'+esc(initials(r.name))+'</span><span class="cfname">'+esc(r.name)+'</span></div></td>'+
+        '<td><div class="ovc"><div class="ovbar"><div class="ovbar-f" style="width:'+ov+'%"></div></div><span class="ovpct">'+(Number(r.overall)||0)+'%</span></div></td>'+
+        '<td style="text-align:center"><span class="gbox" style="color:'+tone+';border-color:'+tone+'">'+g+'</span></td>'+
+        cellHtml+
+      '</tr>';
     }
 
-    function buildTable(rows, clusterLabel, from, to){
-      var period = (from&&to) ? (prettyDate(from)+' – '+prettyDate(to)) : 'All available data';
-      var genDate = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-      var n = rows.length;
-      var avg = n ? Math.round(rows.reduce(function(a,r){return a+(Number(r.overall)||0);},0)/n) : 0;
-      var topName = n ? rows[0].name : '—';
-      var totalYouth = rows.reduce(function(a,r){return a+(Number(r.youth_mobilized)||0);},0);
+    function tableHead(){
+      return '<thead><tr>'+
+        '<th class="c" style="width:30px">Pos</th>'+
+        '<th style="width:17%">Community Facilitator</th>'+
+        '<th style="width:13%">Overall</th>'+
+        '<th class="c" style="width:34px">Gr</th>'+
+        '<th>SHGs<br/>saving/profiled</th>'+
+        '<th>Youth<br/>production</th>'+
+        '<th>Trainings<br/>first</th>'+
+        '<th>Youth<br/>in work</th>'+
+        '<th>Sales<br/>poultry</th>'+
+        '<th>Sales<br/>horticulture</th>'+
+        '<th>Local<br/>leverage</th>'+
+      '</tr></thead>';
+    }
 
-      var body = rows.map(function(r,i){
-        var rank=i+1;
-        var g=gradeFor(r.overall);
-        var barPct=Math.min(100,Number(r.overall)||0);
-        var rankCell = rank<=3
-          ? '<span class="medal m'+rank+'">'+rank+'</span>'
-          : '<span class="rnum">'+rank+'</span>';
-        var trCls = rank<=3 ? ' class="top'+rank+'"' : '';
-        // A metric cell: graded % on top (grade-coloured) + raw achieved below.
-        function mcell(pct, sub){
-          var mg=gradeFor(pct);
-          return '<td class="mc"><span class="mpct" style="color:'+mg.c+'">'+(Number(pct)||0)+'%</span>'+
-                 (sub!=null?'<span class="msub">'+sub+'</span>':'')+'</td>';
+    var SCALE=[['A','Excellent','80–100%'],['B','Very Good','60–79%'],['C','Good','40–59%'],['D','Fair','20–39%'],['E','Needs Improvement','0–19%']];
+
+    function build(rows, clusterLabel, from, to){
+      var n=rows.length;
+      var period=(from&&to)?(prettyDate(from)+' – '+prettyDate(to)):'All available data';
+      var genDate=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+      var avg=n?Math.round(rows.reduce(function(a,r){return a+(Number(r.overall)||0);},0)/n):0;
+      var champ=n?rows[0]:null;
+      // assign ranks
+      rows.forEach(function(r,i){ r.rank=i+1; });
+
+      // paginate
+      var pages=[]; for(var i=0;i<Math.max(1,Math.ceil(n/PAGE_SIZE));i++){ pages.push(rows.slice(i*PAGE_SIZE,(i+1)*PAGE_SIZE)); }
+
+      var html='';
+      pages.forEach(function(page, p){
+        var isFirst=(p===0), isLast=(p===pages.length-1);
+        html+='<section class="sheet">';
+
+        // header
+        if(isFirst){
+          html+='<div class="mast">'+
+            '<div class="brand"><div class="mark"><span>SAYE</span></div>'+
+              '<div><div class="bn">SAYE UGANDA</div><div class="bt">MONITORING · EVALUATION · LEARNING</div></div></div>'+
+            '<div class="mastrow"><div><div class="eyebrow">COMMUNITY FACILITATORS · STANDINGS</div>'+
+              '<h1>CF Premier<br/>League</h1></div>'+
+              (champ?('<div class="champbox"><div class="cl">CHAMPION</div><div class="cn">'+esc(champ.name)+'</div>'+
+                '<div class="cs">'+(Number(champ.overall)||0)+'% · GRADE '+gradeLetter(champ.overall)+'</div></div>'):'')+
+            '</div></div>'+
+            '<div class="metastrip">'+
+              '<div class="cell"><div class="k">Cluster</div><div class="v">'+esc(clusterLabel)+'</div></div>'+
+              '<div class="cell"><div class="k">Report period</div><div class="v">'+esc(period)+'</div></div>'+
+              '<div class="cell"><div class="k">CFs ranked</div><div class="v num">'+n+'</div></div>'+
+              '<div class="cell"><div class="k">Average grade</div><div class="v num">'+avg+'%</div></div>'+
+              '<div class="cell"><div class="k">Generated</div><div class="v">'+esc(genDate)+'</div></div>'+
+            '</div>';
+        } else {
+          html+='<div class="conthead"><div><div class="ce">SAYE UGANDA · MEL</div>'+
+            '<div class="ct">CF Premier League · Standings continued</div></div>'+
+            '<div class="cm">'+esc(clusterLabel)+'<br/>'+esc(period)+'</div></div>';
         }
-        // Pass/fail metric cell (poultry / hort sales / leverage).
-        function pfcell(pct, sub){
-          var pass=(Number(pct)||0)>=100;
-          return '<td class="mc"><span class="pf '+(pass?'pass':'fail')+'">'+(pass?'PASS':'—')+'</span>'+
-                 (sub!=null?'<span class="msub">'+sub+'</span>':'')+'</td>';
+
+        html+='<div class="body">';
+        html+='<div class="secthead"><span class="no">'+String(p+1).padStart(2,'0')+'</span>'+
+          '<h2>League Table</h2>'+
+          (page.length?('<span class="rng">Positions '+page[0].rank+'–'+page[page.length-1].rank+' of '+n+'</span>'):'')+
+        '</div>';
+
+        if(!page.length){
+          html+='<div class="loading">No CF data for this cluster / period.</div>';
+        } else {
+          html+='<table class="lg">'+tableHead()+'<tbody>'+page.map(function(r){return leagueRow(r,n);}).join('')+'</tbody></table>';
         }
-        return '<tr'+trCls+'>'+
-          '<td><div class="rankcell">'+rankCell+'</div></td>'+
-          '<td><span class="cfname">'+r.name+'</span></td>'+
-          '<td><div class="pbar"><div class="pbar-f" style="width:'+barPct+'%;background:'+g.c+'"></div></div><span class="pval" style="color:'+g.c+'">'+(Number(r.overall)||0)+'%</span></td>'+
-          '<td><span class="grade" style="color:'+g.c+';background:'+g.bg+'">'+g.g+'</span></td>'+
-          mcell(r.p1_saving, fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled)+' SHGs')+
-          mcell(r.p2_production, fmt(r.youth_production)+' youth')+
-          mcell(r.p3_trained, fmt(r.groups_trained)+' groups')+
-          mcell(r.p4_yiw, fmt(r.employed_youth)+' in work')+
-          pfcell(r.p5_poultry, fmt(r.birds_sold)+' birds')+
-          pfcell(r.p6_hortsales, r.hs_value>0?'UGX '+fmt(r.hs_value):'—')+
-          pfcell(r.p7_leverage, fmt(r.lev_count)+' contrib.')+
-        '</tr>';
-      }).join('');
 
-      if(!n){
-        body = '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px">No CF data for this cluster / period.</td></tr>';
-      }
+        // grading scale + verification on last page
+        if(isLast && n){
+          html+='<div class="footgrid"><div>'+
+            '<div class="scaletitle">Grading Scale</div>'+
+            '<div class="scalegrid">'+SCALE.map(function(s){return '<div class="scalecell"><div class="g">'+s[0]+'</div><div class="l">'+s[1]+'</div><div class="r">'+s[2]+'</div></div>';}).join('')+'</div>'+
+            '<div class="legend">'+
+              '<span><i class="z-champ"></i> Top 3 · Champions zone</span>'+
+              '<span><i class="z-cont"></i> 4–6 · Contenders</span>'+
+              '<span><i class="z-releg"></i> Bottom 3 · Support needed</span>'+
+            '</div></div>'+
+            '<div><div class="vtitle" style="visibility:hidden">.</div>'+
+              '<div class="verif"><div class="vk">Verification</div>'+
+              '<p>Standings verified by SAYE Uganda M&amp;E on '+esc(genDate)+'. Overall score is the mean of the seven target areas, capped at 100% per area.</p></div>'+
+            '</div></div>';
+        }
+        html+='</div>'; // body
 
-      return '<div class="chead">'+
-          '<div class="brandblock"><div class="logo"><i class="fas fa-ranking-star"></i></div>'+
-            '<div class="brandtxt"><div class="bn">SAYE Uganda</div><div class="bt">MEL</div></div></div>'+
-          '<div class="mid"><div class="s">Community Facilitators</div><div class="t">CF Premier League</div></div>'+
-          '<div class="meta">Date Generated<br/><b>'+genDate+'</b><br/>Report Period<br/><b>'+period+'</b></div>'+
-        '</div>'+
-        '<div class="idrow">'+
-          '<div class="idcard"><span class="ic"><i class="fas fa-map-pin"></i></span><div><div class="lb">Cluster</div><div class="vl">'+clusterLabel+'</div></div></div>'+
-          '<div class="idcard"><span class="ic"><i class="fas fa-calendar"></i></span><div><div class="lb">Report Period</div><div class="vl">'+period+'</div></div></div>'+
-          '<div class="idcard"><span class="ic"><i class="fas fa-users"></i></span><div><div class="lb">CFs Ranked</div><div class="vl">'+fmt(n)+'</div></div></div>'+
-          '<div class="idcard"><span class="ic"><i class="fas fa-trophy"></i></span><div><div class="lb">Top CF</div><div class="vl">'+topName+'</div></div></div>'+
-        '</div>'+
-        '<div class="kpis">'+
-          '<div class="kpi"><div class="ic"><i class="fas fa-users"></i></div><div class="v">'+fmt(n)+'</div><div class="l">CFs Ranked</div></div>'+
-          '<div class="kpi"><div class="ic"><i class="fas fa-arrow-trend-up"></i></div><div class="v">'+avg+'%</div><div class="l">Average Grade</div></div>'+
-          '<div class="kpi"><div class="ic"><i class="fas fa-crown"></i></div><div class="v" style="font-size:15px">'+topName+'</div><div class="l">Best Performer</div></div>'+
-          '<div class="kpi"><div class="ic"><i class="fas fa-seedling"></i></div><div class="v">'+fmt(totalYouth)+'</div><div class="l">Youth Mobilized</div></div>'+
-        '</div>'+
-        '<div class="secttl"><i class="fas fa-list-ol"></i> League Table <span class="secsub">(ranked #1 → last by overall grade — average of the 7 CF-report metrics below, period-filtered)</span></div>'+
-        '<div class="tblwrap"><table class="lg"><thead><tr>'+
-          '<th>Rank</th><th>Community Facilitator</th><th>Overall</th><th>Grade</th>'+
-          '<th>SHGs Saving<br/><span class="thsub">/ profiled</span></th>'+
-          '<th>Youth into<br/><span class="thsub">Production</span></th>'+
-          '<th>Trainings<br/><span class="thsub">(first)</span></th>'+
-          '<th>Youth in<br/><span class="thsub">Work</span></th>'+
-          '<th>Sales<br/><span class="thsub">(Poultry)</span></th>'+
-          '<th>Sales<br/><span class="thsub">(Horti.)</span></th>'+
-          '<th>Local<br/><span class="thsub">Leverage</span></th>'+
-        '</tr></thead><tbody>'+body+'</tbody></table></div>';
+        html+='<div class="foot"><span>SAYE Uganda · MEL</span><span>CF Premier League · '+esc(clusterLabel)+'</span>'+
+          '<span class="num">Page '+(p+1)+' / '+pages.length+'</span></div>';
+
+        html+='</section>';
+      });
+
+      return html;
     }
 
     async function load(){
-      var cl = document.getElementById('cluster').value;
-      var from = document.getElementById('from').value;
-      var to = document.getElementById('to').value;
-      var sheet = document.getElementById('sheet');
-      sheet.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading league table…</div>';
-      var qs = new URLSearchParams();
+      var cl=document.getElementById('cluster').value;
+      var from=document.getElementById('from').value;
+      var to=document.getElementById('to').value;
+      var host=document.getElementById('sheets');
+      host.innerHTML='<div class="sheet"><div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading league table…</div></div>';
+      var qs=new URLSearchParams();
       if(cl && cl!=='all') qs.set('cluster', cl);
       if(from) qs.set('from', from);
       if(to) qs.set('to', to);
       try{
-        var res = await fetch('/api/cf-premier-league?' + qs.toString());
+        var res=await fetch('/api/cf-premier-league?'+qs.toString());
         if(!res.ok) throw new Error('HTTP '+res.status);
-        var rows = await res.json();
-        if(!Array.isArray(rows)) rows = [];
-        sheet.innerHTML = buildTable(rows, CLUSTER_LABELS[cl]||'All clusters', from, to);
+        var rows=await res.json();
+        if(!Array.isArray(rows)) rows=[];
+        host.innerHTML=build(rows, CLUSTER_LABELS[cl]||'All clusters', from, to);
       }catch(e){
-        sheet.innerHTML = '<div class="loading" style="color:#c0392b">Failed to load: '+(e&&e.message||e)+'</div>';
+        host.innerHTML='<div class="sheet"><div class="loading" style="color:var(--bad)">Failed to load: '+(e&&e.message||e)+'</div></div>';
       }
     }
 

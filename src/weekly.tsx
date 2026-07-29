@@ -3,11 +3,14 @@ import { navSidebar } from './nav';
 // ---------------------------------------------------------------------------
 // WEEKLY REPORT — Mon→Sun narrative summary of ALL indicators, per cluster.
 //   Filters: Cluster + Date range (default = current Mon→Sun week).
-//   Renders a "Weekly Highlights" narrative broken into sections:
-//     Profiling & SHG Formation, Training (by area), Distribution,
-//     Production & Marketing, Poultry Sales, Access to Finance (ISLA),
-//     Leverage Contributions.
-//   Data from /api/weekly (mel_weekly_report RPC).
+//   Data from /api/weekly (mel_weekly_report RPC) + /api/youth-in-work.
+//
+//   VISUAL DESIGN cloned from the user's Lovable "Warm" editorial mock:
+//     Royal Blue #003399 on white · Instrument Serif (display) + Archivo (sans)
+//     + IBM Plex Mono (figures) · radius 0 · numbered sections 01-08 in a
+//     12-col grid · drop-cap intro · Datum headline figures · hairline zebra
+//     data tables · 3-column sign-off · print-first A4 white paper.
+//   Live data wiring is UNCHANGED (same API, same field names).
 // ---------------------------------------------------------------------------
 
 export function renderWeeklyReport(base: string): string {
@@ -16,163 +19,178 @@ export function renderWeeklyReport(base: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Weekly Report — SAYE</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
+  <title>Weekly Field Report — SAYE Uganda</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root{
-      --green:#006837; --green-2:#00A859; --lgreen:#e9f5ee; --ink:#25352c;
-      --muted:#7f8c85; --line:#e2e9e4; --amber:#F6921E; --blue:#2E9BD6;
-      --band:#0f5132; --cream:#fbf6e3; --purple:#7c5cbf; --red:#c0392b; --teal:#1f9e94;
+      --primary:#003399; --primary-deep:#001f5c; --primary-wash:#eef2fb;
+      --ink:#101828; --ink-85:#28303f; --border:#c9d2e8; --muted:#55617a;
+      --font-display:"Instrument Serif",Georgia,serif;
+      --font-sans:"Archivo","Helvetica Neue",Arial,sans-serif;
+      --font-mono:"IBM Plex Mono",ui-monospace,monospace;
     }
-    body{ background:#eef2ef; color:var(--ink); font-family:"Segoe UI",Calibri,Arial,system-ui,sans-serif; margin:0; }
-    .wrap{ max-width:1080px; margin:0 auto; padding:22px 20px 40px; }
-    h1{ font-size:24px; font-weight:800; color:var(--green); margin:0 0 2px; }
+    *{ box-sizing:border-box; }
+    html,body{ margin:0; }
+    body{ background:#fff; color:var(--ink); font-family:var(--font-sans);
+      font-feature-settings:"kern" 1; -webkit-font-smoothing:antialiased; }
 
-    /* Formal document masthead (shared style with Report Dashboard) */
-    .masthead{ background:#fff; border:1px solid var(--line); border-top:5px solid var(--green); border-radius:12px 12px 0 0; padding:20px 26px; display:flex; align-items:center; gap:24px; flex-wrap:wrap; box-shadow:0 1px 3px rgba(40,60,50,.05); }
-    .mh-brand{ display:flex; align-items:center; gap:12px; }
-    .mh-logo{ width:48px; height:48px; border-radius:10px; background:linear-gradient(135deg,var(--green),var(--green-2)); color:#fff; display:flex; align-items:center; justify-content:center; font-size:22px; box-shadow:0 2px 6px rgba(0,104,55,.25); }
-    .mh-org-name{ font-size:18px; font-weight:800; color:var(--green); line-height:1.1; }
-    .mh-org-tag{ font-size:10.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
-    .mh-titleblock{ flex:1; min-width:180px; border-left:1px solid var(--line); padding-left:24px; }
-    .mh-doctype{ font-size:10.5px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:var(--green-2); }
-    .mh-title{ font-size:23px; font-weight:800; color:var(--ink); margin:2px 0 0; letter-spacing:-.01em; }
-    .mh-meta{ display:flex; flex-direction:column; gap:2px; font-size:11.5px; min-width:200px; }
-    .mh-meta > div{ display:flex; justify-content:space-between; gap:16px; padding:3px 0; border-bottom:1px dotted var(--line); }
-    .mh-meta > div:last-child{ border-bottom:0; }
-    .mh-meta span{ color:var(--muted); text-transform:uppercase; letter-spacing:.03em; font-size:10px; font-weight:700; }
-    .mh-meta b{ color:var(--ink); font-weight:700; }
-    @media(max-width:760px){ .mh-titleblock{ border-left:0; padding-left:0; } }
+    .figure{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-.03em; }
+    .label{ font-family:var(--font-mono); font-size:.6875rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+    .em{ font-weight:600; color:var(--primary); }
 
-    .sub{ color:var(--muted); font-size:12.5px; line-height:1.6; margin:0 0 18px; background:#fff; border:1px solid var(--line); border-top:0; border-radius:0 0 12px 12px; padding:12px 26px; box-shadow:0 1px 3px rgba(40,60,50,.05); }
+    main{ max-width:68rem; margin:0 auto; padding:24px 40px 40px; min-height:100vh; }
+    @media(max-width:720px){ main{ padding:20px 22px 32px; } }
 
-    /* Document footer */
-    .docfoot{ display:flex; justify-content:space-between; gap:24px; flex-wrap:wrap; margin-top:14px; padding:16px 22px; background:#fff; border:1px solid var(--line); border-top:3px solid var(--green); border-radius:12px; font-size:11.5px; color:var(--ink); }
-    .docfoot b{ color:var(--green); }
-    .df-src{ color:var(--muted); font-size:11px; margin-top:4px; max-width:620px; line-height:1.55; }
-    .df-right{ text-align:right; font-weight:700; color:var(--muted); }
-    .card{ background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 1px 3px rgba(40,60,50,.05); }
-
-    .filters{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:18px; }
+    /* toolbar (screen only) */
+    .toolbar{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; justify-content:flex-end; margin-bottom:20px; }
     .fld{ display:flex; flex-direction:column; gap:4px; }
-    .fld label{ font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
-    .fld select, .fld input{ border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; background:#fff; min-width:150px; }
-    .btn{ background:var(--green); color:#fff; border:0; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer; }
-    .btn:hover{ background:var(--green-2); }
-    .btn.ghost{ background:#fff; color:var(--green); border:1px solid var(--line); }
+    .fld label{ font-family:var(--font-mono); font-size:.625rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+    .fld select,.fld input{ border:1px solid var(--border); border-radius:0; padding:7px 10px; font-size:13px; font-family:var(--font-sans); background:#fff; min-width:150px; color:var(--ink); }
+    .btn{ font-family:var(--font-mono); border:1px solid var(--primary); background:var(--primary); color:#fff; padding:8px 14px; font-size:.6875rem; text-transform:uppercase; letter-spacing:.14em; cursor:pointer; border-radius:0; }
+    .btn:hover{ background:var(--primary-deep); }
+    .btn.ghost{ background:#fff; color:var(--primary); }
+    .btn.ghost:hover{ background:var(--primary-wash); }
 
-    .periodband{ display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; background:var(--band); color:#fff; border-radius:10px; padding:12px 20px; margin-bottom:18px; }
-    .periodband .pb-left{ font-size:15px; font-weight:800; letter-spacing:.01em; }
-    .periodband .pb-left i{ opacity:.8; margin-right:6px; }
-    .periodband .pb-right{ font-size:12.5px; opacity:.92; font-weight:600; }
+    /* masthead */
+    .mast-bar{ height:.5rem; background:var(--primary); margin-bottom:12px; }
+    .mast-row{ display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:16px; border-bottom:2px solid var(--primary); padding-bottom:12px; }
+    .mast-org{ font-family:var(--font-display); font-size:2.5rem; line-height:.95; letter-spacing:-.01em; color:var(--primary); margin-top:4px; }
+    @media(max-width:720px){ .mast-org{ font-size:2rem; } }
+    .mast-right{ text-align:right; }
+    .mast-badge{ font-family:var(--font-mono); background:var(--primary); color:#fff; padding:4px 8px; font-size:.75rem; text-transform:uppercase; letter-spacing:.18em; display:inline-block; }
+    .mast-sub{ font-family:var(--font-display); font-style:italic; font-size:1.25rem; line-height:1.1; color:var(--primary-deep); margin-top:4px; }
 
-    .kstrip{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
-    @media(max-width:820px){ .kstrip{ grid-template-columns:repeat(2,1fr); } }
-    .kcard{ padding:14px 16px; }
-    .kcard .kt{ font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
-    .kcard .kv{ font-size:24px; font-weight:800; color:var(--ink); margin-top:6px; line-height:1; }
-    .kcard .ks{ font-size:11px; color:var(--muted); margin-top:4px; }
+    /* meta + intro */
+    .metarow{ display:flex; flex-direction:column; gap:16px; border-bottom:1px solid var(--border); padding:14px 0; margin-top:2px; }
+    @media(min-width:721px){ .metarow{ flex-direction:row; align-items:flex-start; gap:40px; } }
+    .metalist{ width:100%; max-width:19rem; margin:0; }
+    .meta{ display:flex; align-items:baseline; gap:12px; border-bottom:1px solid var(--border); padding:4px 0; }
+    .meta dt{ margin:0; }
+    .meta dd{ margin:0 0 0 auto; font-family:var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-.03em; font-size:.8125rem; color:var(--ink); }
+    .intro{ max-width:38rem; font-size:.875rem; line-height:1.55; color:var(--ink-85); margin:0; }
+    .dropcap{ float:left; margin:.35rem .5rem 0 0; font-family:var(--font-display); font-size:2.4rem; line-height:.7; color:var(--primary); }
 
-    .sec{ padding:18px 20px; margin-bottom:14px; }
-    .sec h2{ font-size:15px; font-weight:800; margin:0 0 8px; display:flex; align-items:center; gap:9px; }
-    .sec h2 .ic{ width:30px; height:30px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:13px; }
-    .sec p{ margin:0; font-size:14px; line-height:1.65; color:#3a4a41; }
-    .sec p b{ color:var(--green); }
-    .chips{ display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-    .chip{ background:var(--lgreen); border:1px solid #cfe6d8; color:var(--green); font-size:12px; font-weight:700; padding:5px 11px; border-radius:20px; }
-    .chip b{ color:var(--ink); }
-    .trtable{ width:100%; border-collapse:collapse; margin-top:12px; }
-    .trtable td{ padding:6px 10px; font-size:13px; border-bottom:1px solid #eef2ef; }
-    .trtable td.n{ text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
-    .loading{ text-align:center; color:var(--muted); padding:26px; font-size:13px; }
-    .note{ background:#fff8e6; border:1px solid #f0e2b6; color:#7a6414; font-size:12px; padding:8px 12px; border-radius:8px; margin-bottom:16px; }
+    /* headline figures */
+    .datums{ display:grid; grid-template-columns:repeat(2,1fr); gap:16px 20px; margin-top:20px; }
+    @media(min-width:900px){ .datums{ grid-template-columns:repeat(4,1fr); } }
+    .datum{ border-top:2px solid var(--primary); background:var(--primary-wash); padding:8px 12px 10px; break-inside:avoid; }
+    .datum .dn{ font-family:var(--font-mono); font-size:.625rem; letter-spacing:.14em; text-transform:uppercase; color:rgba(0,51,153,.7); margin-bottom:8px; }
+    .datum .dv{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-.03em; font-size:2rem; line-height:1; color:var(--primary); }
+    @media(min-width:721px){ .datum .dv{ font-size:2.25rem; } }
+    .datum .dl{ margin-top:8px; font-size:.8125rem; font-weight:600; letter-spacing:-.01em; }
+    .datum .dnote{ margin-top:2px; font-size:.75rem; font-style:italic; color:var(--muted); }
 
-    /* sign-off + MEL stamp */
-    .signoff{ display:flex; align-items:flex-end; gap:34px; padding:16px 22px 26px; position:relative; margin-top:6px; }
-    .sign{ flex:1; max-width:220px; }
-    .sign .sline{ border-bottom:1.5px solid #9aa8a0; height:34px; }
-    .sign .slbl{ font-size:11px; color:var(--muted); font-weight:700; margin-top:5px; text-transform:uppercase; letter-spacing:.04em; }
-    .stamp{ margin-left:auto; }
-    .stamp-inner{ width:150px; height:150px; border-radius:50%; border:3px solid #c0392b; color:#c0392b; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; transform:rotate(-11deg); opacity:.86; box-shadow:inset 0 0 0 2px #c0392b33; }
-    .stamp-top{ font-size:12px; font-weight:900; letter-spacing:.08em; }
-    .stamp-mid{ font-size:16px; font-weight:900; margin:3px 0; border-top:2px solid #c0392b; border-bottom:2px solid #c0392b; padding:3px 0; width:82%; }
-    .stamp-dt{ font-size:12px; font-weight:800; margin:3px 0; }
-    .stamp-bot{ font-size:7.5px; font-weight:800; letter-spacing:.03em; width:88%; }
+    /* record-of-activity heading */
+    .roa{ font-family:var(--font-mono); font-size:.6875rem; letter-spacing:.14em; text-transform:uppercase; color:var(--primary); border-left:4px solid var(--primary); padding-left:8px; margin:32px 0 4px; }
 
-    /* PRINT — colored PDF via browser Print → Save as PDF */
+    /* numbered sections */
+    .sec{ display:grid; grid-template-columns:1fr; gap:12px 32px; border-top:1px solid var(--border); padding:16px 0; break-inside:avoid; }
+    @media(min-width:721px){ .sec{ grid-template-columns:repeat(12,1fr); } }
+    .sec-head{ grid-column:auto; }
+    @media(min-width:721px){ .sec-head{ grid-column:span 3; } }
+    .sec-n{ font-family:var(--font-mono); font-size:.6875rem; letter-spacing:.14em; text-transform:uppercase; color:var(--primary); }
+    .sec-title{ font-family:var(--font-display); font-size:1.25rem; line-height:1.05; color:var(--primary-deep); margin:4px 0 0; }
+    .sec-prose{ grid-column:auto; }
+    @media(min-width:721px){ .sec-prose{ grid-column:span 5; } }
+    .sec-prose p{ max-width:38rem; font-size:.875rem; line-height:1.5; color:var(--ink-85); margin:0; }
+    .sec-data{ grid-column:auto; }
+    @media(min-width:721px){ .sec-data{ grid-column:span 4; } }
+    .sec-dl{ margin:0; border-top:1px solid var(--primary); }
+    .dr{ display:flex; align-items:baseline; gap:16px; border-bottom:1px solid var(--border); padding:3px 8px; }
+    .dr.zebra{ background:var(--primary-wash); }
+    .dr dt{ margin:0; font-size:.8125rem; color:var(--muted); }
+    .dr dd{ margin:0 0 0 auto; font-family:var(--font-mono); font-variant-numeric:tabular-nums; letter-spacing:-.03em; font-size:.875rem; font-weight:500; color:var(--primary-deep); }
+
+    /* sign-off */
+    .signoff{ display:grid; grid-template-columns:repeat(3,1fr); gap:32px; border-top:2px solid var(--primary); padding-top:24px; margin-top:8px; break-inside:avoid; }
+    @media(max-width:560px){ .signoff{ grid-template-columns:1fr; gap:18px; } }
+    .sign .sline{ height:2rem; border-bottom:1px solid var(--primary); }
+    .sign .slbl{ margin-top:8px; }
+
+    /* footer */
+    footer{ margin-top:32px; border-top:1px solid var(--border); padding-top:12px; break-inside:avoid; }
+    footer p{ max-width:38rem; font-size:.75rem; line-height:1.7; color:var(--muted); margin:0; }
+    .foot-strip{ display:flex; justify-content:space-between; gap:16px; border-top:2px solid var(--primary); padding-top:8px; margin-top:16px; }
+
+    .loading{ font-family:var(--font-mono); font-size:.8125rem; color:var(--muted); padding:8px; }
+    .note{ background:var(--primary-wash); border:1px solid var(--border); border-left:4px solid var(--primary); color:var(--primary-deep); font-size:.8125rem; padding:8px 12px; margin-bottom:16px; }
+
+    /* PRINT — A4 portrait white paper */
+    @page{ size:A4 portrait; margin:10mm 10mm 9mm; }
     @media print{
-      @page{ size:A4; margin:12mm; }
-      html,body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      html,body{ background:#fff !important; font-size:8.6pt; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
       body.shg-has-nav{ padding-right:0 !important; }
-      .shg-nav,.shg-nav-open,.filters,#noteBox,.no-print{ display:none !important; }
-      .wrap{ max-width:100% !important; margin:0 !important; padding:0 4mm !important; }
-      .card,.sec,.hero,.kcard{ box-shadow:none; page-break-inside:avoid; }
-      .sec h2 .ic,.chip,.hero{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .shg-nav,.shg-nav-open,.toolbar,#noteBox,.no-print{ display:none !important; }
+      main{ max-width:none !important; padding:0 !important; }
+      .sec,.datum,.signoff,header,footer{ break-inside:avoid; page-break-inside:avoid; }
     }
   </style>
 </head>
 <body>
 ${navSidebar('weekly')}
-  <div class="wrap">
-    <header class="masthead">
-      <div class="mh-brand">
-        <div class="mh-logo"><i class="fas fa-calendar-week"></i></div>
-        <div class="mh-org">
-          <div class="mh-org-name">SAYE Uganda</div>
-          <div class="mh-org-tag">Monitoring, Evaluation &amp; Learning</div>
-        </div>
-      </div>
-      <div class="mh-titleblock">
-        <div class="mh-doctype">Weekly Field Report</div>
-        <h1 class="mh-title">Weekly Highlights</h1>
-      </div>
-      <div class="mh-meta">
-        <div><span>Cluster</span><b id="mhCluster">Iganga</b></div>
-        <div><span>Week</span><b id="mhWeek">—</b></div>
-        <div><span>Generated</span><b id="mhDate">—</b></div>
-      </div>
-    </header>
-    <p class="sub">Monday → Sunday summary of all indicators for the selected cluster, disaggregated by <b>female</b> and <b>persons with disabilities (PWD)</b>. Prepared for weekly review and sharing.</p>
-
-    <div class="filters">
+  <main>
+    <div class="toolbar no-print">
       <div class="fld"><label>Cluster</label>
         <select id="cluster">${clusterOptions('iganga')}</select></div>
       <div class="fld"><label>Week from (Mon)</label><input type="date" id="from" /></div>
       <div class="fld"><label>Week to (Sun)</label><input type="date" id="to" /></div>
-      <button class="btn" id="apply"><i class="fas fa-filter"></i> Apply</button>
+      <button class="btn" id="apply">Apply</button>
       <button class="btn ghost" id="thisweek">This week</button>
       <button class="btn ghost" id="reset">All time</button>
-      <button class="btn ghost" id="printBtn"><i class="fas fa-file-pdf" style="color:#c0392b"></i> Print / PDF</button>
+      <button class="btn" id="printBtn">Print / Save PDF</button>
     </div>
 
     <div id="noteBox"></div>
 
-    <div class="periodband">
-      <div class="pb-left"><i class="fas fa-calendar-day"></i> <span id="heroTtl">—</span></div>
-      <div class="pb-right" id="heroMeta">Loading…</div>
-    </div>
-
-    <div class="kstrip">
-      <div class="card kcard"><div class="kt">Youth Reached / Trained</div><div class="kv" id="kTrained">—</div><div class="ks">distinct participants trained</div></div>
-      <div class="card kcard"><div class="kt">SHGs Formed</div><div class="kv" id="kShgs">—</div><div class="ks">new groups profiled</div></div>
-      <div class="card kcard"><div class="kt">Savings Mobilized</div><div class="kv" id="kSavings">—</div><div class="ks">UGX (ISLA amount saved)</div></div>
-      <div class="card kcard"><div class="kt">Leverage Raised</div><div class="kv" id="kLev">—</div><div class="ks">UGX local contributions</div></div>
-    </div>
-
-    <div id="narrative"></div>
-
-    <footer class="docfoot">
-      <div class="df-left">
-        <div><b>Prepared by</b> the SAYE Uganda MEL team</div>
-        <div class="df-src">Sources: youth attendance &amp; training register, SHG profiling, production, sales, poultry and ISLA records. Figures cover the selected week and cluster; gender source is the participant register.</div>
+    <header>
+      <div class="mast-bar"></div>
+      <div class="mast-row">
+        <div>
+          <div class="label" style="color:var(--primary)">Monitoring, Evaluation &amp; Learning</div>
+          <div class="mast-org">SAYE Uganda</div>
+        </div>
+        <div class="mast-right">
+          <div class="mast-badge">Weekly Field Report</div>
+          <div class="mast-sub" id="mhClusterLabel">Iganga Cluster</div>
+        </div>
       </div>
-      <div class="df-right">
-        <div>SAYE Uganda &middot; Weekly Report</div>
-        <div id="dfStamp" class="df-src">—</div>
+    </header>
+
+    <div class="metarow">
+      <dl class="metalist">
+        <div class="meta"><dt class="label">Cluster</dt><dd id="mhCluster">Iganga</dd></div>
+        <div class="meta"><dt class="label">Week</dt><dd id="mhWeek">—</dd></div>
+        <div class="meta"><dt class="label">Generated</dt><dd id="mhDate">—</dd></div>
+      </dl>
+      <p class="intro">
+        <span class="dropcap">M</span>onday to Sunday summary of all indicators for the selected cluster,
+        disaggregated by female participants and persons with disabilities. Prepared for weekly review and circulation.
+      </p>
+    </div>
+
+    <div class="datums">
+      <div class="datum"><div class="dn">i</div><div class="dv" id="kTrained">—</div><div class="dl">Youth reached / trained</div><div class="dnote">distinct participants</div></div>
+      <div class="datum"><div class="dn">ii</div><div class="dv" id="kShgs">—</div><div class="dl">SHGs formed</div><div class="dnote">new groups profiled</div></div>
+      <div class="datum"><div class="dn">iii</div><div class="dv" id="kSavings">—</div><div class="dl">Savings mobilized</div><div class="dnote">UGX, ISLA amount saved</div></div>
+      <div class="datum"><div class="dn">iv</div><div class="dv" id="kLev">—</div><div class="dl">Leverage raised</div><div class="dnote">UGX, local contributions</div></div>
+    </div>
+
+    <div class="roa">Record of activity</div>
+    <div id="narrative"><div class="loading">Loading…</div></div>
+
+    <footer>
+      <p>Prepared by the SAYE Uganda MEL team. Sources: youth attendance and training register,
+      SHG profiling, production, sales, poultry and ISLA records. Figures cover the selected week and cluster;
+      gender source is the participant register.</p>
+      <div class="foot-strip label" style="color:var(--primary)">
+        <span>SAYE Uganda · Weekly Report</span>
+        <span id="dfStamp">—</span>
       </div>
     </footer>
-  </div>
+  </main>
 
 <script>
 const CLUSTER_DISTRICTS = {
@@ -182,15 +200,15 @@ const CLUSTER_DISTRICTS = {
   central:['MUKONO','BUIKWE','KAYUNGA']
 };
 const CLUSTER_LABEL = { iganga:'Iganga Cluster', kamuli:'Kamuli Cluster', bugiri:'Bugiri Cluster', central:'Central Cluster', all:'All Clusters' };
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => (n==null||isNaN(n)) ? '0' : Math.round(Number(n)).toLocaleString();
 function ugx(n){ n=Number(n)||0; if(n>=1e9) return 'UGX '+(n/1e9).toFixed(2)+'B'; if(n>=1e6) return 'UGX '+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K'; return 'UGX '+fmt(n); }
-// Female / PWD (disability) disaggregation string, e.g. "5,198 female · 421 PWDs".
+// compact figure for the headline Datum cards (e.g. 12.3M)
+function compact(n){ n=Number(n)||0; if(n>=1e9) return (n/1e9).toFixed(2)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(0)+'K'; return fmt(n); }
 function dis(female, pwd){ return fmt(female)+' female · '+fmt(pwd)+' PWDs'; }
-function pct(part, whole){ part=Number(part)||0; whole=Number(whole)||0; return whole>0 ? Math.round(100*part/whole)+'%' : '0%'; }
 
-// Monday of the current week + Sunday
 function weekBounds(){
-  const d=new Date(); const day=(d.getDay()+6)%7; // 0=Mon
+  const d=new Date(); const day=(d.getDay()+6)%7;
   const mon=new Date(d); mon.setDate(d.getDate()-day);
   const sun=new Date(mon); sun.setDate(mon.getDate()+6);
   const iso=x=>x.toISOString().slice(0,10);
@@ -198,94 +216,98 @@ function weekBounds(){
 }
 function prettyDate(s){ if(!s) return ''; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
 
-function sec(color, icon, title, bodyHtml){
-  return '<section class="card sec"><h2><span class="ic" style="background:'+color+'"><i class="fas '+icon+'"></i></span>'+title+'</h2>'+bodyHtml+'</section>';
+// Editorial numbered section: title / prose / hairline zebra data table.
+function section(n, title, proseHtml, rows){
+  const dl = rows.map((r,i)=>'<div class="dr'+(i%2===0?' zebra':'')+'"><dt>'+esc(r[0])+'</dt><dd>'+esc(r[1])+'</dd></div>').join('');
+  return '<section class="sec">'+
+    '<div class="sec-head"><div class="sec-n">'+n+'</div><h2 class="sec-title">'+title+'</h2></div>'+
+    '<div class="sec-prose"><p>'+proseHtml+'</p></div>'+
+    '<div class="sec-data"><dl class="sec-dl">'+dl+'</dl></div>'+
+  '</section>';
 }
+function em(s){ return '<span class="em">'+s+'</span>'; }
 
 function buildNarrative(d, clusterLabel, yiw){
   const p=d.profiling||{}, dist=d.distribution||{}, prod=d.production||{}, poul=d.poultry||{}, hs=d.hort_sales||{}, isla=d.isla||{}, lev=d.leverage||{};
   const trBy=d.training_by||[]; const trained=d.training_total||0;
   let out='';
 
-  // Profiling & SHG Formation
-  out += sec('var(--amber)','fa-users','Profiling & SHG Formation',
-    '<p>The '+clusterLabel+' registered <b>'+fmt(p.shgs_formed)+' SHGs</b> during the period, profiling a total of <b>'+fmt(p.youth_profiled)+' youth</b> ('+fmt(p.female_profiled)+' female, '+fmt(p.male_profiled)+' male).</p>'+
-    '<div class="chips"><span class="chip">SHGs formed <b>'+fmt(p.shgs_formed)+'</b></span><span class="chip">Youth profiled <b>'+fmt(p.youth_profiled)+'</b></span><span class="chip">Female <b>'+fmt(p.female_profiled)+'</b></span><span class="chip">Male <b>'+fmt(p.male_profiled)+'</b></span></div>');
+  // 01 Profiling & SHG Formation
+  out += section('01','Profiling &amp; SHG Formation',
+    'The '+esc(clusterLabel)+' registered '+em(fmt(p.shgs_formed)+' SHGs')+' during the period, profiling a total of '+
+    em(fmt(p.youth_profiled)+' youth')+' ('+fmt(p.female_profiled)+' female, '+fmt(p.male_profiled)+' male).',
+    [['SHGs formed', fmt(p.shgs_formed)],['Youth profiled', fmt(p.youth_profiled)],['Female', fmt(p.female_profiled)],['Male', fmt(p.male_profiled)]]);
 
-  // Training
-  let trRows = trBy.slice(0,10).map(t=>'<tr><td>'+(t.type||'—')+'</td><td class="n">'+fmt(t.n)+'</td></tr>').join('');
-  if(!trRows) trRows='<tr><td colspan="2" class="loading">No trainings recorded.</td></tr>';
-  out += sec('var(--blue)','fa-chalkboard-user','Training by Frontliners',
-    '<p>A total of <b>'+fmt(trained)+' youth</b> were trained across '+fmt(trBy.length)+' training areas. Breakdown by area:</p>'+
-    '<table class="trtable"><tbody>'+trRows+'</tbody></table>');
+  // 02 Training
+  const trRows = trBy.slice(0,8).map(t=>[String(t.type||'—'), fmt(t.n)]);
+  const trBody = trRows.length ? [['Youth trained', fmt(trained)],['Training areas', fmt(trBy.length)]].concat(trRows) : [['Youth trained', fmt(trained)],['Training areas', fmt(trBy.length)]];
+  out += section('02','Training by Frontliners',
+    'A total of '+em(fmt(trained)+' youth')+' were trained across '+em(fmt(trBy.length)+' training areas')+'.'+(trRows.length?' Breakdown by area shown alongside.':' No trainings were recorded for this week.'),
+    trBody);
 
-  // Distribution — say WHAT was distributed (material types) rather than opaque
-  // "N distribution lines". Falls back gracefully if no items are available.
+  // 03 Distribution
   const distItems = (dist.items && String(dist.items).trim()) ? String(dist.items) : '';
-  out += sec('var(--green-2)','fa-box-open','Distribution to Participants',
-    '<p>'+(distItems
-      ? '<b>'+distItems+'</b> were distributed to '
-      : 'Materials were distributed to ')
-    +'<b>'+fmt(dist.participants)+' participants</b> across <b>'+fmt(dist.shgs)+' SHGs</b> during the period.</p>');
+  out += section('03','Distribution to Participants',
+    (distItems ? em(esc(distItems))+' were distributed to ' : 'Materials were distributed to ')+
+    em(fmt(dist.participants)+' participants')+' across '+em(fmt(dist.shgs)+' SHGs')+' during the period.',
+    [['Participants', fmt(dist.participants)],['SHGs reached', fmt(dist.shgs)]]);
 
-  // Production & Marketing — with female/PWD disaggregation + WHAT was sold (kg/pieces).
+  // 04 Production & Marketing
   const hsItems = (hs.items && String(hs.items).trim()) ? String(hs.items) : '';
-  out += sec('var(--green)','fa-seedling','Production & Marketing',
-    '<p>In production, <b>'+fmt(prod.youth)+' youth</b> ('+dis(prod.female, prod.pwd)+') from <b>'+fmt(prod.shgs)+' SHGs</b> were active across '+fmt(prod.districts)+' districts ('+(prod.district_list||'—')+'). '+
-    'Horticulture/oilseed marketing engaged <b>'+fmt(hs.youth)+' youth sellers</b> ('+dis(hs.female, hs.pwd)+') generating <b>'+ugx(hs.value)+'</b>.'+
-    (hsItems ? ' Produce sold: <b>'+hsItems+'</b>.' : '')+'</p>'+
-    '<div class="chips">'+
-      '<span class="chip">Prod. youth <b>'+fmt(prod.youth)+'</b></span>'+
-      '<span class="chip">Female <b>'+fmt(prod.female)+'</b></span>'+
-      '<span class="chip">PWDs <b>'+fmt(prod.pwd)+'</b></span>'+
-      '<span class="chip">Youth sellers <b>'+fmt(hs.youth)+'</b></span>'+
-      '<span class="chip">Sellers · Female <b>'+fmt(hs.female)+'</b></span>'+
-      '<span class="chip">Sellers · PWDs <b>'+fmt(hs.pwd)+'</b></span>'+
-      '<span class="chip">Hort. sales <b>'+ugx(hs.value)+'</b></span>'+
-    '</div>');
+  out += section('04','Production &amp; Marketing',
+    'In production, '+em(fmt(prod.youth)+' youth')+' ('+dis(prod.female, prod.pwd)+') from '+em(fmt(prod.shgs)+' SHGs')+
+    ' were active across '+fmt(prod.districts)+' districts ('+esc(prod.district_list||'—')+'). '+
+    'Horticulture and oilseed marketing engaged '+em(fmt(hs.youth)+' youth sellers')+' ('+dis(hs.female, hs.pwd)+') generating '+em(ugx(hs.value))+'.'+
+    (hsItems ? ' Produce sold: '+em(esc(hsItems))+'.' : ''),
+    [['Production youth', fmt(prod.youth)],['Female', fmt(prod.female)],['PWDs', fmt(prod.pwd)],
+     ['Youth sellers', fmt(hs.youth)],['Sellers · female', fmt(hs.female)],['Sellers · PWDs', fmt(hs.pwd)],
+     ['Horticulture sales', ugx(hs.value)]]);
 
-  // Poultry Sales — with female/PWD disaggregation.
-  out += sec('var(--amber)','fa-egg','Poultry Sales',
-    '<p><b>'+fmt(poul.birds_sold)+' birds</b> were sold by <b>'+fmt(poul.youth)+' youth</b> ('+dis(poul.female, poul.pwd)+') across <b>'+fmt(poul.shgs)+' SHGs</b>, earning <b>'+ugx(poul.value)+'</b>.</p>'+
-    '<div class="chips"><span class="chip">Youth sellers <b>'+fmt(poul.youth)+'</b></span><span class="chip">Female <b>'+fmt(poul.female)+'</b></span><span class="chip">PWDs <b>'+fmt(poul.pwd)+'</b></span><span class="chip">Birds sold <b>'+fmt(poul.birds_sold)+'</b></span></div>');
+  // 05 Poultry Sales
+  out += section('05','Poultry Sales',
+    em(fmt(poul.birds_sold)+' birds')+' were sold by '+em(fmt(poul.youth)+' youth')+' ('+dis(poul.female, poul.pwd)+') across '+
+    em(fmt(poul.shgs)+' SHGs')+', earning '+em(ugx(poul.value))+'.',
+    [['Birds sold', fmt(poul.birds_sold)],['Youth sellers', fmt(poul.youth)],['Female', fmt(poul.female)],
+     ['PWDs', fmt(poul.pwd)],['SHGs involved', fmt(poul.shgs)],['Earnings', ugx(poul.value)]]);
 
-  // Access to Finance / ISLA — now includes how many youth are saving.
-  out += sec('var(--purple)','fa-piggy-bank','Access to Finance (ISLA)',
-    '<p><b>'+fmt(isla.shgs)+' SHGs</b> mobilized <b>'+ugx(isla.savings)+'</b> in savings from <b>'+fmt(isla.savers)+' youth savers</b>, with <b>'+ugx(isla.loans_value)+'</b> in loans given to <b>'+fmt(isla.loans_count)+'</b> youth.</p>'+
-    '<div class="chips"><span class="chip">Youth saving <b>'+fmt(isla.savers)+'</b></span><span class="chip">Amount saved <b>'+ugx(isla.savings)+'</b></span><span class="chip">Loans given <b>'+ugx(isla.loans_value)+'</b></span><span class="chip">Youth who got loans <b>'+fmt(isla.loans_count)+'</b></span></div>');
+  // 06 Access to Finance (ISLA)
+  out += section('06','Access to Finance',
+    'Through ISLA, '+em(fmt(isla.shgs)+' SHGs')+' mobilized '+em(ugx(isla.savings))+' in savings from '+
+    em(fmt(isla.savers)+' youth savers')+', with '+em(ugx(isla.loans_value))+' in loans issued to '+em(fmt(isla.loans_count)+' youth')+'.',
+    [['SHGs saving', fmt(isla.shgs)],['Youth saving', fmt(isla.savers)],['Amount saved', ugx(isla.savings)],
+     ['Loans given', ugx(isla.loans_value)],['Youth with loans', fmt(isla.loans_count)]]);
 
-  // Youth in Work (job tracking)
+  // 07 Youth in Work
   if(yiw){
     const k=yiw.kpi||{}; const bd=yiw.byDistrict||[];
     const yiwTgt=bd.reduce((s,r)=>s+(Number(r.yiwTarget)||0),0);
     const empPct = yiwTgt>0 ? Math.round(100*(Number(k.employedYouth)||0)/yiwTgt)+'%' : '—';
-    out += sec('var(--blue)','fa-briefcase','Youth in Work',
-      '<p>During the period, <b>'+fmt(k.youthTracked)+' youth</b> were job-tracked, of whom <b>'+fmt(k.employedYouth)+'</b> are <b>employed</b> (Youth in Work) — <b>'+fmt(k.selfEmployed)+'</b> self-employed and <b>'+fmt(k.wageEmployed)+'</b> wage-employed, generating <b>'+ugx(k.totalIncome)+'</b> in income. This is <b>'+empPct+'</b> of the Youth-in-Work target ('+fmt(yiwTgt)+', i.e. 70% of the cluster reach target).</p>'+
-      '<div class="chips"><span class="chip">Job-tracked <b>'+fmt(k.youthTracked)+'</b></span><span class="chip">Employed (YiW) <b>'+fmt(k.employedYouth)+'</b></span><span class="chip">YiW target <b>'+fmt(yiwTgt)+'</b></span><span class="chip">Self-employed <b>'+fmt(k.selfEmployed)+'</b></span><span class="chip">Wage-employed <b>'+fmt(k.wageEmployed)+'</b></span><span class="chip">Income <b>'+ugx(k.totalIncome)+'</b></span></div>');
+    out += section('07','Youth in Work',
+      'During the period, '+em(fmt(k.youthTracked)+' youth')+' were job-tracked, of whom '+em(fmt(k.employedYouth))+' are employed — '+
+      fmt(k.selfEmployed)+' self-employed and '+fmt(k.wageEmployed)+' wage-employed, generating '+em(ugx(k.totalIncome))+' in income. '+
+      'This is '+em(empPct)+' of the Youth-in-Work target of '+fmt(yiwTgt)+', being 70% of the cluster reach target.',
+      [['Job-tracked', fmt(k.youthTracked)],['Employed (YiW)', fmt(k.employedYouth)],['Self-employed', fmt(k.selfEmployed)],
+       ['Wage-employed', fmt(k.wageEmployed)],['Income', ugx(k.totalIncome)],['YiW target', fmt(yiwTgt)]]);
   }
 
-  // Leverage
-  out += sec('var(--teal)','fa-handshake','Leverage Contributions',
-    '<p>Local leverage contributions totalled <b>'+ugx(lev.amount)+'</b> during the reporting period.</p>');
+  // 08 Leverage Contributions
+  out += section('08','Leverage Contributions',
+    'Local leverage contributions totalled '+em(ugx(lev.amount))+' during the reporting period.',
+    [['Total leverage', ugx(lev.amount)]]);
 
-  // ---- SIGN-OFF + MEL STAMP ----
-  out += '<section class="card"><div class="signoff">'+
-    '<div class="sign"><div class="sline"></div><div class="slbl">Prepared by (M&amp;E)</div></div>'+
-    '<div class="sign"><div class="sline"></div><div class="slbl">Cluster Supervisor</div></div>'+
-    '<div class="stamp"><div class="stamp-inner">'+
-      '<div class="stamp-top">SAYE UGANDA</div>'+
-      '<div class="stamp-mid">M &amp; E VERIFIED</div>'+
-      '<div class="stamp-dt">'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'+
-      '<div class="stamp-bot">MONITORING · EVALUATION · LEARNING</div>'+
-    '</div></div>'+
-  '</div></section>';
+  // sign-off
+  out += '<div class="signoff">'+
+    ['Prepared by (M&amp;E)','Cluster supervisor','Verified'].map(role=>
+      '<div class="sign"><div class="sline"></div><div class="slbl label" style="color:var(--primary)">'+role+'</div></div>').join('')+
+  '</div>';
 
   document.getElementById('narrative').innerHTML = out;
-  // KPIs
-  document.getElementById('kTrained').textContent = fmt(trained);
-  document.getElementById('kShgs').textContent = fmt(p.shgs_formed);
-  document.getElementById('kSavings').textContent = ugx(isla.savings);
-  document.getElementById('kLev').textContent = ugx(lev.amount);
+
+  // headline Datum figures
+  document.getElementById('kTrained').textContent = compact(trained);
+  document.getElementById('kShgs').textContent = compact(p.shgs_formed);
+  document.getElementById('kSavings').textContent = compact(isla.savings);
+  document.getElementById('kLev').textContent = compact(lev.amount);
 }
 
 let loading=false;
@@ -296,11 +318,11 @@ async function load(){
   const to=document.getElementById('to').value;
   const districts=CLUSTER_DISTRICTS[cl]||[];
   const label=CLUSTER_LABEL[cl]||'Cluster';
-  document.getElementById('heroTtl').textContent=label;
-  document.getElementById('heroMeta').textContent='Loading…';
   const nowStr = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   const setTxt=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
-  setTxt('mhCluster',label); setTxt('mhDate',nowStr);
+  setTxt('mhClusterLabel', label);
+  setTxt('mhCluster', label.replace(/ Cluster$/,''));
+  setTxt('mhDate', nowStr);
   setTxt('mhWeek', (from&&to) ? (prettyDate(from)+' – '+prettyDate(to)) : 'All time');
   setTxt('dfStamp','Generated '+nowStr);
   const qs=new URLSearchParams();
@@ -314,13 +336,10 @@ async function load(){
     ]);
     const d=await res.json();
     let yiw=null; try{ if(yiwRes && yiwRes.ok) yiw=await yiwRes.json(); }catch(e){}
-    const range = (from&&to) ? (prettyDate(from)+' → '+prettyDate(to)) : 'All available data';
-    document.getElementById('heroMeta').textContent = range;
     buildNarrative(d, label, yiw);
     document.getElementById('noteBox').innerHTML='';
   }catch(e){
-    document.getElementById('heroMeta').textContent='Error loading data';
-    document.getElementById('narrative').innerHTML='<section class="card sec"><p class="loading">Failed to load weekly report.</p></section>';
+    document.getElementById('narrative').innerHTML='<div class="loading">Failed to load weekly report.</div>';
   }
   loading=false;
 }
@@ -329,7 +348,6 @@ document.getElementById('cluster').addEventListener('change', load);
 document.getElementById('thisweek').addEventListener('click', ()=>{ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; load(); });
 document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
 document.getElementById('printBtn').addEventListener('click', ()=>window.print());
-// default to current week
 (function(){ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; })();
 load();
 </script>
