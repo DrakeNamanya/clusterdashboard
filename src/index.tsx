@@ -1109,6 +1109,46 @@ app.get('/favicon.ico', (c) =>
 app.get('/health', (c) => c.json({ ok: true, schemas: SCHEMAS.map((s) => s.key) }));
 
 // ---------------------------------------------------------------------------
+// Serve the canonical 5-minute cron driver as plain text, so it can be
+// installed on the VM with a single `curl -o` (no error-prone heredoc paste).
+//   curl -s -o /home/ubuntu/mis-cron.sh https://shg-data-cleaner.pages.dev/api/cron-script
+//   chmod +x /home/ubuntu/mis-cron.sh
+// ---------------------------------------------------------------------------
+const CRON_SCRIPT = `#!/usr/bin/env bash
+# SHG dashboard 5-minute refresh driver. Installed via /api/cron-script.
+set -u
+
+BASE="https://shg-data-cleaner.pages.dev"
+LOCK=/tmp/mis-cron.lock
+
+# Prevent overlapping runs if one cycle runs long.
+exec 9>"$LOCK"
+flock -n 9 || { echo "$(date -u) SKIP: previous run still active"; exit 0; }
+
+echo "$(date -u) === cron start ==="
+
+# 1) Pull new all_trainees data (freshness pass = page 1 forward).
+echo -n "run: "; curl -s --max-time 110 "$BASE/api/mis-sync/run"; echo
+
+# 2) Pull new data for each mapped view ONE AT A TIME (avoids Cloudflare 1102).
+for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking participants distribution_form_v2 local_leverage_fund_contribution_form; do
+  echo -n "view $v: "; curl -s --max-time 110 "$BASE/api/mis-sync/view?key=$v"; echo
+done
+
+# 3) Rebuild each dashboard's fact tables (light clusters every cycle).
+#    (distribution + itemsnotsold are omitted until participants_shg is fixed.)
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage shgdistribution jobtracking; do
+  echo -n "refresh $c: "; curl -s --max-time 110 "$BASE/api/refresh-all?only=$c"; echo
+done
+
+echo "$(date -u) === cron done ==="
+`;
+
+app.get('/api/cron-script', (c) =>
+  c.body(CRON_SCRIPT, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
+);
+
+// ---------------------------------------------------------------------------
 // Heifer SAYE MIS sync — pull all_trainees_view straight from the MIS.
 // Replaces the failing 76MB manual upload. Runs in slices (Cloudflare CPU
 // limits) and is idempotent by dedup_key. A Cron trigger advances the cursor.
