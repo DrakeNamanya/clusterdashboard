@@ -316,6 +316,30 @@ app.get('/api/stats', async (c) => {
   });
 });
 
+// Live freshness: when did the MIS sync last run, and how many rows do we hold?
+// Surfaced as a "Data live — synced X min ago" badge so users can SEE the
+// 5-minute pipeline is alive even when distinct-count KPIs move slowly.
+app.get('/api/freshness', async (c) => {
+  try {
+    const st = await misSyncStatus(storeEnv(c));
+    const lastRun: string | null = (st as any).last_run ?? null;
+    let ageMinutes: number | null = null;
+    if (lastRun) ageMinutes = Math.max(0, Math.round((Date.now() - new Date(lastRun).getTime()) / 60000));
+    return c.json({
+      ok: true,
+      last_run: lastRun,
+      age_minutes: ageMinutes,
+      total_records: (st as any).total_records ?? null,
+      at_rows: (st as any).atRowsCount ?? null,
+      last_upserted: (st as any).last_upserted ?? null,
+      // "live" if the cron ran within the last ~12 min (2+ missed cycles = stale)
+      live: ageMinutes !== null && ageMinutes <= 12,
+    }, 200, { 'Cache-Control': 'no-store' });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 200, { 'Cache-Control': 'no-store' });
+  }
+});
+
 app.get('/api/data/:key', async (c) => {
   const schema = SCHEMA_BY_KEY[c.req.param('key')];
   if (!schema) return c.json({ error: 'Unknown table' }, 404);

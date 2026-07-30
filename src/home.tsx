@@ -158,6 +158,12 @@ ${navSidebar('home')}
           <div class="hi">Welcome back, Drake <span style="font-weight:400">👋</span></div>
           <div class="hi-sub"><span id="kpiStamp">Here's what's happening with SAYE Uganda today.</span></div>
         </div>
+        <span id="liveBadge" title="Live data from the MIS 5-minute sync"
+              style="display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:999px;
+                     background:#eef7f1;border:1px solid #cfe8da;font-size:12px;font-weight:700;color:#0a4733;">
+          <span id="liveDot" style="width:8px;height:8px;border-radius:50%;background:#9aa;display:inline-block"></span>
+          <span id="liveText">checking…</span>
+        </span>
         <button class="ctl primary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
         <button class="ctl" id="refreshBtn" title="Refresh KPIs"><i class="fas fa-rotate"></i></button>
       </div>
@@ -729,6 +735,32 @@ ${navSidebar('home')}
     renderCards();
     document.getElementById('refreshBtn').addEventListener('click', loadAll);
     document.getElementById('exportBtn').addEventListener('click', ()=>{ window.location.href='/tools'; });
+
+    // ---- Live freshness badge + auto-refresh -----------------------------
+    // Polls /api/freshness so users can SEE the 5-minute pipeline is alive
+    // (distinct-count KPIs move slowly, so a visible heartbeat matters).
+    // When a new sync is detected, the KPIs re-fetch automatically.
+    let _lastRunSeen = null;
+    async function pollFreshness(){
+      const dot=document.getElementById('liveDot');
+      const txt=document.getElementById('liveText');
+      try{
+        const r=await fetch('/api/freshness?_='+Date.now(),{cache:'no-store'});
+        const d=await r.json();
+        if(!d.ok || d.age_minutes===null){ dot.style.background='#e0a800'; txt.textContent='sync unknown'; return; }
+        const age=d.age_minutes;
+        if(d.live){ dot.style.background='#00A859'; }
+        else { dot.style.background='#E8556B'; }
+        txt.textContent = d.live
+          ? ('Live · synced '+(age<1?'just now':age+' min ago'))
+          : ('Stale · last synced '+age+' min ago');
+        // If the sync advanced since we last looked, pull fresh KPI numbers.
+        if(_lastRunSeen && d.last_run && d.last_run!==_lastRunSeen){ loadAll(); }
+        _lastRunSeen = d.last_run;
+      }catch(e){ dot.style.background='#e0a800'; txt.textContent='sync check failed'; }
+    }
+    pollFreshness();
+    setInterval(pollFreshness, 60000);   // re-check every minute
     // filter controls
     // ---- Month quick-picker ----------------------------------------------
     // Populate a "pick a month" dropdown spanning the reporting year (Oct 2025 –
