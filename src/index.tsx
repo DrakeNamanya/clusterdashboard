@@ -1138,7 +1138,11 @@ app.all('/api/mis-sync/run', async (c) => {
     const pageSize = q.pageSize ? parseInt(q.pageSize, 10) : undefined;
     const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
     const startPage = q.startPage ? parseInt(q.startPage, 10) : undefined;
-    const res = await misSyncSlice(storeEnv(c), { pageSize, maxPages, startPage });
+    // Default to a FRESHNESS pass (page 1 forward) so the existing VM cron —
+    // which calls this plainly with no params — keeps KPIs current every cycle.
+    // Opt out with ?fresh=0 (or provide ?startPage=N) to run a backfill slice.
+    const fresh = startPage ? false : !(q.fresh === 'false' || q.fresh === '0');
+    const res = await misSyncSlice(storeEnv(c), { pageSize, maxPages, startPage, fresh });
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -1166,7 +1170,8 @@ app.all('/api/mis-sync/view', async (c) => {
     const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
     const startPage = q.startPage ? parseInt(q.startPage, 10) : undefined;
     const replace = q.replace === 'true' || q.replace === '1';
-    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace });
+    const fresh = q.fresh === 'true' || q.fresh === '1';
+    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace, fresh });
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -1180,7 +1185,10 @@ app.all('/api/mis-sync/all', async (c) => {
     const pageSize = q.pageSize ? parseInt(q.pageSize, 10) : undefined;
     const maxPages = q.maxPages ? parseInt(q.maxPages, 10) : undefined;
     const replace = q.replace === 'true' || q.replace === '1';
-    const res = await misSyncAllViews(storeEnv(c), { pageSize, maxPages, replace });
+    // Default to a FRESHNESS pass so the existing VM cron keeps every view
+    // current each cycle. Opt out with ?fresh=0 to run a backfill slice.
+    const fresh = replace ? false : !(q.fresh === 'false' || q.fresh === '0');
+    const res = await misSyncAllViews(storeEnv(c), { pageSize, maxPages, replace, fresh });
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -1193,15 +1201,31 @@ app.all('/api/mis-sync/all', async (c) => {
 async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
   ctx.waitUntil(
     (async () => {
+      // 1) FRESHNESS PASS — always sweep page 1 forward so brand-new submissions
+      //    (which land on page 1) are picked up every cycle, independent of the
+      //    deep-backfill cursor. This is what keeps the KPIs changing every 5 min.
+      try {
+        await misSyncSlice(env, { pageSize: 2000, maxPages: 3, fresh: true });
+      } catch (e) {
+        console.error('MIS all_trainees freshness pass failed:', e);
+      }
+      try {
+        await misSyncAllViews(env, { pageSize: 2000, maxPages: 2, fresh: true });
+      } catch (e) {
+        console.error('MIS multi-view freshness pass failed:', e);
+      }
+      // 2) BACKFILL PASS — advance the historical cursor by one slice to keep
+      //    converging the full dataset. Page-level HTTP 500s are now skipped
+      //    instead of aborting, so a deep bad page can't stall the sync.
       try {
         await misSyncSlice(env, { pageSize: 2000, maxPages: 3 });
       } catch (e) {
-        console.error('MIS all_trainees cron sync failed:', e);
+        console.error('MIS all_trainees backfill sync failed:', e);
       }
       try {
         await misSyncAllViews(env, { pageSize: 2000, maxPages: 2 });
       } catch (e) {
-        console.error('MIS multi-view cron sync failed:', e);
+        console.error('MIS multi-view backfill sync failed:', e);
       }
     })()
   );

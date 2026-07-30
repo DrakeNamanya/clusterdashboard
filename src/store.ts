@@ -2789,7 +2789,7 @@ export interface MisSyncResult {
  */
 export async function misSyncSlice(
   env: Env,
-  opts: { pageSize?: number; maxPages?: number; startPage?: number } = {}
+  opts: { pageSize?: number; maxPages?: number; startPage?: number; fresh?: boolean } = {}
 ): Promise<MisSyncResult> {
   if (!clusterDbUrl(env)) {
     throw new Error('No cluster DB configured (ORACLE_DATABASE_URL) for MIS sync');
@@ -2797,6 +2797,12 @@ export async function misSyncSlice(
   const pageSize = Math.max(1, Math.min(opts.pageSize ?? 2000, 5000));
   const maxPages = Math.max(1, Math.min(opts.maxPages ?? 3, 50));
   const schema = SCHEMA_BY_KEY['all_trainees_view'];
+  // Freshness mode: always sweep from page 1 forward. New submissions land on
+  // page 1 (newest-first-ish ordering on the MIS), and re-reading already-stored
+  // pages is cheap + safe because at_rows dedups on ON CONFLICT DO NOTHING. This
+  // decouples "stay fresh" from the deep-backfill cursor, which historically
+  // walked into deep pages the MIS can no longer serve (HTTP 500 -> stalled sync).
+  const fresh = opts.fresh === true;
 
   const token = await misLogin(env);
   const client = await connectClusterWithRetry(env);
@@ -2809,7 +2815,9 @@ export async function misSyncSlice(
     await ensureSyncState(client);
     // Read cursor (allow explicit override for manual/parallel backfill).
     let page: number;
-    if (opts.startPage && opts.startPage > 0) {
+    if (fresh) {
+      page = 1; // freshness pass ignores the backfill cursor
+    } else if (opts.startPage && opts.startPage > 0) {
       page = opts.startPage;
     } else {
       const st = await client.query(`SELECT next_page, cycles FROM public.mis_sync_state WHERE id=1`);
@@ -2820,7 +2828,22 @@ export async function misSyncSlice(
     const fromPage = page;
 
     for (let i = 0; i < maxPages; i++) {
-      const { rows: rawRows, total } = await misFetchPage(env, token, page, pageSize);
+      // Tolerate a transient/deep-page HTTP 500 from the MIS: skip the offending
+      // page instead of aborting the whole slice, so one bad page can't stall
+      // the cursor forever (root cause of the "numbers frozen" incidents).
+      let rawRows: Record<string, any>[] = [];
+      let total = 0;
+      try {
+        const r = await misFetchPage(env, token, page, pageSize);
+        rawRows = r.rows;
+        total = r.total;
+      } catch (e) {
+        console.error(`misSyncSlice: page ${page} fetch failed, skipping:`, e);
+        if (fresh) break; // freshness pass: stop early, try again next cron tick
+        // backfill pass: skip this page so the cursor keeps moving
+        page += 1;
+        continue;
+      }
       totalRecords = total;
       if (!rawRows.length) {
         // Past the end — wrap to page 1 for the next cycle.
@@ -2881,8 +2904,17 @@ export async function misSyncSlice(
     }
 
     const toPage = page; // next page to fetch
-    // Persist cursor only when using the shared (non-override) cursor.
-    if (!(opts.startPage && opts.startPage > 0)) {
+    // Persist cursor only when using the shared (non-override) backfill cursor.
+    // The freshness pass must NOT move the backfill cursor (it always starts at
+    // page 1); it only records last_run/last_upserted for observability.
+    if (fresh) {
+      await client.query(
+        `UPDATE public.mis_sync_state
+           SET total_records=$1, last_run=now(), last_upserted=$2
+         WHERE id=1`,
+        [totalRecords, upserted]
+      );
+    } else if (!(opts.startPage && opts.startPage > 0)) {
       await client.query(
         `UPDATE public.mis_sync_state
            SET next_page=$1, total_records=$2, last_run=now(), last_upserted=$3, cycles=$4
@@ -3044,7 +3076,7 @@ async function ensureViewSyncState(client: Client): Promise<void> {
 export async function misSyncView(
   env: Env,
   schemaKey: string,
-  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean; fresh?: boolean } = {}
 ): Promise<MisViewSyncResult> {
   const view = MIS_VIEW_MAP[schemaKey];
   if (!view) throw new Error(`No MIS view mapped for schema '${schemaKey}'`);
@@ -3054,6 +3086,9 @@ export async function misSyncView(
 
   const pageSize = Math.max(1, Math.min(opts.pageSize ?? 2000, 5000));
   const maxPages = Math.max(1, Math.min(opts.maxPages ?? 3, 50));
+  // Freshness mode: always sweep page 1 forward (new rows land on page 1),
+  // independent of the deep-backfill cursor. Safe because appendRecords dedups.
+  const fresh = opts.fresh === true;
 
   const token = await misLogin(env);
   const client = await connectClusterWithRetry(env);
@@ -3072,7 +3107,9 @@ export async function misSyncView(
     );
 
     let page: number;
-    if (opts.startPage && opts.startPage > 0) {
+    if (fresh) {
+      page = 1; // freshness pass ignores the backfill cursor
+    } else if (opts.startPage && opts.startPage > 0) {
       page = opts.startPage;
     } else {
       const st = await client.query(
@@ -3096,7 +3133,20 @@ export async function misSyncView(
     }
 
     for (let i = 0; i < maxPages; i++) {
-      const { rows: rawRows, total } = await misFetchViewPage(env, token, view, page, pageSize);
+      // Tolerate a transient/deep-page HTTP 500 from the MIS: skip instead of
+      // aborting, so one bad page can't stall the whole view's cursor.
+      let rawRows: Record<string, any>[] = [];
+      let total = 0;
+      try {
+        const r = await misFetchViewPage(env, token, view, page, pageSize);
+        rawRows = r.rows;
+        total = r.total;
+      } catch (e) {
+        console.error(`misSyncView(${schemaKey}): page ${page} fetch failed, skipping:`, e);
+        if (fresh) break; // freshness pass: retry next cron tick
+        page += 1;
+        continue;
+      }
       totalRecords = total;
       if (!rawRows.length) {
         wrapped = true;
@@ -3136,7 +3186,15 @@ export async function misSyncView(
       page += 1;
     }
 
-    if (!(opts.startPage && opts.startPage > 0)) {
+    if (fresh) {
+      // Freshness pass: record observability only, never move the backfill cursor.
+      await client.query(
+        `UPDATE public.mis_view_sync_state
+           SET total_records=$2, last_run=now(), last_inserted=$3
+         WHERE schema_key=$1`,
+        [schemaKey, totalRecords, inserted]
+      );
+    } else if (!(opts.startPage && opts.startPage > 0)) {
       await client.query(
         `UPDATE public.mis_view_sync_state
            SET next_page=$2, total_records=$3, last_run=now(), last_inserted=$4, cycles=$5
@@ -3166,7 +3224,7 @@ export async function misSyncView(
 /** Sync ALL mapped MIS views one slice each (used by cron + manual "refresh all"). */
 export async function misSyncAllViews(
   env: Env,
-  opts: { pageSize?: number; maxPages?: number; replace?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; replace?: boolean; fresh?: boolean } = {}
 ): Promise<{ ok: boolean; results: MisViewSyncResult[] }> {
   const results: MisViewSyncResult[] = [];
   for (const key of Object.keys(MIS_VIEW_MAP)) {
