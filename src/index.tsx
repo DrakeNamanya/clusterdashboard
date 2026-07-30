@@ -1127,12 +1127,27 @@ flock -n 9 || { echo "$(date -u) SKIP: previous run still active"; exit 0; }
 
 echo "$(date -u) === cron start ==="
 
+# Sync helper: retry up to 3x on a transient MIS 5xx (e.g. "HTTP 502").
+# Brief MIS outages then no longer skip a whole 5-min cycle.
+sync_call() {
+  local label="$1"; local url="$2"; local out=""
+  for attempt in 1 2 3; do
+    out=$(curl -s --max-time 110 "$url")
+    case "$out" in
+      *'HTTP 502'*|*'HTTP 503'*|*'HTTP 504'*|*'Network connection lost'*)
+        echo -n "$label (retry $attempt): "; echo "$out"; sleep 5 ;;
+      *) echo -n "$label: "; echo "$out"; return 0 ;;
+    esac
+  done
+  echo -n "$label (gave up): "; echo "$out"
+}
+
 # 1) Pull new all_trainees data (freshness pass = page 1 forward).
-echo -n "run: "; curl -s --max-time 110 "$BASE/api/mis-sync/run"; echo
+sync_call "run" "$BASE/api/mis-sync/run"
 
 # 2) Pull new data for each mapped view ONE AT A TIME (avoids Cloudflare 1102).
 for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking participants distribution_form_v2 local_leverage_fund_contribution_form; do
-  echo -n "view $v: "; curl -s --max-time 110 "$BASE/api/mis-sync/view?key=$v"; echo
+  sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
 done
 
 # 3) Rebuild each dashboard's fact tables (light clusters every cycle).
