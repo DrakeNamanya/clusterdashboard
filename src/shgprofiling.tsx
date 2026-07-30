@@ -23,77 +23,102 @@ export function renderShgProfiling(base: string, opts: any = {}): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SHG Profiling &amp; Group Statistics</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800;900&family=Bebas+Neue&display=swap" rel="stylesheet" />
   <style>
+    /* Everton design system — royal blue #003399, Bebas Neue display + Barlow body */
     :root{
-      --cream:#FCF8F5; --panel:#FFFFFF; --ink:#28343a; --muted:#7c8a8f;
-      --head:#2f5d6b; --row-alt:#faf1e6; --line:#d9e2e3; --teal:#2f8f9d; --amber:#e08a2b;
+      --cream:#f5f7fd; --panel:#FFFFFF; --ink:#1c2540; --muted:#6a7392;
+      --primary:#003399; --primary-deep:#012366; --primary-soft:#e7ecfb;
+      --head:#003399; --row-alt:#eef2fd; --line:#d8def0;
+      --grad:linear-gradient(135deg,#003399,#2b52c4);
     }
-    body{ background:var(--cream); color:var(--ink); font-family:"Segoe UI",system-ui,-apple-system,sans-serif; }
+    body{ background:var(--cream); color:var(--ink); font-family:"Barlow","Segoe UI",system-ui,-apple-system,sans-serif; }
+    .font-display{ font-family:"Bebas Neue","Barlow",sans-serif; }
     .card{ background:var(--panel); border:1px solid var(--line); border-radius:10px;
-           box-shadow:0 1px 2px rgba(40,60,60,.06); }
-    .ttl{ background:#eef5f6; border-radius:12px; }
+           box-shadow:0 1px 2px rgba(0,51,153,.08), 0 8px 24px -18px rgba(0,51,153,.25); }
+    .hero{ background:var(--grad); color:#fff; border-radius:12px; box-shadow:0 6px 20px -10px rgba(0,51,153,.5); }
+    .ttl{ background:var(--primary-soft); border-radius:12px; }
     .kpi{ position:relative; overflow:hidden; }
-    .kpi::before{ content:''; position:absolute; top:0; left:0; right:0; height:4px; background:var(--amber); }
+    .kpi::before{ content:''; position:absolute; top:0; left:0; right:0; height:4px; background:var(--primary); }
     table{ border-collapse:collapse; width:100%; }
     thead th{ background:var(--head); color:#fff; font-weight:700; font-size:11px;
-              padding:7px 9px; text-align:left; position:sticky; top:0; z-index:2; white-space:nowrap; }
+              padding:8px 9px; text-align:left; position:sticky; top:0; z-index:2; white-space:nowrap;
+              text-transform:uppercase; letter-spacing:.02em; }
     thead th.num{ text-align:right; }
-    tbody td{ padding:5px 9px; font-size:11.5px; vertical-align:top; border-bottom:1px solid #f0e6d8; }
-    tbody td.num{ text-align:right; }
+    tbody td{ padding:5px 9px; font-size:11.5px; vertical-align:top; border-bottom:1px solid var(--line); }
+    tbody td.num{ text-align:right; font-variant-numeric:tabular-nums; }
     tbody tr:nth-child(even) td{ background:var(--row-alt); }
-    tbody tr:hover td{ background:#f4fafb; }
+    tbody tr:hover td{ background:#dfe7fb; }
     tbody tr.total-row td{ background:var(--head) !important; color:#fff; font-weight:700; border-bottom:none; }
     .sortable{ cursor:pointer; user-select:none; }
     .sortable .arrow{ opacity:.7; font-size:9px; margin-left:2px; }
     .dist-item{ display:flex; align-items:center; gap:6px; padding:2px 2px; cursor:pointer; font-size:12px; }
-    .dist-item:hover{ background:var(--cream); border-radius:5px; }
-    .dist-item input{ accent-color:#2f5d6b; width:13px; height:13px; }
+    .dist-item:hover{ background:var(--primary-soft); border-radius:5px; }
+    .dist-item input{ accent-color:var(--primary); width:13px; height:13px; }
     .scrollbar-thin::-webkit-scrollbar{ width:7px; height:7px; }
-    .scrollbar-thin::-webkit-scrollbar-thumb{ background:#c7d4d5; border-radius:3px; }
-    .slbl{ font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); font-weight:700; }
+    .scrollbar-thin::-webkit-scrollbar-thumb{ background:#c3cdec; border-radius:3px; }
+    .slbl{ font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--primary); font-weight:800; }
     .mini-btn{ font-size:9px; padding:2px 4px; border-radius:4px; border:1px solid var(--line); background:#fff; }
-    .mini-btn:hover{ background:var(--cream); }
+    .mini-btn:hover{ background:var(--primary-soft); }
     .mini-search{ width:100%; background:#fff; border:1px solid var(--line); border-radius:5px; padding:2px 6px; font-size:10px; }
-    .vs-badge{ font-size:26px; font-weight:900; color:var(--head); letter-spacing:1px; }
-    input[type=range]{ accent-color:var(--head); }
+    .vs-badge{ font-size:26px; font-weight:900; color:var(--primary); letter-spacing:1px; }
+    input[type=range]{ accent-color:var(--primary); }
+    @media print{
+      @page{ size:A4 landscape; margin:12mm; }
+      html,body{ background:#fff !important; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+      .no-print,.shg-nav,.shg-nav-open{ display:none !important; }
+      thead th{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
   </style>
 </head>
 <body>
 ${navSidebar('shgprofiling')}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
-    <!-- Title + top toolbar -->
-    <div class="flex flex-wrap items-center gap-3 mb-3">
-      <a href="/" class="text-[var(--muted)] hover:text-[var(--ink)]" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
-      <div class="ttl px-4 py-1.5"><h1 class="text-lg md:text-xl font-extrabold tracking-tight">SHG PROFILING AND GROUP STATISTICS</h1></div>
+    <!-- Everton-style gradient hero header -->
+    <header class="hero mb-3 px-5 py-3 flex flex-wrap items-center gap-3">
+      <a href="/" class="text-white/80 hover:text-white" title="Back to Home"><i class="fas fa-arrow-left"></i></a>
+      <h1 class="font-display text-2xl md:text-3xl tracking-wider leading-none">SHG Profiling and Group Statistics</h1>
+      <div class="ml-auto flex flex-wrap items-center gap-2 no-print">
+        <button id="printBtn" class="text-xs font-semibold px-3 py-1.5 rounded-md bg-white text-[var(--primary)] hover:bg-[var(--primary-soft)]">
+          <i class="fas fa-print mr-1"></i> Print / Save as PDF
+        </button>
+        <button id="excelBtn" class="text-xs font-semibold px-3 py-1.5 rounded-md bg-white text-[var(--primary)] hover:bg-[var(--primary-soft)]">
+          <i class="fas fa-file-excel mr-1"></i> Export to Excel
+        </button>
+        <button id="refreshBtn" class="text-xs font-semibold px-3 py-1.5 rounded-md border border-white/40 text-white hover:bg-white/10">
+          <i class="fas fa-rotate mr-1"></i> Refresh
+        </button>
+      </div>
+    </header>
 
+    <!-- Date filter toolbar -->
+    <div class="flex flex-wrap items-center gap-3 mb-3 no-print">
       <div class="flex items-center gap-1.5 card px-3 py-1.5">
         <span class="text-[10px] text-[var(--muted)] uppercase font-bold mr-1">Date created</span>
         <input id="fromDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
         <span class="text-[var(--muted)] text-xs">→</span>
         <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
-        <button data-preset="clear" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] ml-1">All time</button>
-        <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
-        <button data-preset="year" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Year</button>
+        <button data-preset="clear" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--primary-soft)] ml-1">All time</button>
+        <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--primary-soft)]">Month</button>
+        <button data-preset="year" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--primary-soft)]">Year</button>
       </div>
-
-      <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)] ml-auto">
-        <i class="fas fa-rotate mr-1"></i> Refresh
-      </button>
     </div>
 
     <!-- KPI cards (VS) + numeric range -->
     <div class="grid grid-cols-12 gap-3 mb-3 items-stretch">
       <div class="col-span-12 md:col-span-8 grid grid-cols-[1fr_auto_1fr] gap-3 items-center">
         <div class="card kpi p-3">
-          <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">NewSHGs_Profiles</div>
-          <div id="kpiProfiles" class="text-3xl font-extrabold mt-0.5">–</div>
+          <div class="text-[10px] uppercase tracking-widest text-[var(--muted)] font-bold">NewSHGs_Profiles</div>
+          <div id="kpiProfiles" class="font-display text-4xl tracking-wide mt-0.5 text-[var(--primary)]">–</div>
         </div>
         <div class="vs-badge text-center px-2">VS</div>
         <div class="card kpi p-3">
-          <div class="text-[10px] uppercase tracking-wide text-[var(--muted)] font-semibold">Monthly_SHGs</div>
-          <div id="kpiMonthly" class="text-3xl font-extrabold mt-0.5">–</div>
+          <div class="text-[10px] uppercase tracking-widest text-[var(--muted)] font-bold">Monthly_SHGs</div>
+          <div id="kpiMonthly" class="font-display text-4xl tracking-wide mt-0.5 text-[var(--primary)]">–</div>
         </div>
       </div>
       <div class="col-span-12 md:col-span-4 card p-3">
@@ -369,6 +394,31 @@ ${navSidebar('shgprofiling')}
       try{ await fetch('/api/shg-profiling/refresh', {method:'POST'}); await load(); }
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
+    });
+
+    // ---- Print / Save as PDF ----
+    document.getElementById('printBtn').addEventListener('click', ()=>window.print());
+
+    // ---- Export to Excel (SheetJS) ----
+    document.getElementById('excelBtn').addEventListener('click', ()=>{
+      if (!lastData || !(lastData.rows||[]).length){ alert('No data to export.'); return; }
+      const rows = [...lastData.rows].sort((a,b)=>(Number(b[sortKey])||0)-(Number(a[sortKey])||0));
+      const data = rows.map(r=>({
+        'SHG Name': r.shg_name||'',
+        'First district': r.district||'',
+        'Sum of Male': Number(r.male)||0,
+        'Sum of Female': Number(r.female)||0,
+        'Sum of PWD': Number(r.pwd)||0,
+        'Sum of Participants Trained': Number(r.participants_trained)||0,
+        'Sum of Total': Number(r.total)||0,
+        'First profiler': r.profiler_name||'',
+        'First trainings': r.trainings||'',
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      ws['!cols'] = [{wch:42},{wch:16},{wch:12},{wch:12},{wch:10},{wch:22},{wch:12},{wch:22},{wch:40}];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'SHG Profiling');
+      XLSX.writeFile(wb, 'shg-profiling-'+new Date().toISOString().slice(0,10)+'.xlsx');
     });
 
     loadOptions();
