@@ -1049,7 +1049,7 @@ app.all('/api/youth-in-work/refresh', async (c) => {
 // Optional ?only=cluster,newyouth,frontliners,distribution,shgdistribution,shgprofiling,isla to target a subset.
 // Each summary is refreshed independently and its result/error is reported, so
 // one heavy rebuild failing (or timing out) does not block the others.
-app.post('/api/refresh-all', async (c) => {
+app.all('/api/refresh-all', async (c) => {
   const env = storeEnv(c);
   const only = (c.req.query('only') || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
@@ -1138,7 +1138,7 @@ done
 # 3) Rebuild each dashboard's fact tables (light clusters every cycle).
 #    (distribution + itemsnotsold are omitted until participants_shg is fixed.)
 for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage shgdistribution jobtracking; do
-  echo -n "refresh $c: "; curl -s --max-time 110 "$BASE/api/refresh-all?only=$c"; echo
+  echo -n "refresh $c: "; curl -s --max-time 110 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
 echo "$(date -u) === cron done ==="
