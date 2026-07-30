@@ -2991,6 +2991,13 @@ const MIS_VIEW_MAP: Record<string, string> = {
   shg_profiling_form: 'shg_profiling_form',
   production_and_marketing_tool: 'production_and_marketing_tool',
   job_tracking: 'combined_job_tracking_tool_view',
+  // --- Added 2026-07-30: these master sheets were NOT auto-synced (only ever
+  // updated by manual uploads, so they lagged behind Power BI). MIS view names
+  // + column mappings verified live against the Heifer SAYE MIS gateway.
+  participants: 'participants',                                             // MIS total ~197k (was 185k stored)
+  participants_shg: 'shg_participants_view',                                // MIS total ~107k (was 45.6k stored)
+  distribution_form_v2: 'distribution_form_v2',                             // MIS total ~15.4k (was 10.3k stored)
+  local_leverage_fund_contribution_form: 'local_leverage_fund_contribution_form', // MIS total ~19.6k (was 19.56k)
 };
 
 /** Fetch one page of an ARBITRARY MIS view (1-indexed pages). */
