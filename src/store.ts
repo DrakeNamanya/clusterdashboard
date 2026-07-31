@@ -2665,16 +2665,38 @@ function misBase(env: Env): string {
   return b;
 }
 
+/**
+ * fetch() with a hard timeout. The MIS gateway is intermittently slow/hangs;
+ * without this, a single stuck request blocks the whole Cloudflare Worker until
+ * CF kills it with NO response — which leaves last_run stale and the dashboard
+ * "frozen". Aborting fast lets the sync skip a bad page and always return, so
+ * every 5-min cycle updates last_run even when MIS is misbehaving.
+ */
+async function misFetch(url: string, init: RequestInit, timeoutMs = 20000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`MIS request timed out after ${timeoutMs}ms: ${url}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Log in to the MIS and return a Bearer access token. */
 async function misLogin(env: Env): Promise<string> {
   if (!env.MIS_USERNAME || !env.MIS_PASSWORD) {
     throw new Error('MIS_USERNAME / MIS_PASSWORD are not configured');
   }
-  const res = await fetch(misBase(env) + '/user/login', {
+  const res = await misFetch(misBase(env) + '/user/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: env.MIS_USERNAME, password: env.MIS_PASSWORD }),
-  });
+  }, 15000);
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`MIS login failed: HTTP ${res.status} ${t.slice(0, 200)}`);
@@ -2695,14 +2717,14 @@ async function misFetchPage(
   const url =
     misBase(env) +
     `/data/filter/all_trainees_view?page=${page}&limit=${limit}&search=true`;
-  const res = await fetch(url, {
+  const res = await misFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: '{}',
-  });
+  }, 25000);
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`MIS fetch page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
@@ -3009,11 +3031,11 @@ async function misFetchViewPage(
   limit: number
 ): Promise<{ rows: Record<string, any>[]; total: number }> {
   const url = misBase(env) + `/data/filter/${view}?page=${page}&limit=${limit}&search=true`;
-  const res = await fetch(url, {
+  const res = await misFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: '{}',
-  });
+  }, 25000);
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`MIS fetch ${view} page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
