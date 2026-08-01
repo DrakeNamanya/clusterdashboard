@@ -20,6 +20,7 @@ import {
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
+  syncDistributionOData, neonQuery,
 } from './store';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
@@ -799,6 +800,72 @@ app.post('/api/distribution/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- Direct-from-system distribution (OData) --------------------------------
+// Pull all 4 distribution OData feeds and rebuild the join tables the three
+// distribution dashboards read. Run from the VM cron each cycle, or manually.
+// A single Worker request can't sync all ~85k rows within CPU/time limits, so
+// the cron drives one phase per call: ?feed=events|shg|participants|agrihubs|rebuild
+// (default 'rebuild'). Chain them in order, ending with rebuild.
+app.all('/api/distribution-odata/sync', async (c) => {
+  const feed = (c.req.query('feed') || 'rebuild') as any;
+  const valid = ['events', 'shg', 'participants', 'agrihubs', 'rebuild', 'all'];
+  if (!valid.includes(feed)) {
+    return c.json({ ok: false, error: `feed must be one of ${valid.join('|')}` }, 400);
+  }
+  const pSkip = parseInt(c.req.query('skip') || '0', 10) || 0;
+  const pLimit = parseInt(c.req.query('limit') || '20000', 10) || 20000;
+  try {
+    const res = await syncDistributionOData(storeEnv(c), feed, pSkip, pLimit);
+    return c.json({ phase: feed, ...res });
+  } catch (e: any) {
+    return c.json({ ok: false, phase: feed, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Diagnostic: current distribution_rows/shg_distribution_rows columns + the
+// definitions of the RPC functions that read them, so we can confirm the
+// rebuilt tables line up with what the dashboards expect.
+app.get('/api/distribution-odata/diag', async (c) => {
+  const env = storeEnv(c);
+  const out: any = {};
+  try {
+    for (const t of ['distribution_rows', 'shg_distribution_rows', 'agrihub_distribution_rows',
+      'odata_dist_events', 'odata_dist_participants', 'odata_dist_shg', 'odata_dist_agrihubs']) {
+      try {
+        const cols = await neonQuery(env,
+          `SELECT column_name, data_type FROM information_schema.columns
+           WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, [t]);
+        const cnt = await neonQuery(env, `SELECT COUNT(*)::int AS c FROM public.${t}`).catch(() => [{ c: null }]);
+        out[t] = { columns: cols, rows: cnt?.[0]?.c ?? null };
+      } catch (e: any) { out[t] = { error: String(e?.message || e) }; }
+    }
+    // Join-overlap probe: how many participant submissions match an event / SHG.
+    try {
+      const probe = await neonQuery(env, `SELECT
+        (SELECT COUNT(*) FROM public.odata_dist_participants p JOIN public.odata_dist_events e ON e.doc_id=p.submission_id)::int AS part_join_event,
+        (SELECT COUNT(*) FROM public.odata_dist_participants p WHERE EXISTS (SELECT 1 FROM public.odata_dist_shg s WHERE s.submission_id=p.submission_id))::int AS part_has_shg,
+        (SELECT COUNT(DISTINCT submission_id) FROM public.odata_dist_shg)::int AS shg_distinct_sub,
+        (SELECT COUNT(DISTINCT submission_id) FROM public.odata_dist_participants)::int AS part_distinct_sub,
+        (SELECT COUNT(DISTINCT shg_name) FROM public.distribution_rows)::int AS distrows_distinct_shg,
+        (SELECT COUNT(*) FROM public.odata_dist_events WHERE doc_id LIKE 'uuid:%')::int AS events_uuid,
+        (SELECT COUNT(*) FROM public.odata_dist_participants WHERE submission_id LIKE 'uuid:%')::int AS part_sub_uuid`);
+      out['join_probe'] = probe?.[0] ?? null;
+    } catch (e: any) { out['join_probe'] = { error: String(e?.message || e) }; }
+    for (const fn of ['distribution_dash', 'shg_distribution_dash', 'distribution_options',
+      'shg_distribution_options', 'distribution_detail']) {
+      try {
+        const def = await neonQuery(env, `SELECT pg_get_functiondef(p.oid) AS def
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname='public' AND p.proname=$1 LIMIT 1`, [fn]);
+        out[`fn_${fn}`] = def?.[0]?.def ?? '(not found)';
+      } catch (e: any) { out[`fn_${fn}`] = { error: String(e?.message || e) }; }
+    }
+    return c.json(out);
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+});
+
 // ---- Distribution to SHGs dashboard (shg_group ⋈ distribution_form_v2) -----
 
 // Page (grouped-by-SHG_Group_Name distribution table + KPI cards).
@@ -1354,15 +1421,30 @@ sync_call() {
 sync_call "run" "$BASE/api/mis-sync/run"
 
 # 2) Pull new data for each mapped view ONE AT A TIME (avoids Cloudflare 1102).
-for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking participants distribution_form_v2 local_leverage_fund_contribution_form; do
+#    NOTE: distribution is NO LONGER synced via /data/filter here — it now comes
+#    straight from the MIS OData feeds in step 2b below (participants + SHGs).
+for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking local_leverage_fund_contribution_form; do
   sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
 done
+
+# 2b) DISTRIBUTION — direct from the MIS OData feeds (replaces the stale Excel /
+#     /data/filter flow). One feed per call so each fits a Worker invocation;
+#     participants (~67k) are pulled in 20k slices; a final rebuild regenerates
+#     the distribution_rows / shg_distribution_rows / agrihub_distribution_rows
+#     join tables the three distribution dashboards read.
+sync_call "dist events"       "$BASE/api/distribution-odata/sync?feed=events"
+sync_call "dist shg"          "$BASE/api/distribution-odata/sync?feed=shg"
+sync_call "dist agrihubs"     "$BASE/api/distribution-odata/sync?feed=agrihubs"
+for s in 0 20000 40000 60000; do
+  sync_call "dist participants @$s" "$BASE/api/distribution-odata/sync?feed=participants&skip=$s&limit=20000"
+done
+sync_call "dist rebuild"      "$BASE/api/distribution-odata/sync?feed=rebuild"
 
 # 3) Rebuild each dashboard's fact tables (light clusters every cycle).
 #    'newyouth' now rebuilds the precomputed new_youth_ft first-touch table so
 #    /api/new-youth is a cheap scan instead of a 765k-row live aggregation.
-#    (distribution + itemsnotsold are omitted until participants_shg is fixed.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage shgdistribution jobtracking; do
+#    (distribution join tables are rebuilt in step 2b above, not here.)
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 

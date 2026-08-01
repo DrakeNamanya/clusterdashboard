@@ -3542,3 +3542,487 @@ export async function misViewSyncStatus(env: Env): Promise<any> {
     try { await client.end(); } catch { /* ignore */ }
   }
 }
+
+// ===========================================================================
+// DIRECT-FROM-SYSTEM DISTRIBUTION PIPELINE (OData feeds)
+// ---------------------------------------------------------------------------
+// Replaces the stale Excel-upload distribution flow with a direct pull from the
+// Heifer SAYE MIS OData feeds. Four feeds under /odata-feed/view/<view>/<view>
+// (HTTP BASIC auth, not the Bearer token used by /data/filter):
+//   1. distribution_form_v2_odata_view                    — master event (15.4k)
+//   2. distribution_form_v2.shg_group_odata_view          — per-SHG    (1.9k)
+//   3. distribution_form_v2.participants_shg_odata_view    — per-youth  (67.3k)
+//   4. distribution_form_v2.agrihubs_odata_view            — per-agrihub (0 now)
+// Join key: master.docId (a `uuid:...`) == child.`__Submissions-id`.
+// We land them in dedicated raw tables (odata_dist_*) and rebuild the compact
+// join tables the dashboards read (distribution_rows / shg_distribution_rows /
+// agrihub_distribution_rows). Everything runs server-side (VM cron / Worker).
+// ===========================================================================
+
+const DIST_ODATA_VIEWS = {
+  events:       'distribution_form_v2_odata_view',
+  shg:          'distribution_form_v2.shg_group_odata_view',
+  participants: 'distribution_form_v2.participants_shg_odata_view',
+  agrihubs:     'distribution_form_v2.agrihubs_odata_view',
+} as const;
+
+/** Basic-auth header for the OData feeds (Power-BI style endpoint). */
+function misOdataBasic(env: Env): string {
+  const u = env.MIS_USERNAME || '';
+  const p = env.MIS_PASSWORD || '';
+  // btoa is available in the Workers runtime.
+  return 'Basic ' + btoa(`${u}:${p}`);
+}
+
+/** Fetch one OData page (value[] + @odata.count) via $skip/$top. */
+async function misFetchOdataPage(
+  env: Env, view: string, skip: number, top: number
+): Promise<{ rows: Record<string, any>[]; total: number }> {
+  const url = misBase(env) +
+    `/odata-feed/view/${view}/${view}?$count=true&$skip=${skip}&$top=${top}`;
+  const res = await misFetch(url, {
+    method: 'GET',
+    headers: { Authorization: misOdataBasic(env), Accept: 'application/json' },
+  }, 30000);
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`OData ${view} skip ${skip} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
+  }
+  const j: any = await res.json();
+  const rows = Array.isArray(j?.value) ? j.value : [];
+  const total = Number(j?.['@odata.count']);
+  return { rows, total: Number.isFinite(total) ? total : rows.length };
+}
+
+/** Create the raw OData landing tables (idempotent). */
+async function ensureDistOdataTables(q: (t: string, p?: any[]) => Promise<any[]>): Promise<void> {
+  // Master distribution event — one row per distribution submission.
+  await q(`CREATE TABLE IF NOT EXISTS public.odata_dist_events (
+    doc_id text PRIMARY KEY,
+    partner text, district_name text, subcounty_name text, parish text, village text,
+    material_type text, crop_type text, livestock_type text, agri_resources_type text, isla_kits text,
+    unit text, qty numeric,
+    distribution_date text, participant_type text,
+    supplier text, distributor text, distributor_title text,
+    created_by text, ref_id text, date_created text
+  )`);
+  // Per-SHG allocation.
+  await q(`CREATE TABLE IF NOT EXISTS public.odata_dist_shg (
+    doc_id text PRIMARY KEY,
+    submission_id text, shg_name text, shg_id text,
+    unit_received text, qty_received numeric, date_created text
+  )`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_odshg_sub ON public.odata_dist_shg (submission_id)`);
+  // Per-participant allocation.
+  await q(`CREATE TABLE IF NOT EXISTS public.odata_dist_participants (
+    doc_id text PRIMARY KEY,
+    submission_id text, participant_name text, shg_participant_id text, sex text,
+    unit_received text, qty_received numeric, plot_size text, date_created text
+  )`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_odpart_sub ON public.odata_dist_participants (submission_id)`);
+  // Per-agrihub allocation (feed is empty today but wired for when MIS fills it).
+  await q(`CREATE TABLE IF NOT EXISTS public.odata_dist_agrihubs (
+    doc_id text PRIMARY KEY,
+    submission_id text, agrihub_name text, unit_received text, qty_received numeric, date_created text
+  )`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_odagri_sub ON public.odata_dist_agrihubs (submission_id)`);
+}
+
+const NUM = (v: any): number | null => {
+  if (v == null || v === '') return null;
+  const n = Number(String(v).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+};
+const STR = (v: any): string | null => {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+};
+const DAY = (v: any): string | null => {
+  const s = STR(v);
+  return s ? s.slice(0, 10) : null;
+};
+
+/** The populated qty column on the master feed depends on `unit`. */
+function distEventQty(raw: Record<string, any>): number | null {
+  const cols = ['qty_distributed_kgs','qty_distributed_grams','qty_distributed_seedlings',
+    'qty_distributed_liters','qty_distributed_packets','qty_distributed_dozens',
+    'qty_distributed_sackets','qty_distributed_tins','qty_distributed_boxes',
+    'qty_distributed_pieces','qty_distributed_number','qty_distributed_kit',
+    'qty_distributed_meters','qty_distributed_hectare','qty_distributed_acre',
+    'qty_distributed_foot','qty_distributed_other'];
+  for (const c of cols) { const n = NUM(raw[c]); if (n != null && n !== 0) return n; }
+  // fall back to the first non-null even if 0
+  for (const c of cols) { const n = NUM(raw[c]); if (n != null) return n; }
+  return null;
+}
+
+export interface DistOdataSyncResult {
+  ok: boolean;
+  events: number; shg: number; participants: number; agrihubs: number;
+  distribution_rows: number; shg_distribution_rows: number; agrihub_distribution_rows: number;
+  /** For the sliced participants phase: total feed size, next skip, and whether done. */
+  part_total?: number; part_next_skip?: number; part_done?: boolean;
+}
+
+/**
+ * Full direct-from-system distribution sync: pull all OData feeds into the raw
+ * tables, then rebuild the compact join tables the dashboards read. Idempotent
+ * (upsert by doc_id). Safe to run from the VM cron every few minutes.
+ */
+/**
+ * Batched multi-row upsert. Flattens `rows` (array of value arrays, each of
+ * length `cols.length`) into one `INSERT ... VALUES (...),(...) ON CONFLICT`
+ * statement per DB_BATCH chunk — ~1 round-trip per 500 rows instead of one per
+ * row, which is what makes syncing 67k participants feasible.
+ */
+const DB_BATCH = 500;
+async function batchUpsert(
+  q: (t: string, p?: any[]) => Promise<any[]>,
+  table: string, cols: string[], conflict: string, updateSet: string,
+  rows: any[][]
+): Promise<number> {
+  let done = 0;
+  const width = cols.length;
+  // Dedup by the conflict key (column 0 = doc_id) so one multi-row INSERT never
+  // tries to touch the same conflict target twice (Postgres errors on that).
+  const seen = new Set<any>();
+  rows = rows.filter((v) => { const k = v[0]; if (seen.has(k)) return false; seen.add(k); return true; });
+  for (let i = 0; i < rows.length; i += DB_BATCH) {
+    const chunk = rows.slice(i, i + DB_BATCH);
+    const params: any[] = [];
+    const tuples = chunk.map((vals) => {
+      const ph: string[] = [];
+      for (let k = 0; k < width; k++) { params.push(vals[k]); ph.push(`$${params.length}`); }
+      return `(${ph.join(',')})`;
+    });
+    await q(
+      `INSERT INTO ${table} (${cols.join(',')}) VALUES ${tuples.join(',')}
+       ON CONFLICT (${conflict}) DO UPDATE SET ${updateSet}`,
+      params
+    );
+    done += chunk.length;
+  }
+  return done;
+}
+
+/**
+ * Page through an OData feed, mapping each row → a value array. Optionally
+ * bounded to [startSkip, startSkip+limit) so a big feed (participants: 67k) can
+ * be synced in slices across separate Worker invocations. Returns the rows plus
+ * the feed total so the caller knows when it has reached the end.
+ */
+async function collectOdata(
+  env: Env, view: string, map: (r: Record<string, any>) => any[],
+  startSkip = 0, limit = Infinity
+): Promise<{ rows: any[][]; total: number; nextSkip: number }> {
+  const PAGE = 2000;
+  const out: any[][] = [];
+  let skip = startSkip, total = Infinity, pulled = 0;
+  while (skip < total && pulled < limit) {
+    const top = Math.min(PAGE, limit - pulled);
+    const { rows, total: t } = await misFetchOdataPage(env, view, skip, top);
+    total = t;
+    for (const r of rows) out.push(map(r));
+    skip += rows.length || PAGE;
+    pulled += rows.length;
+    if (!rows.length) break;
+  }
+  return { rows: out, total, nextSkip: skip };
+}
+
+/**
+ * Distribution OData sync, phased so it fits inside a single Worker invocation.
+ * A single Worker request cannot fetch+upsert all ~85k rows within CPU/time
+ * limits, so the caller (VM cron) runs one phase per call:
+ *   'events' | 'shg' | 'participants' | 'agrihubs' | 'rebuild' | 'all'.
+ * Each feed phase pulls its OData feed and upserts into its raw table; 'rebuild'
+ * regenerates the dashboard join tables from the raw tables. 'all' does the lot
+ * (only viable off-Worker, e.g. a local run).
+ */
+export type DistSyncPhase = 'events' | 'shg' | 'participants' | 'agrihubs' | 'rebuild' | 'all';
+
+export async function syncDistributionOData(
+  env: Env, phase: DistSyncPhase = 'all', pSkip = 0, pLimit = 20000
+): Promise<DistOdataSyncResult> {
+  if (!clusterDbUrl(env)) throw new Error('No cluster DB configured');
+  const sql = clusterSql(env);
+  const q = sql.query;
+  const counts = { events: 0, shg: 0, participants: 0, agrihubs: 0 };
+  let partTotal = 0, partNextSkip = 0, partDone = false;
+  const doEvents = phase === 'all' || phase === 'events';
+  const doShg = phase === 'all' || phase === 'shg';
+  const doParticipants = phase === 'all' || phase === 'participants';
+  const doAgrihubs = phase === 'all' || phase === 'agrihubs';
+  const doRebuild = phase === 'all' || phase === 'rebuild';
+  try {
+    await ensureDistOdataTables(q);
+
+    // ---- 1) master events ----
+    if (doEvents) {
+      const { rows: raw } = await collectOdata(env, DIST_ODATA_VIEWS.events, (r) => [
+        STR(r.docId), STR(r.partner), STR(r.district_name), STR(r.Subcounty_name), STR(r.parish), STR(r.village),
+        STR(r.material_type), STR(r.crop_type), STR(r.livestock_type), STR(r.agri_resources_type), STR(r.isla_kits),
+        STR(r.unit), distEventQty(r), DAY(r.distribution_date), STR(r.participant_type),
+        STR(r.supplier), STR(r.distributor), STR(r.distributor_title), STR(r.createdBy), STR(r.refID), DAY(r.dateCreated),
+      ]);
+      const rows = raw.filter((v) => v[0] != null);
+      counts.events = await batchUpsert(q, 'public.odata_dist_events',
+        ['doc_id','partner','district_name','subcounty_name','parish','village','material_type','crop_type',
+         'livestock_type','agri_resources_type','isla_kits','unit','qty','distribution_date','participant_type',
+         'supplier','distributor','distributor_title','created_by','ref_id','date_created'],
+        'doc_id',
+        `district_name=EXCLUDED.district_name, subcounty_name=EXCLUDED.subcounty_name, village=EXCLUDED.village,
+         material_type=EXCLUDED.material_type, crop_type=EXCLUDED.crop_type, livestock_type=EXCLUDED.livestock_type,
+         agri_resources_type=EXCLUDED.agri_resources_type, isla_kits=EXCLUDED.isla_kits,
+         unit=EXCLUDED.unit, qty=EXCLUDED.qty, distribution_date=EXCLUDED.distribution_date,
+         participant_type=EXCLUDED.participant_type, supplier=EXCLUDED.supplier,
+         distributor=EXCLUDED.distributor, distributor_title=EXCLUDED.distributor_title,
+         date_created=EXCLUDED.date_created`,
+        rows);
+    }
+
+    // ---- 2) per-SHG ----
+    if (doShg) {
+      const { rows: raw } = await collectOdata(env, DIST_ODATA_VIEWS.shg, (r) => [
+        STR(r.docId), STR(r['__Submissions-id']), STR(r.shg_name), STR(r.shg_id),
+        STR(r.shg_group_unit_received), NUM(r.shg_group_qty_received), DAY(r.dateCreated),
+      ]);
+      const rows = raw.filter((v) => v[0] != null);
+      counts.shg = await batchUpsert(q, 'public.odata_dist_shg',
+        ['doc_id','submission_id','shg_name','shg_id','unit_received','qty_received','date_created'],
+        'doc_id',
+        `submission_id=EXCLUDED.submission_id, shg_name=EXCLUDED.shg_name, shg_id=EXCLUDED.shg_id,
+         unit_received=EXCLUDED.unit_received, qty_received=EXCLUDED.qty_received`,
+        rows);
+    }
+
+    // ---- 3) per-participant (sliced: pSkip..pSkip+pLimit so it fits a call) ----
+    if (doParticipants) {
+      const { rows: raw, total, nextSkip } = await collectOdata(env, DIST_ODATA_VIEWS.participants, (r) => [
+        STR(r.docId), STR(r['__Submissions-id']), STR(r.participant_name), STR(r.shg_participant_id),
+        STR(r.sex), STR(r.shg_unit_received), NUM(r.shg_qty_received), STR(r.shg_plot_size), DAY(r.dateCreated),
+      ], pSkip, pLimit);
+      const rows = raw.filter((v) => v[0] != null);
+      counts.participants = await batchUpsert(q, 'public.odata_dist_participants',
+        ['doc_id','submission_id','participant_name','shg_participant_id','sex','unit_received','qty_received','plot_size','date_created'],
+        'doc_id',
+        `submission_id=EXCLUDED.submission_id, participant_name=EXCLUDED.participant_name,
+         shg_participant_id=EXCLUDED.shg_participant_id, sex=EXCLUDED.sex,
+         unit_received=EXCLUDED.unit_received, qty_received=EXCLUDED.qty_received, plot_size=EXCLUDED.plot_size`,
+        rows);
+      partTotal = total;
+      partNextSkip = nextSkip;
+      partDone = nextSkip >= total;
+    }
+
+    // ---- 4) per-agrihub (feed empty today; no-op then) ----
+    if (doAgrihubs) {
+      const { rows: raw } = await collectOdata(env, DIST_ODATA_VIEWS.agrihubs, (r) => [
+        STR(r.docId), STR(r['__Submissions-id']),
+        STR(r.agrihub_name ?? r.name ?? r.agrihubs_view_name), STR(r.unit_received ?? r.agrihub_unit_received),
+        NUM(r.qty_received ?? r.agrihub_qty_received), DAY(r.dateCreated),
+      ]);
+      const rows = raw.filter((v) => v[0] != null);
+      counts.agrihubs = rows.length ? await batchUpsert(q, 'public.odata_dist_agrihubs',
+        ['doc_id','submission_id','agrihub_name','unit_received','qty_received','date_created'],
+        'doc_id',
+        `submission_id=EXCLUDED.submission_id, agrihub_name=EXCLUDED.agrihub_name,
+         unit_received=EXCLUDED.unit_received, qty_received=EXCLUDED.qty_received`,
+        rows) : 0;
+    }
+
+    // ---- rebuild the compact join tables the dashboards read ----
+    const built = doRebuild
+      ? await rebuildDistributionRowsFromOData(q)
+      : { participants: 0, shg: 0, agrihubs: 0 };
+
+    return {
+      ok: true,
+      ...counts,
+      distribution_rows: built.participants,
+      shg_distribution_rows: built.shg,
+      agrihub_distribution_rows: built.agrihubs,
+      part_total: partTotal,
+      part_next_skip: partNextSkip,
+      part_done: partDone,
+    };
+  } finally {
+    await sql.close();
+  }
+}
+
+/**
+ * Rebuild distribution_rows (participants), shg_distribution_rows (SHGs) and
+ * agrihub_distribution_rows (agrihubs) by joining the raw OData tables on
+ * event.doc_id == child.submission_id. Each row carries the event context
+ * (district, material, unit, supplier, submitter, date) + the allocation qty,
+ * which is exactly what the dashboard aggregations need.
+ */
+async function rebuildDistributionRowsFromOData(
+  q: (t: string, p?: any[]) => Promise<any[]>
+): Promise<{ participants: number; shg: number; agrihubs: number }> {
+  // ---------------------------------------------------------------------------
+  // These tables feed the EXISTING generic RPCs (distribution_dash /
+  // shg_distribution_dash), so the column names below MUST match exactly what
+  // those functions read. We keep the RPCs untouched and shape the OData join
+  // output to their contract. The `item` for each row is the resolved
+  // crop/livestock/agri/isla value; the RPC keys off `unit` for per-unit sums.
+  // ---------------------------------------------------------------------------
+
+  // Normalize OData unit strings (lowercase 'kgs', 'seedlings', …) to the
+  // TitleCase the RPCs filter on ('KGs', 'Seedlings', …). Unknown units pass
+  // through unchanged.
+  const NORM_UNIT = (col: string) => `CASE lower(trim(${col}))
+      WHEN 'kgs' THEN 'KGs' WHEN 'kg' THEN 'KGs'
+      WHEN 'grams' THEN 'Grams' WHEN 'gram' THEN 'Grams' WHEN 'g' THEN 'Grams'
+      WHEN 'liters' THEN 'Liters' WHEN 'litres' THEN 'Liters' WHEN 'liter' THEN 'Liters' WHEN 'l' THEN 'Liters'
+      WHEN 'seedlings' THEN 'Seedlings' WHEN 'seedling' THEN 'Seedlings'
+      WHEN 'packets' THEN 'Packets' WHEN 'packet' THEN 'Packets'
+      WHEN 'tins' THEN 'Tins' WHEN 'tin' THEN 'Tins'
+      WHEN 'pieces' THEN 'Pieces' WHEN 'piece' THEN 'Pieces' WHEN 'pcs' THEN 'Pieces'
+      WHEN 'dozens' THEN 'Dozens' WHEN 'dozen' THEN 'Dozens'
+      WHEN 'sackets' THEN 'Sackets' WHEN 'sacket' THEN 'Sackets' WHEN 'sachets' THEN 'Sackets'
+      WHEN 'boxes' THEN 'Boxes' WHEN 'box' THEN 'Boxes'
+      WHEN 'number' THEN 'Number' WHEN 'numbers' THEN 'Number' WHEN 'no' THEN 'Number'
+      WHEN 'meters' THEN 'Meters' WHEN 'metres' THEN 'Meters' WHEN 'meter' THEN 'Meters' WHEN 'm' THEN 'Meters'
+      WHEN 'kit' THEN 'Kit' WHEN 'set/kit' THEN 'Set/Kit' WHEN 'sets' THEN 'Set/Kit' WHEN 'set' THEN 'Set/Kit'
+      WHEN 'hectare' THEN 'Hectare' WHEN 'hectares' THEN 'Hectare' WHEN 'ha' THEN 'Hectare'
+      WHEN 'acre' THEN 'Acre' WHEN 'acres' THEN 'Acre'
+      WHEN 'foot' THEN 'Foot' WHEN 'feet' THEN 'Foot' WHEN 'ft' THEN 'Foot'
+      WHEN 'other' THEN 'Other'
+      WHEN '' THEN NULL
+      ELSE initcap(trim(${col})) END`;
+
+  // NOTE ON THE DATA MODEL: the MIS distribution feeds are two DISJOINT streams
+  // — a distribution submission is EITHER an SHG-group distribution OR a
+  // per-participant distribution, never both (verified: 0 participant
+  // submissions share a submission_id with any SHG row). The participant feed
+  // therefore carries no SHG-group name. So the "distribution to participants"
+  // matrix groups by the PARTICIPANT (name + id), which is the entity that
+  // actually receives here; distribution_detail then lists that participant's
+  // individual allocation lines. (The separate "distribution to SHGs" dashboard
+  // groups the SHG stream by shg_group_name.)
+
+  // participants → distribution_rows (RPC groups by shg_name, which we set to
+  // the participant identity so each participant is one matrix group).
+  await q(`DROP TABLE IF EXISTS public.distribution_rows`);
+  await q(`CREATE TABLE public.distribution_rows AS
+    WITH j AS (
+      SELECT p.shg_participant_id                       AS participant_id,
+             p.participant_name                         AS participant_name,
+             COALESCE(NULLIF(TRIM(p.participant_name),''), p.shg_participant_id, '(Unnamed)') AS shg_name,
+             UPPER(COALESCE(e.district_name,''))         AS district,
+             e.subcounty_name                            AS subcounty,
+             e.material_type                             AS material_type,
+             NULL::text                                  AS other_material_type,
+             ${NORM_UNIT('COALESCE(NULLIF(p.unit_received,\'\'), e.unit)')} AS unit,
+             NULL::text                                  AS other_unit,
+             COALESCE(p.qty_received, 0)                 AS qty_received,
+             e.livestock_type                            AS livestock_type,
+             NULL::text                                  AS other_livestock_type,
+             e.crop_type                                 AS crop_type,
+             NULL::text                                  AS other_crop_type,
+             e.agri_resources_type                       AS agri_resources_type,
+             NULL::text                                  AS other_agri_resources_type,
+             e.isla_kits                                 AS isla_kits,
+             NULL::text                                  AS other_isla_kits,
+             e.distributor                               AS submitted_by,
+             e.supplier                                  AS supplier,
+             e.supplier                                  AS other_supplier,
+             FALSE                                       AS is_pwd,
+             NULLIF(COALESCE(e.distribution_date, p.date_created),'')::date AS dist_date
+      FROM public.odata_dist_participants p
+      JOIN public.odata_dist_events e ON e.doc_id = p.submission_id
+    )
+    SELECT j.*,
+           MIN(dist_date) OVER (PARTITION BY participant_id) AS first_date
+    FROM j`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_distrows_dist ON public.distribution_rows (district)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_distrows_date ON public.distribution_rows (dist_date)`);
+  const pc = await q(`SELECT COUNT(*)::int AS c FROM public.distribution_rows`);
+
+  // shg join → shg_distribution_rows (RPC groups by shg_group_name; sums
+  // per-unit qty_* columns, so we pre-split qty by the row's unit here).
+  await q(`DROP TABLE IF EXISTS public.shg_distribution_rows`);
+  await q(`CREATE TABLE public.shg_distribution_rows AS
+    WITH j AS (
+      SELECT s.shg_id                                    AS distribution_id,
+             s.shg_name                                  AS shg_group_name,
+             s.shg_id                                    AS shg_group_id,
+             UPPER(COALESCE(e.district_name,''))         AS district,
+             e.subcounty_name                            AS subcounty,
+             ${NORM_UNIT('COALESCE(NULLIF(s.unit_received,\'\'), e.unit)')} AS unit_received,
+             NULL::text                                  AS other_unit_received,
+             COALESCE(s.qty_received, 0)                 AS qty_received,
+             e.material_type                             AS material_type,
+             NULL::text                                  AS other_material_type,
+             e.livestock_type                            AS livestock_type,
+             NULL::text                                  AS other_livestock_type,
+             e.crop_type                                 AS crop_type,
+             NULL::text                                  AS other_crop_type,
+             e.agri_resources_type                       AS agri_resources_type,
+             NULL::text                                  AS other_agri_resources_type,
+             e.isla_kits                                 AS isla_kits,
+             NULL::text                                  AS other_isla_kits,
+             e.partner                                   AS partner,
+             e.supplier                                  AS supplier,
+             e.supplier                                  AS other_supplier,
+             e.distributor                               AS distributor,
+             e.distributor_title                         AS distributor_title,
+             e.distributor                               AS submitted_by,
+             NULLIF(COALESCE(e.distribution_date, s.date_created),'')::date AS dist_date
+      FROM public.odata_dist_shg s
+      JOIN public.odata_dist_events e ON e.doc_id = s.submission_id
+    )
+    SELECT j.*,
+           CASE WHEN unit_received='KGs'       THEN qty_received END AS qty_kgs,
+           CASE WHEN unit_received='Grams'     THEN qty_received END AS qty_grams,
+           CASE WHEN unit_received IN ('liters','Liters') THEN qty_received END AS qty_liters,
+           CASE WHEN unit_received='Seedlings' THEN qty_received END AS qty_seedlings,
+           CASE WHEN unit_received='Packets'   THEN qty_received END AS qty_packets,
+           CASE WHEN unit_received='Tins'      THEN qty_received END AS qty_tins,
+           CASE WHEN unit_received='Pieces'    THEN qty_received END AS qty_pieces,
+           CASE WHEN unit_received='Dozens'    THEN qty_received END AS qty_dozens,
+           CASE WHEN unit_received='Sackets'   THEN qty_received END AS qty_sackets,
+           CASE WHEN unit_received='Boxes'     THEN qty_received END AS qty_boxes,
+           CASE WHEN unit_received='Number'    THEN qty_received END AS qty_number,
+           CASE WHEN unit_received='Meters'    THEN qty_received END AS qty_meters,
+           CASE WHEN unit_received IN ('Set/Kit','Kit') THEN qty_received END AS qty_kit,
+           CASE WHEN unit_received='Hectare'   THEN qty_received END AS qty_hectare,
+           CASE WHEN unit_received='Acre'      THEN qty_received END AS qty_acre,
+           CASE WHEN unit_received='Foot'      THEN qty_received END AS qty_foot,
+           CASE WHEN unit_received='Other'     THEN qty_received END AS qty_other
+    FROM j`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_shgdistrows_dist ON public.shg_distribution_rows (district)`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_shgdistrows_date ON public.shg_distribution_rows (dist_date)`);
+  const sc = await q(`SELECT COUNT(*)::int AS c FROM public.shg_distribution_rows`);
+
+  // agrihub join → agrihub_distribution_rows (feed empty today; mirror the
+  // participants shape so a future agrihub dashboard can read it uniformly).
+  await q(`DROP TABLE IF EXISTS public.agrihub_distribution_rows`);
+  await q(`CREATE TABLE public.agrihub_distribution_rows AS
+    SELECT a.doc_id                                     AS distribution_id,
+           a.agrihub_name                               AS agrihub_name,
+           UPPER(COALESCE(e.district_name,''))          AS district,
+           e.subcounty_name                             AS subcounty,
+           e.material_type                              AS material_type,
+           e.crop_type                                  AS crop_type,
+           e.livestock_type                             AS livestock_type,
+           e.agri_resources_type                        AS agri_resources_type,
+           e.isla_kits                                  AS isla_kits,
+           ${NORM_UNIT('COALESCE(NULLIF(a.unit_received,\'\'), e.unit)')} AS unit_received,
+           COALESCE(a.qty_received, 0)                  AS qty_received,
+           e.supplier                                   AS supplier,
+           e.distributor                                AS submitted_by,
+           NULLIF(COALESCE(e.distribution_date, a.date_created),'')::date AS dist_date
+    FROM public.odata_dist_agrihubs a
+    JOIN public.odata_dist_events e ON e.doc_id = a.submission_id`);
+  const ac = await q(`SELECT COUNT(*)::int AS c FROM public.agrihub_distribution_rows`);
+
+  return {
+    participants: Number(pc?.[0]?.c) || 0,
+    shg: Number(sc?.[0]?.c) || 0,
+    agrihubs: Number(ac?.[0]?.c) || 0,
+  };
+}

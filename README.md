@@ -291,8 +291,30 @@ All six master tables appear as selectable entity sets and refresh automatically
 - `GET  /cluster-trainings` — Cluster Trainings dashboard
 - `GET  /monthly-new-youth` — Monthly New Youth dashboard
 - `GET  /frontliners` — Trainings by Frontliners dashboard
-- `GET  /distribution` — **Distribution to Participants** (participants_shg ⋈ distribution_form_v2, grouped by SHG_Name, expandable to participants)
-- `GET  /shg-distribution` — **Distribution to SHGs** (shg_group ⋈ distribution_form_v2, grouped by SHG_Group_Name, expandable to individual distribution records)
+- `GET  /distribution` — **Distribution to Participants** (per-participant OData feed ⋈ distribution event, grouped by participant, expandable to that participant's allocation lines)
+  - `GET  /api/distribution` — KPIs + grouped table + slicer lists (filters: `districts,materials,units,submitters,suppliers,from,to`)
+  - `GET  /api/distribution/detail?shg=` — allocation lines for one participant
+- `GET  /shg-distribution` — **Distribution to SHGs** (per-SHG OData feed ⋈ distribution event, grouped by SHG_Group_Name, expandable to individual distribution records)
+
+**Distribution data source — DIRECT FROM MIS OData (Aug 2026).** The distribution
+dashboards no longer depend on an Excel upload / `/data/filter` sync (which had
+gone stale and returned empty). They now pull straight from four MIS OData feeds
+(HTTP Basic auth, `/gateway/api/v1/odata-feed/view/<view>/<view>`):
+`distribution_form_v2_odata_view` (events), `…shg_group_odata_view` (per-SHG),
+`…participants_shg_odata_view` (per-youth), `…agrihubs_odata_view` (empty today).
+Join key: master event `docId` (`uuid:…`) == child `__Submissions-id`.
+**Data-model note:** a distribution submission is EITHER an SHG-group distribution
+OR a per-participant distribution (the two feeds are disjoint on submission_id, so
+the participant feed has no SHG-group name); the participants dashboard therefore
+groups by the participant, the SHG dashboard by the SHG group.
+- Landing tables: `odata_dist_events/shg/participants/agrihubs`.
+- Dashboard join tables (unchanged RPC contract): `distribution_rows`,
+  `shg_distribution_rows`, `agrihub_distribution_rows`.
+- `GET/POST /api/distribution-odata/sync?feed=events|shg|participants|agrihubs|rebuild`
+  — one feed per call (participants sliced via `&skip=&limit=`), ending with
+  `rebuild`. Driven by the VM cron (step 2b). Latest sync: events 15,461 /
+  SHG 1,896 / participants 67,216 / agrihubs 0 → 24,203 participant groups,
+  777 SHGs.
   - `GET  /api/shg-distribution` — KPIs + grouped table + slicer lists (filters: `districts,materials,units,submitters,suppliers,from,to`)
   - `GET  /api/shg-distribution/options` — lightweight slicer option lists
   - `GET  /api/shg-distribution/detail?shg=` — per-record detail rows for one SHG group
