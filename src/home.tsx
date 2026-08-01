@@ -716,8 +716,28 @@ ${navSidebar('home')}
       // baseline sparklines so the strip never looks empty
       drawSpark('youth', null, '#54e08c'); drawSpark('female', null, '#f6b45a');
       drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
-      const jobs=Object.entries(loaders).map(([k,fn])=>fn().catch(err=>{ console.error(k,err); }));
-      Promise.allSettled(jobs).then(()=>{
+      // Run the ~9 dashboard loaders with a concurrency cap (max 3 in flight)
+      // instead of firing them all at once. Even with edge caching, a COLD cache
+      // (first hit in each 5-min window) means every heavy aggregation would run
+      // simultaneously — that concurrent burst is exactly what exhausted the
+      // Worker's per-request CPU budget and produced the 1,032 "Exceeded CPU
+      // Time Limits" errors. Throttling to 3-at-a-time keeps each request cheap
+      // while still loading the whole page quickly.
+      const runThrottled=(entries, limit)=>{
+        const list=entries.slice(); let active=0;
+        return new Promise((resolve)=>{
+          const next=()=>{
+            if(list.length===0 && active===0){ resolve(); return; }
+            while(active<limit && list.length){
+              const [k,fn]=list.shift(); active++;
+              Promise.resolve().then(fn).catch(err=>{ console.error(k,err); }).finally(()=>{ active--; next(); });
+            }
+          };
+          next();
+        });
+      };
+      const jobs=runThrottled(Object.entries(loaders), 3);
+      Promise.resolve(jobs).then(()=>{
         // Failsafe: any value cell still showing the loading skeleton means its
         // loader errored (or the API returned nothing) for this selection.
         // Show a real "0" instead of leaving a blank/… card, so a filter that

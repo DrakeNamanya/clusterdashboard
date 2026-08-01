@@ -1273,7 +1273,150 @@ export async function refreshClusterSummary(env: Env): Promise<number> {
  * Worker), so it stays well within the Worker CPU/memory budget even at ~780k
  * at_rows. Semantics mirror the TS reducer exactly.
  */
+/**
+ * FAST first-touch dashboard: aggregate over the precomputed `new_youth_ft`
+ * summary table (~98k rows, one per participant) instead of scanning ~765k
+ * at_rows live. This is a cheap indexed scan with simple date/district filters,
+ * so it fits comfortably inside a Cloudflare Worker's CPU budget. The summary
+ * table is (re)built by refreshNewYouth() on the 5-min VM cron. If the table is
+ * missing (e.g. the very first deploy before the cron has run), we fall back to
+ * the live-CTE version so the dashboard still works.
+ */
 async function newYouthDashPg(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
+): Promise<any> {
+  try {
+    return await newYouthDashPgFast(env, opts);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    // "relation new_youth_ft does not exist" -> table not built yet: fall back.
+    if (/new_youth_ft/i.test(msg) && /exist/i.test(msg)) {
+      console.error('new_youth_ft missing; using live-CTE fallback. Run refreshNewYouth (cron) to build it.');
+      return await newYouthDashPgLive(env, opts);
+    }
+    throw e;
+  }
+}
+
+/** Aggregates over the precomputed new_youth_ft summary table (cheap). */
+async function newYouthDashPgFast(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
+): Promise<any> {
+  const pTarget = opts.target ?? 726;
+  const dl = (opts.districts || []).filter(Boolean).map((d) => d.toUpperCase());
+
+  const params: any[] = [];
+  let dcond = '';
+  if (dl.length) { params.push(dl); dcond += ` AND UPPER(district) = ANY($${params.length}::text[])`; }
+  if (opts.from) { params.push(opts.from); dcond += ` AND first_date >= $${params.length}`; }
+  if (opts.to)   { params.push(opts.to);   dcond += ` AND first_date <= $${params.length}`; }
+
+  // KPI roll-up straight off the summary table.
+  const aggSql = `
+    SELECT
+      COUNT(*)::int                                 AS total,
+      COUNT(*) FILTER (WHERE is_female)::int         AS female,
+      COUNT(*) FILTER (WHERE is_pwd)::int            AS pwd,
+      COUNT(*) FILTER (WHERE female_pwd)::int        AS fpwd,
+      COUNT(*) FILTER (WHERE is_farming)::int        AS work,
+      COUNT(*) FILTER (WHERE farming_female)::int    AS fwork,
+      COUNT(*) FILTER (WHERE farming_pwd)::int       AS pwork,
+      COUNT(*) FILTER (WHERE farming_fpwd)::int      AS fpwork
+    FROM public.new_youth_ft WHERE TRUE ${dcond}`;
+
+  const byDateSql = `
+    SELECT first_date AS date, COUNT(*)::int AS value
+    FROM public.new_youth_ft WHERE TRUE ${dcond}
+    GROUP BY first_date ORDER BY first_date`;
+
+  const byDistrictSql = `
+    SELECT UPPER(district) AS district, COUNT(*)::int AS trained
+    FROM public.new_youth_ft WHERE district IS NOT NULL ${dcond}
+    GROUP BY UPPER(district) ORDER BY trained DESC`;
+
+  // Reach targets per district (from mel_reach_targets), summed over the months
+  // that intersect the selected date range and selected districts.
+  const mtParams: any[] = [];
+  let mtCond = '';
+  if (dl.length) { mtParams.push(dl); mtCond += ` AND UPPER(district) = ANY($${mtParams.length}::text[])`; }
+  if (opts.from) { mtParams.push(opts.from); mtCond += ` AND month >= date_trunc('month',$${mtParams.length}::date)`; }
+  if (opts.to)   { mtParams.push(opts.to);   mtCond += ` AND month <= $${mtParams.length}::date`; }
+  const distTargetSql = `
+    SELECT UPPER(district) AS district, COALESCE(SUM(monthly_target),0)::numeric AS target
+    FROM mel_reach_targets WHERE TRUE ${mtCond}
+    GROUP BY UPPER(district)`;
+
+  const [aggRows, byDateRows, targetRows, distRows, byDistrictRows, distTargetRows] = await Promise.all([
+    neonQuery(env, aggSql, params),
+    neonQuery(env, byDateSql, params),
+    neonQuery(env, `SELECT district, month, monthly_target AS target FROM mel_reach_targets`),
+    neonQuery(env, `SELECT DISTINCT district FROM public.new_youth_ft WHERE district IS NOT NULL`),
+    neonQuery(env, byDistrictSql, params),
+    neonQuery(env, distTargetSql, mtParams),
+  ]);
+
+  const a = aggRows[0] || {};
+  const num = (v: any) => Number(v || 0);
+  const toDateStr = (v: any): string => {
+    if (v == null) return '';
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    const s = String(v);
+    return s.length >= 10 ? s.slice(0, 10) : s;
+  };
+  let periodTotal = 0;
+  const months = new Set<string>();
+  const distSet = new Set<string>();
+  for (const t of targetRows) {
+    if (t.district) distSet.add(t.district);
+    if (dl.length && !dl.includes(String(t.district).toUpperCase())) continue;
+    const mStart = toDateStr(t.month);
+    const mEndDate = monthEnd(mStart);
+    if (opts.to && mStart > opts.to) continue;
+    if (opts.from && mEndDate < opts.from) continue;
+    periodTotal += num(t.target);
+    months.add(mStart);
+  }
+  const nMonths = months.size;
+  for (const d of distRows) if (d.district) distSet.add(d.district);
+  const monthlyTargetVal = nMonths > 0
+    ? Math.round(periodTotal / nMonths)
+    : (dl.length ? 0 : pTarget);
+
+  const tgtByDist = new Map<string, number>();
+  for (const t of distTargetRows) tgtByDist.set(String(t.district).toUpperCase(), num(t.target));
+  const by_district = byDistrictRows.map((r) => {
+    const dname = String(r.district).toUpperCase();
+    const target = tgtByDist.get(dname) || 0;
+    const trained = num(r.trained);
+    return {
+      district: dname,
+      trained,
+      target: Math.round(target),
+      achieved_pct: target > 0 ? Math.round((100 * trained) / target) : null,
+    };
+  });
+
+  return {
+    new_total_reach: num(a.total),
+    target_selected_period: Math.round(periodTotal),
+    monthly_target: monthlyTargetVal,
+    new_female_reach: num(a.female),
+    new_pwds_reach: num(a.pwd),
+    new_female_pwds_reach: num(a.fpwd),
+    new_youth_in_work: num(a.work),
+    new_female_youth_in_work: num(a.fwork),
+    new_pwds_in_work: num(a.pwork),
+    new_female_pwds_in_work: num(a.fpwork),
+    by_date: byDateRows.map((r) => ({ date: r.date, value: num(r.value) })),
+    by_district,
+    districts: [...distSet].sort(),
+  };
+}
+
+/** LIVE first-touch aggregation over at_rows (heavy fallback). */
+async function newYouthDashPgLive(
   env: Env,
   opts: { districts?: string[]; from?: string; to?: string; target?: number } = {}
 ): Promise<any> {
@@ -1628,8 +1771,85 @@ function monthEnd(firstOfMonth: string): string {
 }
 
 /** No-op on D1: at_rows is flattened at insert time (kept for API compatibility). */
+/**
+ * Materialise the first-touch new-youth table `new_youth_ft` — ONE row per
+ * participant with their first activity date, district, and OR-combined flags.
+ *
+ * WHY: the live per-request CTE (MIN(day) GROUP BY participant over ~765k
+ * at_rows) grew too heavy for a Cloudflare Worker — /api/new-youth was taking
+ * ~90s and returning HTTP 503, and the concurrent home fan-out over it was the
+ * main source of the 1,032 "Exceeded CPU Time Limits" errors. By precomputing
+ * the aggregation HERE (called by the VM cron, which has no Worker CPU limit)
+ * into a ~98k-row table, /api/new-youth becomes a cheap scan over a small table
+ * with simple date/district filters. Idempotent full rebuild inside one txn so
+ * readers never see a half-built table.
+ *
+ * Returns the number of participant rows materialised.
+ */
 export async function refreshNewYouth(env: Env): Promise<number> {
-  return frontlinerCount(env);
+  if (!frontlinerOnCrdb(env)) return frontlinerCount(env);
+  const client = await connectClusterWithRetry(env);
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS public.new_youth_ft (
+        pid            text PRIMARY KEY,
+        first_date     text NOT NULL,
+        district       text,
+        is_female      boolean NOT NULL DEFAULT false,
+        is_pwd         boolean NOT NULL DEFAULT false,
+        is_farming     boolean NOT NULL DEFAULT false,
+        female_pwd     boolean NOT NULL DEFAULT false,
+        farming_female boolean NOT NULL DEFAULT false,
+        farming_pwd    boolean NOT NULL DEFAULT false,
+        farming_fpwd   boolean NOT NULL DEFAULT false
+      )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_nyft_first_date ON public.new_youth_ft (first_date)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_nyft_district ON public.new_youth_ft (UPPER(district))`);
+
+    // Rebuild atomically: fill a scratch table, then swap in one txn.
+    await client.query('BEGIN');
+    await client.query(`DROP TABLE IF EXISTS public.new_youth_ft_next`);
+    await client.query(`
+      CREATE TABLE public.new_youth_ft_next AS
+      WITH dated AS (
+        SELECT participant_id AS pid, day, district,
+               (sex = 'Female')  AS f,
+               (is_pwd = 1)       AS p,
+               (is_farming = 1)   AS w
+        FROM public.at_rows
+        WHERE participant_id IS NOT NULL AND has_date = 1 AND day IS NOT NULL
+      ),
+      firsts AS (
+        SELECT pid, MIN(day) AS first_date FROM dated GROUP BY pid
+      )
+      SELECT d.pid,
+             f.first_date,
+             MAX(d.district)                 AS district,
+             bool_or(d.f)                     AS is_female,
+             bool_or(d.p)                     AS is_pwd,
+             bool_or(d.w)                     AS is_farming,
+             bool_or(d.f AND d.p)             AS female_pwd,
+             bool_or(d.w AND d.f)             AS farming_female,
+             bool_or(d.w AND d.p)             AS farming_pwd,
+             bool_or(d.w AND d.p AND d.f)     AS farming_fpwd
+      FROM dated d
+      JOIN firsts f ON f.pid = d.pid AND d.day = f.first_date
+      GROUP BY d.pid, f.first_date`);
+    await client.query(`DROP TABLE IF EXISTS public.new_youth_ft`);
+    await client.query(`ALTER TABLE public.new_youth_ft_next RENAME TO new_youth_ft`);
+    await client.query(`ALTER TABLE public.new_youth_ft ADD PRIMARY KEY (pid)`);
+    await client.query(`CREATE INDEX idx_nyft_first_date ON public.new_youth_ft (first_date)`);
+    await client.query(`CREATE INDEX idx_nyft_district ON public.new_youth_ft (UPPER(district))`);
+    await client.query('COMMIT');
+
+    const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM public.new_youth_ft`);
+    return Number(cnt.rows?.[0]?.c) || 0;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    throw e;
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
 }
 
 /**

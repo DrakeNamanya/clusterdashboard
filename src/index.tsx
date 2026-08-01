@@ -78,6 +78,106 @@ function storeEnv(c: any): Env {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Edge cache for heavy dashboard aggregations.
+//
+// ROOT CAUSE of the "dashboard switched off" outages (Cloudflare showed 1,032
+// "Exceeded CPU Time Limits" errors): the home page fires ~9 dashboard loaders
+// concurrently, and several of them (esp. /api/new-youth, which runs 6 queries
+// including 3 full-table first-touch scans over ~765k at_rows) recompute heavy
+// aggregations on EVERY request. Concurrent + repeated on each refresh / filter
+// change / auto-sync exhausts the Worker's per-request CPU budget, so requests
+// get killed with no response and the dashboard goes blank.
+//
+// Fix: put the expensive aggregation results in Cloudflare's shared edge cache
+// (caches.default). Data only changes every ~5 min (the cron sync cadence), so
+// the first request in each 5-min window pays the DB/CPU cost and every other
+// request — including the whole concurrent fan-out — is a near-zero-CPU cache
+// HIT. Cache key = full request URL, so different filter/date selections cache
+// independently. The cache is warmed asynchronously via waitUntil so the
+// producing request still returns immediately.
+const EDGE_TTL = 300;        // seconds a cached entry is considered "fresh"
+const EDGE_STORE_TTL = 86400; // how long the edge physically keeps the entry
+
+// Build the canonical cache key (bare GET Request on the full URL incl. query).
+function edgeCacheKey(url: string): Request {
+  return new Request(new URL(url).toString(), { method: 'GET' });
+}
+
+// Produce → serialise → store the aggregation in the edge cache. Stamps an
+// internal freshness header so we can implement stale-while-revalidate.
+async function produceAndStore(
+  c: any,
+  cache: Cache | undefined,
+  cacheKey: Request,
+  producer: () => Promise<unknown>,
+  ttl: number,
+): Promise<Response> {
+  const data = await producer();
+  const body = JSON.stringify(data);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json; charset=utf-8',
+    // Physically keep the entry a long time so we can serve it stale while we
+    // recompute in the background; browsers reuse it briefly (60s).
+    'Cache-Control': `public, max-age=60, s-maxage=${EDGE_STORE_TTL}`,
+    'X-Edge-Fresh-Until': String(Date.now() + ttl * 1000),
+  };
+  const resp = new Response(body, { status: 200, headers });
+  if (cache) {
+    try { await cache.put(cacheKey, resp.clone()); } catch { /* ignore */ }
+  }
+  return resp;
+}
+
+/**
+ * Edge-cached JSON with stale-while-revalidate.
+ *
+ * ROOT CAUSE of the outages (Cloudflare: 1,032 "Exceeded CPU Time Limits"):
+ * the home page fans out ~9 dashboard loaders at once, and several recompute
+ * heavy aggregations over ~765k at_rows against a SLOW self-hosted Postgres VM
+ * (a single COUNT(*) over at_rows already takes ~10-15s). Concurrent + repeated
+ * on every refresh/filter/auto-sync blows the Worker's CPU/subrequest budget,
+ * the request is killed with no response, and the dashboard goes blank.
+ *
+ * Strategy:
+ *  - HIT & fresh  -> return instantly (near-zero CPU).
+ *  - HIT & stale  -> return the stale copy instantly, recompute in background
+ *                    (waitUntil) so NO user ever waits on a slow DB query.
+ *  - MISS         -> compute once, store, return. Only the very first request
+ *                    per key (ideally the cron warmer, not a user) pays this.
+ */
+async function cachedJson(
+  c: any,
+  producer: () => Promise<unknown>,
+  ttl: number = EDGE_TTL,
+): Promise<Response> {
+  const method = (c.req.method || 'GET').toUpperCase();
+  const cache: Cache | undefined = (globalThis as any).caches?.default;
+  const ctx = c.executionCtx ?? (c as any).ctx;
+  if (!cache || method !== 'GET') {
+    return produceAndStore(c, undefined, edgeCacheKey(c.req.url), producer, ttl);
+  }
+
+  const cacheKey = edgeCacheKey(c.req.url);
+  let hit: Response | undefined;
+  try { hit = await cache.match(cacheKey); } catch { hit = undefined; }
+
+  if (hit) {
+    const freshUntil = Number(hit.headers.get('X-Edge-Fresh-Until') || 0);
+    const isStale = !freshUntil || Date.now() > freshUntil;
+    if (isStale && ctx?.waitUntil) {
+      // Serve stale NOW, refresh in the background so the next hit is fresh.
+      ctx.waitUntil(
+        produceAndStore(c, cache, cacheKey, producer, ttl).catch(() => {}),
+      );
+    }
+    return hit;
+  }
+
+  // Cold cache: compute once and store.
+  return produceAndStore(c, cache, cacheKey, producer, ttl);
+}
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use('/api/*', cors());
@@ -302,17 +402,19 @@ app.get('/api/maxseq/:key', async (c) => {
 // ---- Master data browse ----------------------------------------------------
 
 app.get('/api/stats', async (c) => {
-  const stats = await tableStats(storeEnv(c), SCHEMAS);
   const base = baseUrl(c.req.url);
-  return c.json({
-    schemas: stats.map((s) => ({
-      ...s,
-      odataFeed: `${base}/odata/${s.key}`,
-      apiData: `${base}/api/data/${s.key}`,
-      csv: `${base}/api/export/${s.key}.csv`,
-    })),
-    odataService: `${base}/odata/`,
-    odataMetadata: `${base}/odata/$metadata`,
+  return cachedJson(c, async () => {
+    const stats = await tableStats(storeEnv(c), SCHEMAS);
+    return {
+      schemas: stats.map((s) => ({
+        ...s,
+        odataFeed: `${base}/odata/${s.key}`,
+        apiData: `${base}/api/data/${s.key}`,
+        csv: `${base}/api/export/${s.key}.csv`,
+      })),
+      odataService: `${base}/odata/`,
+      odataMetadata: `${base}/odata/$metadata`,
+    };
   });
 });
 
@@ -355,6 +457,85 @@ app.get('/api/freshness', async (c) => {
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 200, { 'Cache-Control': 'no-store' });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Cache warmer — called by the VM cron right after each 5-min MIS sync.
+//
+// This is the piece that actually PREVENTS the "Exceeded CPU Time Limits"
+// outages. The heavy first-compute of each dashboard aggregation (10-30s over
+// ~765k rows on the slow Postgres VM) is paid HERE, server-to-server, once per
+// 5-min window — NOT by a browser. It self-fetches each heavy endpoint so the
+// normal cachedJson() path computes and stores the result in the edge cache.
+// After this runs, every real dashboard request is a near-instant cache HIT,
+// and stale-while-revalidate keeps refreshing in the background so users never
+// wait on a cold compute again. Fire-and-forget with waitUntil so the warmer
+// itself returns immediately (it must never block or itself time out).
+app.all('/api/warm-cache', async (c) => {
+  const base = baseUrl(c.req.url);
+  // Current calendar month range (drives the default dashboard views).
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth(); // 0-based
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const monthFrom = `${y}-${pad(m + 1)}-01`;
+  const monthEnd = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const monthTo = `${y}-${pad(m + 1)}-${pad(monthEnd)}`;
+  const dr = `from=${monthFrom}&to=${monthTo}`;
+  const ll = `dateFrom=${monthFrom}&dateTo=${monthTo}`;
+
+  // Heavy endpoints to pre-warm, in both "all time" (no filter) and current
+  // month flavours — the two selections the dashboards open with.
+  const paths = [
+    `/api/stats`,
+    `/api/cluster-trainings`, `/api/cluster-trainings?${dr}`,
+    `/api/new-youth`, `/api/new-youth?${dr}`,
+    `/api/frontliners`, `/api/frontliners?${dr}`,
+    `/api/distribution`, `/api/distribution?${dr}`,
+    `/api/shg-distribution`, `/api/shg-distribution?${dr}`,
+    `/api/shg-profiling`, `/api/shg-profiling?${dr}`,
+    `/api/isla`, `/api/isla?${dr}`,
+    `/api/value-chain-sales`, `/api/value-chain-sales?${dr}`,
+    `/api/production`, `/api/production?${dr}`,
+    `/api/sales`, `/api/sales?${dr}`,
+    `/api/poultry-sales`, `/api/poultry-sales?${dr}`,
+    `/api/items-not-sold`,
+    `/api/local-leverage`, `/api/local-leverage?${ll}`,
+    `/api/report`, `/api/report?${dr}`,
+  ];
+
+  // Warm by making REAL external requests to each endpoint's public URL. Each
+  // such request is a SEPARATE Worker invocation with its OWN CPU/subrequest
+  // budget, so the heavy first-compute of every dashboard is isolated and can
+  // never blow a single invocation's limit (which is what warming them all
+  // in-process would risk). We deliberately do NOT wait for the responses:
+  // firing the request is enough to trigger the compute-and-store on the other
+  // side. A tiny stagger keeps the slow VM Postgres from being stampeded.
+  const warmAll = async () => {
+    const results: Record<string, string> = {};
+    for (const p of paths) {
+      try {
+        // Fully await each downstream request so its compute-and-store COMPLETES
+        // (each is a separate Worker invocation with its own CPU budget, so a
+        // slow one can't blow this warmer's budget). We read the status only.
+        const r = await fetch(base + p, { method: 'GET', headers: { 'X-Warm': '1' } });
+        results[p] = String(r.status);
+      } catch (e: any) {
+        results[p] = 'err:' + String(e?.message || e).slice(0, 30);
+      }
+    }
+    return results;
+  };
+
+  const wait = c.req.query('wait') === '1';
+  if (wait) {
+    const results = await warmAll();
+    return c.json({ ok: true, warmed: paths.length, results }, 200, { 'Cache-Control': 'no-store' });
+  }
+  const ctx = c.executionCtx ?? (c as any).ctx;
+  if (ctx?.waitUntil) ctx.waitUntil(warmAll());
+  else warmAll(); // fire and forget
+  return c.json({ ok: true, warming: paths.length, month: { monthFrom, monthTo } }, 200, { 'Cache-Control': 'no-store' });
 });
 
 app.get('/api/data/:key', async (c) => {
@@ -495,12 +676,11 @@ app.get('/api/cluster-trainings', async (c) => {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  const data = await clusterTrainings(storeEnv(c), {
+  return cachedJson(c, () => clusterTrainings(storeEnv(c), {
     districts,
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Rebuild the summary table (run after new uploads change the data).
@@ -521,12 +701,11 @@ app.get('/api/new-youth', async (c) => {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  const data = await newYouthDash(storeEnv(c), {
+  return cachedJson(c, () => newYouthDash(storeEnv(c), {
     districts,
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Rebuild the new_youth first-touch table (run after new uploads change data).
@@ -551,13 +730,12 @@ app.get('/api/frontliners', async (c) => {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  const data = await frontlinerDash(storeEnv(c), {
+  return cachedJson(c, () => frontlinerDash(storeEnv(c), {
     districts,
     collectors,
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Rebuild the frontliner_rows table (heavy; run after uploads change data).
@@ -581,7 +759,7 @@ app.get('/api/distribution', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await distributionDash(storeEnv(c), {
+  return cachedJson(c, () => distributionDash(storeEnv(c), {
     districts: split(q.districts),
     materials: split(q.materials),
     units: split(q.units),
@@ -589,8 +767,7 @@ app.get('/api/distribution', async (c) => {
     suppliers: split(q.suppliers),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists (loaded independently so slicers always fill).
@@ -637,7 +814,7 @@ app.get('/api/shg-distribution', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await shgDistributionDash(storeEnv(c), {
+  return cachedJson(c, () => shgDistributionDash(storeEnv(c), {
     districts: split(q.districts),
     materials: split(q.materials),
     units: split(q.units),
@@ -645,8 +822,7 @@ app.get('/api/shg-distribution', async (c) => {
     suppliers: split(q.suppliers),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists (loaded independently so slicers always fill).
@@ -696,15 +872,14 @@ app.get('/api/shg-profiling', async (c) => {
     const n = Number(s);
     return s != null && s !== '' && Number.isFinite(n) ? n : undefined;
   };
-  const data = await shgProfilingDash(storeEnv(c), {
+  return cachedJson(c, () => shgProfilingDash(storeEnv(c), {
     districts: split(q.districts),
     profilers: split(q.profilers),
     from: q.from || undefined,
     to: q.to || undefined,
     totalMin: numOrU(q.totalMin),
     totalMax: numOrU(q.totalMax),
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -731,13 +906,12 @@ app.get('/api/isla', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await islaDash(storeEnv(c), {
+  return cachedJson(c, () => islaDash(storeEnv(c), {
     districts: split(q.districts),
     profilers: split(q.profilers),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -757,12 +931,11 @@ app.get('/api/value-chain-sales', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await valueChainSales(storeEnv(c), {
+  return cachedJson(c, () => valueChainSales(storeEnv(c), {
     districts: split(q.districts),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // ---- Youth in Production (Mainly Horticulture) -----------------------------
@@ -777,13 +950,12 @@ app.get('/api/production', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await productionDash(storeEnv(c), {
+  return cachedJson(c, () => productionDash(storeEnv(c), {
     districts: split(q.districts),
     valuechains: split(q.valuechains),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -810,13 +982,12 @@ app.get('/api/sales', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await salesDash(storeEnv(c), {
+  return cachedJson(c, () => salesDash(storeEnv(c), {
     districts: split(q.districts),
     valuechains: split(q.valuechains),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -843,14 +1014,13 @@ app.get('/api/poultry-sales', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await poultrySalesDash(storeEnv(c), {
+  return cachedJson(c, () => poultrySalesDash(storeEnv(c), {
     districts: split(q.districts),
     poultry: split(q.poultry),
     profilers: split(q.profilers),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -881,13 +1051,12 @@ app.get('/api/items-not-sold', async (c) => {
     const n = Number(s);
     return s != null && s !== '' && Number.isFinite(n) ? n : null;
   };
-  const data = await itemsNotSoldDash(storeEnv(c), {
+  return cachedJson(c, () => itemsNotSoldDash(storeEnv(c), {
     valuechains: split(q.valuechains),
     districts: split(q.districts),
     daysMin: numOrNull(q.daysMin) ?? undefined,
     daysMax: numOrNull(q.daysMax) ?? undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -914,12 +1083,11 @@ app.get('/api/local-leverage', async (c) => {
   const q = c.req.query();
   const split = (s?: string) =>
     (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await localLeverageDash(storeEnv(c), {
+  return cachedJson(c, () => localLeverageDash(storeEnv(c), {
     districts: split(q.districts),
     dateFrom: q.dateFrom || undefined,
     dateTo: q.dateTo || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // Lightweight slicer option lists.
@@ -939,12 +1107,11 @@ app.get('/report', (c) => c.html(renderReport(baseUrl(c.req.url))));
 app.get('/api/report', async (c) => {
   const q = c.req.query();
   const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-  const data = await melReportDash(storeEnv(c), {
+  return cachedJson(c, () => melReportDash(storeEnv(c), {
     districts: split(q.districts),
     from: q.from || undefined,
     to: q.to || undefined,
-  });
-  return c.json(data);
+  }));
 });
 
 // ---- Weekly Report (Mon–Sun summary of all indicators) ---------------------
@@ -1192,10 +1359,19 @@ for v in shg_groups_view isla_form youth_profiling shg_profiling_form production
 done
 
 # 3) Rebuild each dashboard's fact tables (light clusters every cycle).
+#    'newyouth' now rebuilds the precomputed new_youth_ft first-touch table so
+#    /api/new-youth is a cheap scan instead of a 765k-row live aggregation.
 #    (distribution + itemsnotsold are omitted until participants_shg is fixed.)
 for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage shgdistribution jobtracking; do
-  echo -n "refresh $c: "; curl -s --max-time 110 -X POST "$BASE/api/refresh-all?only=$c"; echo
+  echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
+
+# 4) PRE-WARM the edge cache. The heavy first-compute of each dashboard is paid
+#    HERE, server-to-server, once per 5-min window — so every real browser hit
+#    is a near-instant Cloudflare Cache HIT. This is what stops the recurring
+#    "Exceeded CPU Time Limits" outages (a browser never triggers a cold compute
+#    over ~765k rows again). ?wait=1 makes the warmer compute+store synchronously.
+echo -n "warm-cache: "; curl -s --max-time 300 "$BASE/api/warm-cache?wait=1"; echo
 
 echo "$(date -u) === cron done ==="
 `;
