@@ -84,11 +84,15 @@ export function renderCfPremierLeague(base: string): string {
     .secthead h2{ margin:0; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.16em; color:var(--primary); }
     .secthead .rng{ margin-left:auto; font-size:9px; color:var(--muted-fg); }
 
-    /* standings table */
-    table.lg{ width:100%; border-collapse:collapse; }
-    table.lg thead th{ background:var(--primary-deep); color:rgba(255,255,255,.86); font-size:7.5px; text-transform:uppercase; letter-spacing:.12em; font-weight:600; text-align:left; padding:6px 8px; line-height:1.15; }
+    /* standings table — fixed layout so 11 columns always fit A4 width */
+    table.lg{ width:100%; border-collapse:collapse; table-layout:fixed; }
+    table.lg thead th{ background:var(--primary-deep); color:rgba(255,255,255,.86); font-size:7px; text-transform:uppercase; letter-spacing:.06em; font-weight:600; text-align:left; padding:5px 5px; line-height:1.12; overflow:hidden; }
     table.lg thead th.c{ text-align:center; }
-    table.lg tbody td{ padding:7px 8px; border-bottom:1px solid var(--border); font-size:9px; vertical-align:middle; }
+    table.lg tbody td{ padding:6px 5px; border-bottom:1px solid var(--border); font-size:8.5px; vertical-align:middle; overflow:hidden; }
+    /* metric columns are numeric — right align + no wrap so figures stay tidy */
+    table.lg td.mnum, table.lg th.mcol{ text-align:right; }
+    table.lg .mtop{ font-weight:700; }
+    table.lg .msub{ color:var(--muted-fg); font-size:7px; letter-spacing:.02em; }
     table.lg tbody tr:nth-child(odd){ background:rgba(238,242,251,.45); }
     /* zone row tints — colour-code the standings for quick reading:
        champions (top 3) royal-blue wash, contenders (4–6) green wash,
@@ -105,13 +109,14 @@ export function renderCfPremierLeague(base: string): string {
     .posn{ font-family:var(--mono); font-size:11px; font-weight:700; color:var(--primary-deep); }
     .cf{ display:flex; align-items:center; gap:8px; }
     .avatar{ width:18px; height:18px; display:grid; place-items:center; background:var(--primary); color:#fff; font-family:var(--mono); font-size:7.5px; font-weight:700; flex:none; }
-    .cfname{ font-size:10px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
-    .ovc{ display:flex; align-items:center; gap:8px; }
-    .ovbar{ height:6px; flex:1; background:var(--muted); min-width:44px; }
+    .cfname{ font-size:9.5px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .cf{ min-width:0; }
+    .ovc{ display:flex; align-items:center; gap:6px; }
+    .ovbar{ height:6px; flex:1; background:var(--muted); min-width:26px; }
     .ovbar-f{ height:100%; background:var(--primary); }
-    .ovpct{ font-family:var(--mono); font-size:10px; font-weight:700; color:var(--primary-deep); width:30px; text-align:right; }
-    .gbox{ display:inline-grid; place-items:center; width:18px; height:18px; border:1px solid; font-family:var(--mono); font-size:9px; font-weight:700; }
-    td.mnum{ font-family:var(--mono); font-size:9px; }
+    .ovpct{ font-family:var(--mono); font-size:9px; font-weight:700; color:var(--primary-deep); width:26px; text-align:right; flex:none; }
+    .gbox{ display:inline-grid; place-items:center; width:17px; height:17px; border:1px solid; font-family:var(--mono); font-size:9px; font-weight:700; }
+    td.mnum{ font-family:var(--mono); font-size:8.5px; line-height:1.25; }
     td.mnum.dim{ color:var(--muted-fg); }
 
     /* grading scale + verification */
@@ -179,6 +184,13 @@ export function renderCfPremierLeague(base: string): string {
 
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function fmt(n){ n=Number(n)||0; return n.toLocaleString('en-US'); }
+    // Compact money so the Sales column fits A4: 4,165,300 -> "UGX 4.2M".
+    function money(n){ n=Number(n)||0;
+      if(n>=1e9) return 'UGX '+(n/1e9).toFixed(n>=1e10?0:1)+'B';
+      if(n>=1e6) return 'UGX '+(n/1e6).toFixed(n>=1e7?0:1)+'M';
+      if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K';
+      return 'UGX '+fmt(n);
+    }
     function prettyDate(s){ if(!s) return ''; try{ return new Date(s+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return s; } }
     function initials(name){ return String(name||'').trim().split(/\\s+/).slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase(); }
     function gradeLetter(p){ p=Number(p)||0; if(p>=80)return'A'; if(p>=60)return'B'; if(p>=40)return'C'; if(p>=20)return'D'; return'E'; }
@@ -195,19 +207,23 @@ export function renderCfPremierLeague(base: string): string {
       var ov=Math.min(100,Number(r.overall)||0);
       // avatar colour follows the zone so the leaderboard reads at a glance
       var avColor = rank<=3 ? '#003399' : (rank<=6 ? '#1f8a4c' : (rank>n-3 ? '#c62f2f' : '#5a6480'));
-      // 7 metric string cells + dim styling when zero / dash
+      // 7 metric cells rendered as a compact two-line stack: a bold figure on
+      // top and a small unit label below, so verbose suffixes ("in work",
+      // "contrib.") no longer push the columns off the A4 sheet. Money is
+      // abbreviated (UGX 4.2M) for the same reason.
       var cells=[
-        fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled)+' SHGs',
-        fmt(r.youth_production)+' youth',
-        fmt(r.groups_trained)+' groups',
-        fmt(r.employed_youth)+' in work',
-        fmt(r.birds_sold)+' birds',
-        (Number(r.hs_value)>0?'UGX '+fmt(r.hs_value):'—'),
-        fmt(r.lev_count)+' contrib.'
+        { top: fmt(r.shgs_saving)+'/'+fmt(r.shgs_profiled), sub:'SHGs', zero:(Number(r.shgs_profiled)||0)===0 },
+        { top: fmt(r.youth_production),  sub:'youth',    zero:(Number(r.youth_production)||0)===0 },
+        { top: fmt(r.groups_trained),   sub:'groups',    zero:(Number(r.groups_trained)||0)===0 },
+        { top: fmt(r.employed_youth),   sub:'in work',   zero:(Number(r.employed_youth)||0)===0 },
+        { top: fmt(r.birds_sold),       sub:'birds',     zero:(Number(r.birds_sold)||0)===0 },
+        { top: (Number(r.hs_value)>0?money(r.hs_value):'—'), sub:'sales', zero:!(Number(r.hs_value)>0) },
+        { top: fmt(r.lev_count),        sub:'contrib.',  zero:(Number(r.lev_count)||0)===0 }
       ];
-      var cellHtml=cells.map(function(v){
-        var dim = (v==='—' || /^0[^0-9]/.test(v) || v==='0');
-        return '<td class="mnum'+(dim?' dim':'')+'">'+esc(v)+'</td>';
+      var cellHtml=cells.map(function(m){
+        return '<td class="mnum'+(m.zero?' dim':'')+'">'+
+          '<span class="mtop">'+esc(m.top)+'</span>'+
+          '<br/><span class="msub">'+esc(m.sub)+'</span></td>';
       }).join('');
       return '<tr class="'+rowCls+'">'+
         '<td class="poscell">'+(zone?'<span class="zonebar '+zone+'"></span>':'')+'<span class="posn '+medal+'">'+rank+'</span></td>'+
@@ -219,18 +235,33 @@ export function renderCfPremierLeague(base: string): string {
     }
 
     function tableHead(){
-      return '<thead><tr>'+
-        '<th class="c" style="width:30px">Pos</th>'+
-        '<th style="width:17%">Community Facilitator</th>'+
-        '<th style="width:13%">Overall</th>'+
-        '<th class="c" style="width:34px">Gr</th>'+
-        '<th>SHGs<br/>saving/profiled</th>'+
-        '<th>Youth<br/>production</th>'+
-        '<th>Trainings<br/>first</th>'+
-        '<th>Youth<br/>in work</th>'+
-        '<th>Sales<br/>poultry</th>'+
-        '<th>Sales<br/>horticulture</th>'+
-        '<th>Local<br/>leverage</th>'+
+      // Fixed column widths (must sum to 100%) so the 11 columns always fit the
+      // A4 content width — the metric columns are equal-width and right-aligned.
+      return '<colgroup>'+
+          '<col style="width:4%"/>'+     // Pos
+          '<col style="width:18%"/>'+    // Community Facilitator
+          '<col style="width:12%"/>'+    // Overall
+          '<col style="width:4%"/>'+     // Gr
+          '<col style="width:9%"/>'+     // SHGs
+          '<col style="width:9%"/>'+     // Youth production
+          '<col style="width:9%"/>'+     // Trainings first
+          '<col style="width:9%"/>'+     // Youth in work
+          '<col style="width:8.5%"/>'+   // Sales poultry
+          '<col style="width:9%"/>'+     // Sales horticulture
+          '<col style="width:8.5%"/>'+   // Local leverage
+        '</colgroup>'+
+        '<thead><tr>'+
+        '<th class="c">Pos</th>'+
+        '<th>Community<br/>Facilitator</th>'+
+        '<th>Overall</th>'+
+        '<th class="c">Gr</th>'+
+        '<th class="mcol">SHGs<br/>sav/prof</th>'+
+        '<th class="mcol">Youth<br/>prod.</th>'+
+        '<th class="mcol">Trainings<br/>first</th>'+
+        '<th class="mcol">Youth<br/>in work</th>'+
+        '<th class="mcol">Sales<br/>poultry</th>'+
+        '<th class="mcol">Sales<br/>hort.</th>'+
+        '<th class="mcol">Local<br/>leverage</th>'+
       '</tr></thead>';
     }
 

@@ -16,10 +16,28 @@ export interface NavItem {
   href: string;
   label: string;
   icon: string; // Font Awesome class
+  // Optional group id: items sharing a group id are rendered under a single
+  // collapsible category header (see NAV_GROUPS). Ungrouped items render
+  // stand-alone in their position in the list.
+  group?: string;
 }
 
+// Category headers for grouped items. `key` matches NavItem.group.
+export interface NavGroup {
+  key: string;
+  label: string;
+  icon: string; // Font Awesome class for the group header
+}
+
+export const NAV_GROUPS: NavGroup[] = [
+  { key: 'grp-distribution', label: 'Distribution', icon: 'fa-boxes-stacked' },
+  { key: 'grp-sales', label: 'Sales', icon: 'fa-sack-dollar' },
+];
+
 // The single source of truth for the dashboard menu. Order matches the header
-// we had before, with Home first.
+// we had before, with Home first. Items carrying a `group` are collapsed under
+// the matching category header (Distribution, Sales); the group renders at the
+// position of its FIRST member. Everything else stays independent.
 export const NAV_ITEMS: NavItem[] = [
   { key: 'home', href: '/', label: 'Home', icon: 'fa-house' },
   { key: 'report', href: '/report', label: 'Report Dashboard', icon: 'fa-bullseye' },
@@ -31,14 +49,16 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'cluster', href: '/cluster-trainings', label: 'Cluster Trainings', icon: 'fa-chart-simple' },
   { key: 'newyouth', href: '/monthly-new-youth', label: 'Monthly New Youth', icon: 'fa-user-plus' },
   { key: 'frontliners', href: '/frontliners', label: 'Trainings by Frontliners', icon: 'fa-table' },
-  { key: 'distribution', href: '/distribution', label: 'Distribution to Participants', icon: 'fa-boxes-stacked' },
-  { key: 'shgdistribution', href: '/shg-distribution', label: 'Distribution to SHGs', icon: 'fa-people-group' },
+  // ── Distribution group ──
+  { key: 'distribution', href: '/distribution', label: 'Distribution to Participants', icon: 'fa-boxes-stacked', group: 'grp-distribution' },
+  { key: 'shgdistribution', href: '/shg-distribution', label: 'Distribution to SHGs', icon: 'fa-people-group', group: 'grp-distribution' },
   { key: 'shgprofiling', href: '/shg-profiling', label: 'SHG Profiling', icon: 'fa-address-card' },
   { key: 'isla', href: '/isla', label: 'ISLA Savings', icon: 'fa-piggy-bank' },
   { key: 'production', href: '/production', label: 'Production (Horticulture)', icon: 'fa-seedling' },
-  { key: 'sales', href: '/sales', label: 'Sales (Horticulture/Oilseeds)', icon: 'fa-sack-dollar' },
-  { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird' },
-  { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation' },
+  // ── Sales group ──
+  { key: 'sales', href: '/sales', label: 'Sales (Horticulture/Oilseeds)', icon: 'fa-sack-dollar', group: 'grp-sales' },
+  { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird', group: 'grp-sales' },
+  { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation', group: 'grp-sales' },
   { key: 'localleverage', href: '/local-leverage', label: 'Local Leverage', icon: 'fa-hand-holding-dollar' },
   { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom' },
 ];
@@ -47,13 +67,45 @@ export const NAV_ITEMS: NavItem[] = [
 // it inline for simplicity). The sidebar is fixed on the right; the page body
 // gets right padding so content is not hidden behind it on wide screens.
 export function navSidebar(activeKey: string): string {
-  const items = NAV_ITEMS.map((it) => {
+  const itemLink = (it: NavItem, inGroup: boolean): string => {
     const active = it.key === activeKey;
-    return `<a href="${it.href}" class="shg-nav-item${active ? ' active' : ''}"${active ? ' aria-current="page"' : ''}>
+    return `<a href="${it.href}" class="shg-nav-item${inGroup ? ' shg-nav-sub' : ''}${active ? ' active' : ''}"${active ? ' aria-current="page"' : ''}>
         <span class="shg-nav-ico"><i class="fas ${it.icon}"></i></span>
         <span class="shg-nav-label">${it.label}</span>
       </a>`;
-  }).join('\n      ');
+  };
+
+  const groupMap = new Map(NAV_GROUPS.map((g) => [g.key, g]));
+  const parts: string[] = [];
+  const rendered = new Set<string>();
+
+  for (const it of NAV_ITEMS) {
+    if (!it.group) {
+      parts.push(itemLink(it, false));
+      continue;
+    }
+    // Render the whole group once, at the position of its first member.
+    if (rendered.has(it.group)) continue;
+    rendered.add(it.group);
+    const g = groupMap.get(it.group);
+    if (!g) { parts.push(itemLink(it, false)); continue; }
+    const members = NAV_ITEMS.filter((m) => m.group === it.group);
+    const hasActive = members.some((m) => m.key === activeKey);
+    // A group starts OPEN when it contains the active page, else closed.
+    parts.push(
+      `<div class="shg-nav-group${hasActive ? ' open' : ''}" data-group="${g.key}">
+        <button type="button" class="shg-nav-grouphead" aria-expanded="${hasActive ? 'true' : 'false'}">
+          <span class="shg-nav-ico"><i class="fas ${g.icon}"></i></span>
+          <span class="shg-nav-label">${g.label}</span>
+          <i class="fas fa-chevron-down shg-nav-caret"></i>
+        </button>
+        <div class="shg-nav-groupbody">
+          ${members.map((m) => itemLink(m, true)).join('\n          ')}
+        </div>
+      </div>`
+    );
+  }
+  const items = parts.join('\n      ');
 
   return `
   <style>
@@ -97,6 +149,28 @@ export function navSidebar(activeKey: string): string {
     }
     .shg-nav-item.active .shg-nav-ico{ background:#dbe7f1; color:var(--shg-navy); }
     .shg-nav-label{ line-height:1.15; }
+    /* ---- Collapsible category groups (Distribution, Sales) ---- */
+    .shg-nav-group{ border-bottom:1px solid #eef1f4; }
+    .shg-nav-grouphead{
+      width:100%; display:flex; align-items:center; gap:12px;
+      padding:13px 16px 13px 18px; border:0; background:transparent; cursor:pointer;
+      color:#243b53; font-size:14px; font-weight:700; text-align:left;
+      font-family:inherit; transition:background .12s;
+    }
+    .shg-nav-grouphead:hover{ background:#f4f7fa; }
+    .shg-nav-caret{ margin-left:auto; font-size:12px; color:#7c8da0; transition:transform .2s ease; }
+    .shg-nav-group.open > .shg-nav-grouphead .shg-nav-caret{ transform:rotate(180deg); }
+    .shg-nav-groupbody{
+      display:none; background:#f8fafc;
+      border-top:1px solid #eef1f4;
+    }
+    .shg-nav-group.open > .shg-nav-groupbody{ display:block; }
+    /* indented sub-items so the hierarchy reads clearly */
+    .shg-nav-item.shg-nav-sub{ padding-left:30px; font-weight:600; }
+    .shg-nav-item.shg-nav-sub .shg-nav-ico{ width:28px; height:28px; font-size:13px; border-radius:8px; }
+    .shg-nav-item.shg-nav-sub:last-child{ border-bottom:0; }
+    /* highlight the group header when one of its children is active */
+    .shg-nav-group.open > .shg-nav-grouphead{ color:var(--shg-navy); }
     /* Floating opener shown when the sidebar is collapsed */
     .shg-nav-open{
       position:fixed; top:14px; right:14px; z-index:9001;
@@ -150,6 +224,27 @@ export function navSidebar(activeKey: string): string {
       setCollapsed(startCollapsed);
       close.addEventListener('click', function(){ setCollapsed(true); });
       open.addEventListener('click',  function(){ setCollapsed(false); });
+
+      // Collapsible category groups (Distribution, Sales). A group is open by
+      // default when it holds the active page; the user can toggle any group,
+      // and the open/closed state per group is remembered.
+      var groups = nav.querySelectorAll('.shg-nav-group');
+      Array.prototype.forEach.call(groups, function(grp){
+        var gid = grp.getAttribute('data-group');
+        var head = grp.querySelector('.shg-nav-grouphead');
+        // Restore saved state (falls back to the server-rendered default).
+        try{
+          var s = localStorage.getItem('shgNavGrp:'+gid);
+          if(s==='1') grp.classList.add('open');
+          else if(s==='0') grp.classList.remove('open');
+        }catch(e){}
+        head.setAttribute('aria-expanded', grp.classList.contains('open') ? 'true':'false');
+        head.addEventListener('click', function(){
+          var isOpen = grp.classList.toggle('open');
+          head.setAttribute('aria-expanded', isOpen ? 'true':'false');
+          try{ localStorage.setItem('shgNavGrp:'+gid, isOpen ? '1':'0'); }catch(e){}
+        });
+      });
     })();
   </script>`;
 }
