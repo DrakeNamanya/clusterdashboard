@@ -150,6 +150,11 @@ const NEON_TEMPLATES = new Set<string>([
   'distribution_form_v2',
   'agrihubs',
   'job_tracking',
+  // Local leverage lives on the Cluster-2 VM (refresh_local_leverage_rows reads
+  // public.records there). Without this it wrongly routed to Supabase, so new
+  // contributions (e.g. the 31st-Friday amounts) never reached the VM records
+  // and the dashboard lagged. Route it to the VM so the freshness sync lands.
+  'local_leverage_fund_contribution_form',
 ]);
 
 /** True when this template's records should be stored/queried on the Cluster-2

@@ -866,6 +866,50 @@ app.get('/api/distribution-odata/diag', async (c) => {
   }
 });
 
+// Ops diagnostic: dump a function definition. Token-gated so DB internals are
+// not publicly readable.   /api/_fn?name=mel_cf_report&token=...
+app.get('/api/_fn', async (c) => {
+  const env = storeEnv(c);
+  if (c.req.query('token') !== 'shg-fix-2026') return c.json({ error: 'forbidden' }, 403);
+  const name = c.req.query('name') || '';
+  try {
+    const rows = await neonQuery(env, `SELECT pg_get_functiondef(p.oid) AS def
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public' AND p.proname=$1`, [name]);
+    return c.text(rows.map((r) => r.def).join('\n\n-- ---- overload ----\n\n') || '(not found)');
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+
+// Ops diagnostic: run a guarded read-only SELECT. Token-gated.
+//   /api/_q?sql=SELECT ...&token=...
+app.get('/api/_q', async (c) => {
+  const env = storeEnv(c);
+  if (c.req.query('token') !== 'shg-fix-2026') return c.json({ error: 'forbidden' }, 403);
+  const sql = c.req.query('sql') || '';
+  if (!/^\s*(select|with)\b/i.test(sql) || /;/.test(sql)) {
+    return c.json({ error: 'only a single SELECT/WITH statement allowed' }, 400);
+  }
+  try {
+    const rows = await neonQuery(env, sql);
+    return c.json({ rows });
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+
+// Ops: run DDL (CREATE FUNCTION / VIEW etc.). POST body = raw SQL.
+// Token-gated so it cannot be triggered casually.
+app.post('/api/_ddl', async (c) => {
+  const env = storeEnv(c);
+  if (c.req.query('token') !== 'shg-fix-2026') {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+  const sql = await c.req.text();
+  if (!sql || !sql.trim()) return c.json({ error: 'empty body' }, 400);
+  try {
+    await neonQuery(env, sql);
+    return c.json({ ok: true });
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+
 // ---- Distribution to SHGs dashboard (shg_group ⋈ distribution_form_v2) -----
 
 // Page (grouped-by-SHG_Group_Name distribution table + KPI cards).
@@ -1417,15 +1461,25 @@ sync_call() {
   echo -n "$label (gave up): "; echo "$out"
 }
 
-# 1) Pull new all_trainees data (freshness pass = page 1 forward).
+# 1) Pull new all_trainees data (freshness pass = page 1 forward) to keep the
+#    most recent trainings current every cycle.
 sync_call "run" "$BASE/api/mis-sync/run"
+# 1b) Advance the DEEP backfill cursor a few pages each cycle so the ~32k older
+#     pending trainee rows converge over time (freshness alone only sweeps page 1).
+#     ?fresh=0 uses the stored backfill cursor; small maxPages keeps the slow VM
+#     under the Worker budget. This is what drives the "catching up" badge to 100%.
+sync_call "run backfill" "$BASE/api/mis-sync/run?fresh=0&maxPages=5&pageSize=2000"
 
 # 2) Pull new data for each mapped view ONE AT A TIME (avoids Cloudflare 1102).
 #    NOTE: distribution is NO LONGER synced via /data/filter here — it now comes
 #    straight from the MIS OData feeds in step 2b below (participants + SHGs).
-for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking local_leverage_fund_contribution_form; do
+for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking; do
   sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
 done
+# Local leverage: feed is newest-first, so a small page-1 freshness sweep catches
+# new contributions (e.g. the 31st-Friday amounts) each cycle. Small pageSize
+# keeps the request under the Worker budget (rows no longer carry the photo blob).
+sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=2"
 
 # 2b) DISTRIBUTION — direct from the MIS OData feeds (replaces the stale Excel /
 #     /data/filter flow). One feed per call so each fits a Worker invocation;
@@ -1447,6 +1501,10 @@ sync_call "dist rebuild"      "$BASE/api/distribution-odata/sync?feed=rebuild"
 for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
+# 3b) Items Not Sold depends on distribution_rows (rebuilt in step 2b) ⋈ marketing
+#     records, so it MUST run after the distribution rebuild. Rebuilt every cycle
+#     so the dashboard stays in sync whenever distribution / marketing data change.
+echo -n "refresh itemsnotsold: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=itemsnotsold"; echo
 
 # 4) PRE-WARM the edge cache. The heavy first-compute of each dashboard is paid
 #    HERE, server-to-server, once per 5-min window — so every real browser hit

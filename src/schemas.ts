@@ -330,8 +330,11 @@ export const SCHEMAS: SheetSchema[] = [
     label: 'local_leverage_fund_contribution_form',
     filenameHints: ['local_leverage', 'leverage_fund', 'local leverage', 'contribution_form'],
     dedupKey: 'docId',
+    // NB: `photo_of_evidence` is intentionally omitted — it is a huge base64/URL
+    // blob that bloated each synced row enough to blow the Worker request budget
+    // ("Network connection lost"). The dashboard never uses it.
     columns: cols(
-      'instructions,partner,district_name,subcounty_name,type_of_entity,type_of_contribution,other_contribution_details,contribution_kind,contribution_amount,photo_of_evidence,submitter_name,submitter_position,other_submitter_position,createdBy,docId,refID,dateCreated,lastUpdated',
+      'instructions,partner,district_name,subcounty_name,type_of_entity,type_of_contribution,other_contribution_details,contribution_kind,contribution_amount,submitter_name,submitter_position,other_submitter_position,createdBy,docId,refID,dateCreated,lastUpdated',
       {
         contribution_amount: 'number',
         dateCreated: 'date',
