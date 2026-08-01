@@ -164,6 +164,12 @@ ${navSidebar('home')}
           <span id="liveDot" style="width:8px;height:8px;border-radius:50%;background:#9aa;display:inline-block"></span>
           <span id="liveText">checking…</span>
         </span>
+        <span id="catchUpBadge" title="The MIS reports more training rows than we have pulled so far — recent-month trainee KPIs may read a little low until the backfill converges."
+              style="display:none;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:999px;
+                     background:#fff5e6;border:1px solid #ffd591;font-size:12px;font-weight:700;color:#8a5a00;">
+          <i class="fas fa-rotate fa-spin" style="font-size:11px"></i>
+          <span id="catchUpText"></span>
+        </span>
         <button class="ctl primary" id="exportBtn"><i class="fas fa-download"></i> Export</button>
         <button class="ctl" id="refreshBtn" title="Refresh KPIs"><i class="fas fa-rotate"></i></button>
       </div>
@@ -755,6 +761,17 @@ ${navSidebar('home')}
         txt.textContent = d.live
           ? ('Live · synced '+(age<1?'just now':age+' min ago'))
           : ('Stale · last synced '+age+' min ago');
+        // Backfill "catching up" note: shown only when we're materially behind
+        // the MIS row total (e.g. after a MIS outage). Recent-month trainee KPIs
+        // read a little low until this closes.
+        const cb=document.getElementById('catchUpBadge');
+        const ct=document.getElementById('catchUpText');
+        if(cb && d.backfill && d.backfill.catching_up){
+          const gap=(d.backfill.gap||0).toLocaleString('en-US');
+          const pct=d.backfill.pct!=null?d.backfill.pct+'%':'';
+          ct.textContent='Catching up · '+gap+' MIS rows pending'+(pct?(' ('+pct+' synced)'):'');
+          cb.style.display='inline-flex';
+        } else if(cb){ cb.style.display='none'; }
         // If the sync advanced since we last looked, pull fresh KPI numbers.
         if(_lastRunSeen && d.last_run && d.last_run!==_lastRunSeen){ loadAll(); }
         _lastRunSeen = d.last_run;

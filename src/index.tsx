@@ -325,15 +325,32 @@ app.get('/api/freshness', async (c) => {
     const lastRun: string | null = (st as any).last_run ?? null;
     let ageMinutes: number | null = null;
     if (lastRun) ageMinutes = Math.max(0, Math.round((Date.now() - new Date(lastRun).getTime()) / 60000));
+    // Backfill gap: how many training rows the MIS reports vs how many we hold.
+    // When we're behind (e.g. the MIS was down and the deep-page backfill hasn't
+    // finished a full pass), recent-month trainee KPIs read a little LOW until we
+    // converge — so we surface it as an honest "catching up" note on the UI.
+    const total = Number((st as any).total_records ?? 0) || 0;
+    const held = Number((st as any).atRowsCount ?? 0) || 0;
+    const gap = total > 0 ? Math.max(0, total - held) : 0;
+    // Small tolerance: <1% (or <2k rows) is "converged" — normal 5-min churn.
+    const catchingUp = total > 0 && gap > Math.max(2000, Math.round(total * 0.01));
     return c.json({
       ok: true,
       last_run: lastRun,
       age_minutes: ageMinutes,
-      total_records: (st as any).total_records ?? null,
-      at_rows: (st as any).atRowsCount ?? null,
+      total_records: total || null,
+      at_rows: held || null,
       last_upserted: (st as any).last_upserted ?? null,
       // "live" if the cron ran within the last ~12 min (2+ missed cycles = stale)
       live: ageMinutes !== null && ageMinutes <= 12,
+      // backfill convergence — drives the "catching up" note on dashboards
+      backfill: {
+        held,
+        mis_total: total,
+        gap,
+        pct: total > 0 ? Math.round((held / total) * 1000) / 10 : null,
+        catching_up: catchingUp,
+      },
     }, 200, { 'Cache-Control': 'no-store' });
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 200, { 'Cache-Control': 'no-store' });
