@@ -75,18 +75,22 @@ ${navSidebar('cluster')}
             <input id="dateRange" type="range" min="0" max="100" value="100" class="w-full" />
             <div class="text-[11px] text-[var(--muted)] mt-1">Drag to set the upper date bound, or pick dates.</div>
           </div>
-          <div class="card p-4 col-span-6 md:col-span-3 text-center flex flex-col justify-center">
+          <div class="card p-4 col-span-6 md:col-span-3 text-center flex flex-col justify-center" title="DISTINCTCOUNT(all_trainees_view[participant_id]) — unique youth trained (each person counted once).">
             <div id="kpiTotal" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Youth_TrainedY</div>
+            <div class="kpi-label text-sm mt-1">Youth_TrainedY <span class="text-[10px] font-normal text-[var(--muted)]">(unique youth)</span></div>
           </div>
-          <div class="card p-4 col-span-6 md:col-span-3 text-center flex flex-col justify-center">
-            <div id="kpiTypes" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Total_Trainings_types</div>
+          <div class="card p-4 col-span-6 md:col-span-3 text-center flex flex-col justify-center" title="COUNTROWS(all_trainees_view) — total training-session records. Matches the 'entries' count on the MIS all_trainees_view screen.">
+            <div id="kpiSessions" class="kpi-num text-3xl md:text-4xl">–</div>
+            <div class="kpi-label text-sm mt-1">Training_Sessions <span class="text-[10px] font-normal text-[var(--muted)]">(MIS entries)</span></div>
           </div>
         </div>
 
-        <!-- Middle row: four KPI cards -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <!-- Middle row: KPI cards -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div class="card p-4 text-center">
+            <div id="kpiTypes" class="kpi-num text-3xl md:text-4xl">–</div>
+            <div class="kpi-label text-sm mt-1">Total_Trainings_types</div>
+          </div>
           <div class="card p-4 text-center">
             <div id="kpiGroups" class="kpi-num text-3xl md:text-4xl">–</div>
             <div class="kpi-label text-sm mt-1">Groups_Reached</div>
@@ -180,6 +184,7 @@ ${navSidebar('cluster')}
         const d = await res.json();
         if (!districts.length && d.districts){ districts = d.districts; renderDistricts(); }
         document.getElementById('kpiTotal').textContent = fmt(d.total_trained);
+        document.getElementById('kpiSessions').textContent = fmt(d.total_sessions);
         document.getElementById('kpiTypes').textContent = fmt(d.training_types);
         document.getElementById('kpiGroups').textContent = fmt(d.groups_reached);
         document.getElementById('kpiFemale').textContent = fmt(d.female_reached);

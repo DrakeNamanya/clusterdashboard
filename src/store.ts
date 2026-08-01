@@ -1192,6 +1192,7 @@ export async function clusterTrainings(
   const kpi = await db
     .prepare(
       `SELECT
+         COUNT(*)                       AS total_sessions,
          COUNT(DISTINCT CASE WHEN has_date=1 AND participant_id IS NOT NULL THEN participant_id END) AS total_trained,
          COUNT(DISTINCT training_type)  AS training_types,
          COUNT(DISTINCT group_id)       AS groups_reached,
@@ -1235,6 +1236,10 @@ export async function clusterTrainings(
   }));
 
   return {
+    // COUNTROWS(all_trainees_view) — total training-session records. Matches the
+    // "entries" count shown on the MIS all_trainees_view screen (~799k). This is
+    // the SESSION count; total_trained below is the DISTINCT UNIQUE YOUTH count.
+    total_sessions: Number(kpi?.total_sessions ?? 0),
     total_trained: Number(kpi?.total_trained ?? 0),
     training_types: Number(kpi?.training_types ?? 0),
     groups_reached: Number(kpi?.groups_reached ?? 0),
@@ -2687,24 +2692,53 @@ async function misFetch(url: string, init: RequestInit, timeoutMs = 20000): Prom
   }
 }
 
-/** Log in to the MIS and return a Bearer access token. */
+/**
+ * Log in to the MIS and return a Bearer access token.
+ * The gateway is intermittently slow (login can take 15-25s during busy spells),
+ * so we use a generous 30s timeout and retry a couple of times on
+ * timeout/5xx before giving up. This keeps the 5-min sync working even when
+ * the MIS is sluggish, instead of failing the whole cycle on a transient blip.
+ */
 async function misLogin(env: Env): Promise<string> {
   if (!env.MIS_USERNAME || !env.MIS_PASSWORD) {
     throw new Error('MIS_USERNAME / MIS_PASSWORD are not configured');
   }
-  const res = await misFetch(misBase(env) + '/user/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: env.MIS_USERNAME, password: env.MIS_PASSWORD }),
-  }, 15000);
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`MIS login failed: HTTP ${res.status} ${t.slice(0, 200)}`);
+  const tries = 3;
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const res = await misFetch(misBase(env) + '/user/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: env.MIS_USERNAME, password: env.MIS_PASSWORD }),
+      }, 30000);
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        // Retry on 5xx (gateway warming up); fail fast on 4xx (bad creds).
+        if (res.status >= 500 && attempt < tries - 1) {
+          lastErr = new Error(`MIS login HTTP ${res.status}`);
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`MIS login failed: HTTP ${res.status} ${t.slice(0, 200)}`);
+      }
+      const j: any = await res.json();
+      const tok = j?.access_token;
+      if (!tok) throw new Error('MIS login returned no access_token');
+      return tok as string;
+    } catch (e: any) {
+      lastErr = e;
+      // Retry on timeout / network blip; otherwise (e.g. bad creds) rethrow.
+      const msg = String(e?.message || e);
+      const retryable = msg.includes('timed out') || msg.includes('HTTP 5');
+      if (retryable && attempt < tries - 1) {
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
   }
-  const j: any = await res.json();
-  const tok = j?.access_token;
-  if (!tok) throw new Error('MIS login returned no access_token');
-  return tok as string;
+  throw lastErr || new Error('MIS login failed');
 }
 
 /** Fetch one page of all_trainees_view from the MIS (1-indexed pages). */

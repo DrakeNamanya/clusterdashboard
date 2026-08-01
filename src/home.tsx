@@ -306,8 +306,8 @@ ${navSidebar('home')}
     // Each renders a themed card; subs are filled by the loaders via data-f.
     const CARDS = [
       { key:'cluster', title:'Cluster Trainings', href:'/cluster-trainings', color:'var(--green)', icon:'fa-chart-simple', art:'fa-chart-column',
-        big:['cluster.total_trained','Youth Trained'],
-        subs:[['cluster.groups_reached','Groups Reached'],['cluster.female_reached','Female Reached'],['cluster.pwds_trained','PWDs Trained']] },
+        big:['cluster.total_trained','Youth Trained (unique)'],
+        subs:[['cluster.total_sessions','Training Sessions'],['cluster.groups_reached','Groups Reached'],['cluster.female_reached','Female Reached']] },
       { key:'newyouth', title:'Monthly New Youth Reached', href:'/monthly-new-youth', color:'var(--orange)', icon:'fa-user-plus', art:'fa-arrow-trend-up',
         big:['newyouth.new_total_reach','New Total Reach'],
         subs:[['newyouth.new_female_reach','New Female Reach'],['newyouth.new_pwds_reach','New PWDs Reach'],['newyouth.monthly_target','Monthly Target']] },
@@ -397,6 +397,7 @@ ${navSidebar('home')}
       async cluster(){
         const d=await j(api('/api/cluster-trainings'));
         setF('cluster.total_trained', d.total_trained);
+        setF('cluster.total_sessions', d.total_sessions);
         setF('cluster.groups_reached', d.groups_reached);
         setF('cluster.female_reached', d.female_reached);
         setF('cluster.pwds_trained', d.pwds_trained);
