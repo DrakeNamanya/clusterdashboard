@@ -784,8 +784,27 @@ ${navSidebar('programme')}
       var data = await apiRes.json();
 
       var tokens = buildTokens(data, cluster, mFrom, qFrom, qTo);
-      pvDoc.innerHTML = buildPreviewHTML(tokens, data, cluster, mFrom, qFrom, qTo);
+      var aiBox = '<div id="pvAiBox" style="border:1px solid #c9d2e8;border-left:4px solid #003399;background:#eef2fb;border-radius:8px;padding:14px 18px;margin:0 0 18px">'
+        + '<div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#003399;margin-bottom:8px"><i class="fas fa-wand-magic-sparkles"></i> AI Executive Summary '
+        + '<button id="pvAiBtn" style="margin-left:8px;font-size:10px;text-transform:none;letter-spacing:0;padding:2px 8px;border:1px solid #003399;background:#fff;color:#003399;border-radius:6px;cursor:pointer">Generate</button></div>'
+        + '<div id="pvAiBody" style="font-size:13.5px;line-height:1.6;color:#28303f">Click <b>Generate</b> to have the AI write an executive summary of this report.</div></div>';
+      pvDoc.innerHTML = aiBox + buildPreviewHTML(tokens, data, cluster, mFrom, qFrom, qTo);
       pvMeta.textContent = (t(tokens,'meta.month')||'') + '  ·  ' + (t(tokens,'meta.quarter')||'');
+      // wire the AI summary generator (uses the freshly-fetched programme data)
+      (function(){
+        var btn=document.getElementById('pvAiBtn'), body=document.getElementById('pvAiBody');
+        if(!btn) return;
+        btn.addEventListener('click', async function(){
+          body.innerHTML='<i class="fas fa-spinner fa-spin"></i> Writing summary…';
+          try{
+            var r=await fetch('/api/ai/narrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({report:'Programme Report ('+cluster+')', kpis:data})});
+            var dd=await r.json();
+            if(dd.error){ body.innerHTML='<span style="color:#c62f2f">AI summary unavailable: '+String(dd.error)+'</span>'; return; }
+            var paras=String(dd.summary||'').split(/\\n\\n+/).filter(function(s){return s.trim();});
+            body.innerHTML=paras.map(function(p){return '<p style="margin:0 0 9px">'+p.replace(/</g,'&lt;')+'</p>';}).join('') || 'No summary.';
+          }catch(e){ body.innerHTML='<span style="color:#c62f2f">Failed: '+String(e&&e.message||e)+'</span>'; }
+        });
+      })();
       openPreview();
       setStatus('Preview ready — review the tables, then Download Word.','ok');
     } catch(err){

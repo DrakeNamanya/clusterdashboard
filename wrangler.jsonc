@@ -29,5 +29,11 @@
       "binding": "HYPERDRIVE",
       "id": "158ed84482ba4d4e93805e8b74085f05"
     }
-  ]
+  ],
+  // Cloudflare Workers AI — edge-run open LLMs (Llama 3.3 70B etc.), no external
+  // key. Powers the AI features: Ask-your-data (NL->SQL), report narrative
+  // summaries, and the AI Observation anomaly digest. Free tier 10k neurons/day.
+  "ai": {
+    "binding": "AI"
+  }
 }

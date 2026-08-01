@@ -56,6 +56,12 @@ export interface Env {
   // it trusts the cert on our behalf. `env.HYPERDRIVE.connectionString` yields a
   // local (127.0.0.1) URL the pg driver connects to with plaintext.
   HYPERDRIVE?: { connectionString: string };
+  // Cloudflare Workers AI binding — runs open LLMs on Cloudflare's edge (no
+  // external API key to leak, 10k neurons/day free). Used by the AI features:
+  // "Ask your data" (NL -> SQL), report narrative summaries, and the AI
+  // Observation anomaly digest. `env.AI.run(model, inputs)` returns the model
+  // output. Optional so local `node` dev (no binding) degrades gracefully.
+  AI?: { run: (model: string, inputs: any, options?: any) => Promise<any> };
 }
 
 /**

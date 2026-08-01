@@ -23,7 +23,12 @@ export function renderWeeklyReport(base: string): string {
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
+    .ai-summary{ border:1px solid var(--border); border-left:4px solid var(--primary); background:var(--primary-wash); border-radius:8px; padding:14px 18px; margin:18px 0 8px; }
+    .ai-summary-hd{ font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--primary); margin-bottom:8px; }
+    .ai-summary-body{ font-size:13.5px; line-height:1.6; color:var(--ink-85); }
+    .ai-summary-body p{ margin:0 0 9px; }
     :root{
       --primary:#003399; --primary-deep:#001f5c; --primary-wash:#eef2fb;
       --ink:#101828; --ink-85:#28303f; --border:#c9d2e8; --muted:#55617a;
@@ -143,6 +148,7 @@ ${navSidebar('weekly')}
       <button class="btn ghost" id="thisweek">This week</button>
       <button class="btn ghost" id="reset">All time</button>
       <button class="btn" id="printBtn">Print / Save PDF</button>
+      <button class="btn ghost" id="aiBtn"><i class="fas fa-wand-magic-sparkles"></i> AI summary</button>
     </div>
 
     <div id="noteBox"></div>
@@ -178,6 +184,11 @@ ${navSidebar('weekly')}
       <div class="datum"><div class="dn">ii</div><div class="dv" id="kShgs">—</div><div class="dl">SHGs formed</div><div class="dnote">new groups profiled</div></div>
       <div class="datum"><div class="dn">iii</div><div class="dv" id="kSavings">—</div><div class="dl">Savings mobilized</div><div class="dnote">UGX, ISLA amount saved</div></div>
       <div class="datum"><div class="dn">iv</div><div class="dv" id="kLev">—</div><div class="dl">Leverage raised</div><div class="dnote">UGX, local contributions</div></div>
+    </div>
+
+    <div id="aiSummaryBox" class="ai-summary" style="display:none">
+      <div class="ai-summary-hd"><i class="fas fa-wand-magic-sparkles"></i> AI Executive Summary</div>
+      <div id="aiSummary" class="ai-summary-body"></div>
     </div>
 
     <div class="roa">Record of activity</div>
@@ -339,6 +350,9 @@ async function load(){
     const d=await res.json();
     let yiw=null; try{ if(yiwRes && yiwRes.ok) yiw=await yiwRes.json(); }catch(e){}
     buildNarrative(d, label, yiw);
+    window.__weeklyData = { report:'Weekly Field Report ('+label+')', kpis:{ weekly:d, youthInWork:yiw } };
+    // hide any stale AI summary when the filters change
+    var box=document.getElementById('aiSummaryBox'); if(box) box.style.display='none';
     document.getElementById('noteBox').innerHTML='';
   }catch(e){
     document.getElementById('narrative').innerHTML='<div class="loading">Failed to load weekly report.</div>';
@@ -350,6 +364,20 @@ document.getElementById('cluster').addEventListener('change', load);
 document.getElementById('thisweek').addEventListener('click', ()=>{ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; load(); });
 document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value=''; document.getElementById('to').value=''; load(); });
 document.getElementById('printBtn').addEventListener('click', ()=>window.print());
+document.getElementById('aiBtn').addEventListener('click', async function(){
+  var box=document.getElementById('aiSummaryBox'), body=document.getElementById('aiSummary');
+  var payload=window.__weeklyData; if(!payload){ return; }
+  box.style.display='block';
+  body.innerHTML='<i class="fas fa-spinner" style="animation:spin 1s linear infinite"></i> Writing summary…';
+  try{
+    var r=await fetch('/api/ai/narrate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    var d=await r.json();
+    if(d.error){ body.innerHTML='<p style="color:#c62f2f">AI summary unavailable: '+String(d.error)+'</p>'; return; }
+    var paras=String(d.summary||'').split(/\\n\\n+/).filter(function(s){return s.trim();});
+    body.innerHTML=paras.map(function(p){return '<p>'+p.replace(/</g,'&lt;')+'</p>';}).join('') || '<p>No summary.</p>';
+  }catch(e){ body.innerHTML='<p style="color:#c62f2f">Failed: '+String(e&&e.message||e)+'</p>'; }
+});
+var __style=document.createElement('style'); __style.textContent='@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(__style);
 (function(){ const w=weekBounds(); document.getElementById('from').value=w.from; document.getElementById('to').value=w.to; })();
 load();
 </script>

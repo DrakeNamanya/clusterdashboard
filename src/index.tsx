@@ -22,6 +22,8 @@ import {
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
   syncDistributionOData, neonQuery,
 } from './store';
+import { askData, narrate, anomalies } from './ai';
+import { renderAiObservation } from './aiobservation';
 import {
   serviceDocument, metadataDocument, entitySetResponse, entitySetName,
 } from './odata';
@@ -76,6 +78,8 @@ function storeEnv(c: any): Env {
     MIS_BASE_URL: c.env.MIS_BASE_URL,
     MIS_USERNAME: c.env.MIS_USERNAME,
     MIS_PASSWORD: c.env.MIS_PASSWORD,
+    // Cloudflare Workers AI binding for the AI features.
+    AI: c.env.AI,
   };
 }
 
@@ -664,6 +668,42 @@ app.get('/odata/:set', async (c) => {
 app.get('/', (c) => c.html(renderHome(baseUrl(c.req.url))));
 app.get('/tools', (c) => c.html(renderPage(baseUrl(c.req.url))));
 app.get('/upload', (c) => c.html(renderPage(baseUrl(c.req.url))));
+
+// ---- AI features (Cloudflare Workers AI) ----------------------------------
+
+// AI Observation page (anomaly digest + ask-your-data console).
+app.get('/ai-observation', (c) => c.html(renderAiObservation(baseUrl(c.req.url))));
+
+// Ask your data: natural-language question -> generated SQL -> answer.
+app.post('/api/ai/ask', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const question = String(body.question || '').slice(0, 500);
+    const r = await askData(storeEnv(c), question);
+    return c.json(r);
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+});
+
+// AI Observation: week-over-week anomaly signals + AI digest. Cached briefly
+// because the model call + several SQL sweeps are relatively expensive.
+app.get('/api/ai/observation', async (c) => {
+  return cachedJson(c, () => anomalies(storeEnv(c)), 600); // 10-min TTL
+});
+
+// Report narrative summary (used by Weekly / Programme reports). The client
+// posts the KPI JSON it already fetched so we don't recompute it here.
+app.post('/api/ai/narrate', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const name = String(body.report || 'report').slice(0, 80);
+    const summary = await narrate(storeEnv(c), name, body.kpis ?? {});
+    return c.json({ summary });
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+});
 
 // ---- Cluster Trainings dashboard ------------------------------------------
 
