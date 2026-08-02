@@ -33,10 +33,16 @@ export function renderHome(base: string): string {
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root{
-      --side:#0a4733; --side-2:#083a29; --side-active:#00A859; --side-hover:#0c6444;
-      --bg:#F1F5F3; --ink:#12211a; --ink2:#3c4b43; --muted:#8a978f; --line:#e6ece9;
-      --green:#00A859; --green-d:#006837; --orange:#F6921E; --blue:#2E9BD6;
-      --purple:#8C5CD1; --teal:#12b5a5; --red:#E8556B; --lgreen:#4CB963;
+      /* ---- Royal-blue design system (from the "royal-blue-oasis" Lovable design) ---- */
+      --side:#07116b; --side-2:#050d54; --side-active:#3567de; --side-hover:#1225a3;
+      --bg:#f7f8fc; --ink:#0f1932; --ink2:#3a4666; --muted:#5e6981; --line:#d7deec;
+      /* royal-blue primary scale */
+      --primary:#1225a3; --primary-deep:#07116b; --primary-glow:#3567de;
+      --accent:#d9e8ff; --accent-fg:#0d2272; --secondary:#e5ebf9; --muted-bg:#eef2fa;
+      /* --green is kept as an alias to --primary so every existing rule that used the
+         old brand green now renders in royal blue without touching each call site */
+      --green:#1225a3; --green-d:#07116b; --orange:#3567de; --blue:#5aa3ec;
+      --purple:#0d2272; --teal:#1225a3; --red:#e7000b; --lgreen:#3567de;
     }
     *{ box-sizing:border-box; }
     body{ margin:0; background:var(--bg); color:var(--ink); font-family:"Inter",system-ui,-apple-system,sans-serif; }
@@ -53,20 +59,21 @@ export function renderHome(base: string): string {
 
     /* ---------- header ---------- */
     .topbar{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:20px 26px 6px; }
-    .hi{ font-size:24px; font-weight:800; color:#12211a; letter-spacing:-.01em; }
+    .hi{ font-size:24px; font-weight:800; color:var(--ink); letter-spacing:-.01em; }
     .hi-sub{ font-size:13px; color:var(--muted); margin-top:2px; }
     .ctl{ display:inline-flex; align-items:center; gap:8px; height:38px; padding:0 14px; border-radius:10px;
           background:#fff; border:1px solid var(--line); font-size:13px; font-weight:600; color:var(--ink2); cursor:pointer; }
-    .ctl:hover{ background:#f6faf8; }
-    .ctl.primary{ background:var(--green); border-color:var(--green); color:#fff; }
-    .ctl.primary:hover{ background:#009c53; }
+    .ctl:hover{ background:#f2f5fc; }
+    .ctl.primary{ background:var(--primary); border-color:var(--primary); color:#fff; }
+    .ctl.primary:hover{ background:var(--primary-glow); border-color:var(--primary-glow); }
     .side-toggle{ display:none; }
 
     .wrap{ padding:6px 26px 30px; }
 
     /* ---------- hero strip ---------- */
-    .hero{ background:linear-gradient(180deg,#0a4733,#083a29); border-radius:18px; padding:18px 20px;
-           display:grid; grid-template-columns:repeat(4,1fr) 230px; gap:14px; color:#eafff4; }
+    .hero{ background:linear-gradient(135deg,#07116b,#1837bd); border-radius:18px; padding:18px 20px;
+           display:grid; grid-template-columns:repeat(4,1fr) 230px; gap:14px; color:#eef2ff;
+           box-shadow:0 24px 60px -24px rgba(18,37,163,.5); }
     @media (max-width:1500px){ .hero{ grid-template-columns:repeat(4,1fr); } .hero .gauge-tile{ grid-column:1 / -1; justify-content:flex-start; } }
     @media (max-width:820px){ .hero{ grid-template-columns:repeat(2,1fr); } }
     @media (max-width:520px){ .hero{ grid-template-columns:1fr; } }
@@ -74,35 +81,38 @@ export function renderHome(base: string): string {
     .htile + .htile{ border-left:1px solid rgba(255,255,255,.08); }
     .htile .ico{ width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; color:#fff; margin-bottom:10px; }
     .htile .val{ font-size:27px; font-weight:800; color:#fff; line-height:1; letter-spacing:-.02em; }
-    .htile .lab{ font-size:12.5px; color:#a9cdbc; margin-top:4px; font-weight:500; }
+    .htile .lab{ font-size:12.5px; color:#b9c6f5; margin-top:4px; font-weight:500; }
     .htile .chg{ font-size:11px; margin-top:8px; font-weight:600; }
-    .htile .chg.up{ color:#54e08c; } .htile .chg.flat{ color:#a9cdbc; }
+    .htile .chg.up{ color:#8fd3ff; } .htile .chg.flat{ color:#b9c6f5; }
     .htile .spark{ width:100%; height:26px; margin-top:8px; display:block; }
     .gauge-tile{ background:rgba(255,255,255,.05); border-radius:14px; padding:14px; display:flex; align-items:center; gap:12px; }
     .gauge-wrap{ position:relative; width:120px; height:120px; flex:none; }
     .gauge-wrap .pct{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
     .gauge-wrap .pct .p{ font-size:26px; font-weight:800; color:#fff; line-height:1; }
-    .gauge-wrap .pct .t{ font-size:9.5px; color:#a9cdbc; margin-top:3px; text-align:center; }
+    .gauge-wrap .pct .t{ font-size:9.5px; color:#b9c6f5; margin-top:3px; text-align:center; }
 
     /* ---------- summary cards ---------- */
     .cards{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:16px; }
     @media (max-width:1300px){ .cards{ grid-template-columns:repeat(2,1fr); } }
     @media (max-width:680px){ .cards{ grid-template-columns:1fr; } }
-    .card{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 1px 3px rgba(20,40,30,.05); }
+    .card{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px;
+           box-shadow:0 1px 2px rgba(18,37,163,.06), 0 8px 24px -12px rgba(18,37,163,.14);
+           transition:transform .15s ease, box-shadow .15s ease; }
+    .card:hover{ transform:translateY(-2px); box-shadow:0 2px 4px rgba(18,37,163,.08), 0 14px 30px -12px rgba(18,37,163,.22); }
     .card-h{ display:flex; align-items:center; gap:9px; margin-bottom:12px; }
     .card-h .ci{ width:30px; height:30px; border-radius:9px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; flex:none; }
-    .card-h .ct{ font-size:13.5px; font-weight:700; color:#1a2b22; flex:1; line-height:1.1; }
+    .card-h .ct{ font-size:13.5px; font-weight:700; color:var(--ink); flex:1; line-height:1.1; }
     .card-h .cv{ font-size:11px; font-weight:600; color:var(--muted); white-space:nowrap; }
     .card-h .cv:hover{ color:var(--green); }
     .card-mainrow{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
-    .big{ font-size:26px; font-weight:800; color:#12211a; line-height:1; letter-spacing:-.02em; }
+    .big{ font-size:26px; font-weight:800; color:var(--ink); line-height:1; letter-spacing:-.02em; }
     .big-l{ font-size:11.5px; color:var(--muted); font-weight:500; margin-top:4px; }
     .card-art{ width:56px; height:56px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:22px; flex:none; }
-    .subs{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:14px; }
-    .sub .sn{ font-size:15px; font-weight:800; color:#22332a; line-height:1; }
+    .subs{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-top:14px; border-top:1px solid var(--line); padding-top:12px; }
+    .sub .sn{ font-size:15px; font-weight:800; color:var(--primary); line-height:1; }
     .sub .sl{ font-size:10px; color:var(--muted); margin-top:3px; line-height:1.15; }
-    .card-foot{ margin-top:12px; font-size:11px; font-weight:600; color:var(--green); }
-    .skel{ color:#c3d3ca !important; }
+    .card-foot{ margin-top:12px; font-size:11px; font-weight:600; color:var(--primary); }
+    .skel{ color:#c7d0e6 !important; }
 
     /* ---------- bottom row ---------- */
     .bottom{ display:grid; grid-template-columns:2.15fr 1fr; gap:16px; margin-top:16px; }
@@ -115,37 +125,37 @@ export function renderHome(base: string): string {
     .race-legend{ display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px 16px; margin-top:14px; }
     .rl-row{ display:flex; align-items:center; gap:9px; font-size:12px; }
     .rl-dot{ width:11px; height:11px; border-radius:50%; flex:none; }
-    .rl-name{ font-weight:700; color:#1a2b22; }
+    .rl-name{ font-weight:700; color:var(--ink); }
     .rl-stat{ margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
     .rl-pct{ font-weight:800; min-width:38px; text-align:right; font-variant-numeric:tabular-nums; }
     .panel{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 1px 3px rgba(20,40,30,.05); }
     .panel-h{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
-    .panel-h .pt{ font-size:14px; font-weight:700; color:#1a2b22; }
+    .panel-h .pt{ font-size:14px; font-weight:700; color:var(--ink); }
     .panel-h .pl{ font-size:11px; font-weight:600; color:var(--muted); }
     .trend-wrap{ position:relative; width:100%; height:220px; }
     .trend-wrap canvas{ position:absolute; inset:0; width:100% !important; height:100% !important; }
     table.dist{ width:100%; border-collapse:collapse; }
     table.dist th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); padding:6px 6px; border-bottom:1px solid var(--line); }
     table.dist th.num, table.dist td.num{ text-align:right; }
-    table.dist td{ padding:6px 6px; font-size:12px; border-bottom:1px solid #f1f5f2; }
-    table.dist tr:last-child td{ font-weight:800; background:#f6faf8; }
+    table.dist td{ padding:6px 6px; font-size:12px; border-bottom:1px solid #eef2fa; }
+    table.dist tr:last-child td{ font-weight:800; background:#f2f5fc; }
     .ach{ display:flex; align-items:center; gap:6px; justify-content:flex-end; }
-    .ach-bar{ width:56px; height:7px; border-radius:4px; background:#e9efeb; overflow:hidden; }
+    .ach-bar{ width:56px; height:7px; border-radius:4px; background:#e4e9f4; overflow:hidden; }
     .ach-fill{ height:100%; background:var(--green); border-radius:4px; }
-    .act{ display:flex; gap:10px; padding:9px 0; border-bottom:1px solid #f1f5f2; }
+    .act{ display:flex; gap:10px; padding:9px 0; border-bottom:1px solid #eef2fa; }
     .act:last-child{ border-bottom:0; }
     .act .ai{ width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff; flex:none; }
-    .act .at{ font-size:12.5px; font-weight:600; color:#22332a; line-height:1.25; }
+    .act .at{ font-size:12.5px; font-weight:600; color:var(--ink); line-height:1.25; }
     .act .am{ font-size:10.5px; color:var(--muted); margin-top:2px; }
     /* Value Chain Total Sales list */
-    .vc-row{ display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid #f1f5f2; }
+    .vc-row{ display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid #eef2fa; }
     .vc-row:last-child{ border-bottom:0; }
     .vc-ic{ width:30px; height:30px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:13px; color:#fff; flex:none; }
     .vc-main{ flex:1; min-width:0; }
     .vc-top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
-    .vc-name{ font-size:12.5px; font-weight:600; color:#22332a; }
-    .vc-val{ font-size:12.5px; font-weight:700; color:#14432c; white-space:nowrap; }
-    .vc-bar{ height:7px; border-radius:4px; background:#e9efeb; overflow:hidden; margin:5px 0 3px; }
+    .vc-name{ font-size:12.5px; font-weight:600; color:var(--ink); }
+    .vc-val{ font-size:12.5px; font-weight:700; color:var(--primary); white-space:nowrap; }
+    .vc-bar{ height:7px; border-radius:4px; background:#e4e9f4; overflow:hidden; margin:5px 0 3px; }
     .vc-fill{ height:100%; border-radius:4px; }
     .vc-sub{ font-size:10.5px; color:var(--muted); }
   </style>
@@ -160,7 +170,7 @@ ${navSidebar('home')}
         </div>
         <span id="liveBadge" title="Live data from the MIS 5-minute sync"
               style="display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:999px;
-                     background:#eef7f1;border:1px solid #cfe8da;font-size:12px;font-weight:700;color:#0a4733;">
+                     background:#eef2fa;border:1px solid #d7deec;font-size:12px;font-weight:700;color:#07116b;">
           <span id="liveDot" style="width:8px;height:8px;border-radius:50%;background:#9aa;display:inline-block"></span>
           <span id="liveText">checking…</span>
         </span>
@@ -204,32 +214,32 @@ ${navSidebar('home')}
         <!-- ---------- HERO KPI STRIP ---------- -->
         <section class="hero">
           <div class="htile">
-            <div class="ico" style="background:var(--green)"><i class="fas fa-users"></i></div>
+            <div class="ico" style="background:rgba(255,255,255,.15)"><i class="fas fa-users"></i></div>
             <div class="val skel" data-f="hero.youth">…</div>
             <div class="lab">Youth Trained</div>
             <div class="chg up" data-f="hero.youth_chg">↑ — vs last month</div>
-            <canvas class="spark" data-spark="youth" data-color="#54e08c"></canvas>
+            <canvas class="spark" data-spark="youth" data-color="#8fd3ff"></canvas>
           </div>
           <div class="htile">
-            <div class="ico" style="background:var(--orange)"><i class="fas fa-venus"></i></div>
+            <div class="ico" style="background:rgba(255,255,255,.15)"><i class="fas fa-venus"></i></div>
             <div class="val skel" data-f="hero.female">…</div>
             <div class="lab">Female Reached</div>
             <div class="chg up" data-f="hero.female_chg">↑ — vs last month</div>
-            <canvas class="spark" data-spark="female" data-color="#f6b45a"></canvas>
+            <canvas class="spark" data-spark="female" data-color="#a9c2ff"></canvas>
           </div>
           <div class="htile">
-            <div class="ico" style="background:var(--purple)"><i class="fas fa-wheelchair"></i></div>
+            <div class="ico" style="background:rgba(255,255,255,.15)"><i class="fas fa-wheelchair"></i></div>
             <div class="val skel" data-f="hero.pwds">…</div>
             <div class="lab">PWDs Trained</div>
             <div class="chg up" data-f="hero.pwds_chg">↑ — vs last month</div>
-            <canvas class="spark" data-spark="pwds" data-color="#b48ce0"></canvas>
+            <canvas class="spark" data-spark="pwds" data-color="#c9d6ff"></canvas>
           </div>
           <div class="htile">
-            <div class="ico" style="background:var(--blue)"><i class="fas fa-bullseye"></i></div>
+            <div class="ico" style="background:rgba(255,255,255,.15)"><i class="fas fa-bullseye"></i></div>
             <div class="val skel" data-f="hero.target">…</div>
             <div class="lab" title="Planned new-youth reach for one month = Monthly_SHGs × 25 participants (from the reach-target table). The gauge below shows the current month's pace against this.">Monthly Target <i class="fas fa-circle-info" style="font-size:8px;opacity:.6"></i></div>
             <div class="chg flat" data-f="hero.target_chg">— of last-month pace</div>
-            <canvas class="spark" data-spark="target" data-color="#5ab6e0"></canvas>
+            <canvas class="spark" data-spark="target" data-color="#8fd3ff"></canvas>
           </div>
           <div class="gauge-tile">
             <div class="gauge-wrap">
@@ -237,9 +247,9 @@ ${navSidebar('home')}
               <div class="pct"><div class="p" id="gaugePct">—</div><div class="t">of last<br/>month</div></div>
             </div>
             <div>
-              <div style="font-size:12px;color:#a9cdbc;font-weight:600;margin-bottom:4px" title="Latest month's new reach ÷ previous month's new reach × 100. 100% means this month is keeping pace with last month.">Monthly Pace <i class="fas fa-circle-info" style="font-size:9px;opacity:.7"></i></div>
-              <div style="font-size:12px;color:#eafff4;font-weight:700" id="gaugeFrac">— / —</div>
-              <div style="font-size:10.5px;color:#7fbf9f;margin-top:6px">Latest month ÷ previous month (new reach)</div>
+              <div style="font-size:12px;color:#b9c6f5;font-weight:600;margin-bottom:4px" title="Latest month's new reach ÷ previous month's new reach × 100. 100% means this month is keeping pace with last month.">Monthly Pace <i class="fas fa-circle-info" style="font-size:9px;opacity:.7"></i></div>
+              <div style="font-size:12px;color:#eef2ff;font-weight:700" id="gaugeFrac">— / —</div>
+              <div style="font-size:10.5px;color:#8fa2e0;margin-top:6px">Latest month ÷ previous month (new reach)</div>
             </div>
           </div>
         </section>
@@ -345,13 +355,15 @@ ${navSidebar('home')}
         const subCells = c.subs.map(([f,l])=>(
           '<div class="sub"><div class="sn skel" data-f="'+f+'" '+(money?'data-money="1"':'')+'>…</div><div class="sl">'+l+'</div></div>'
         )).join('');
+        // Royal-blue design: every card uses a soft accent tile with a primary-blue
+        // icon (matches the "royal-blue-oasis" mockup), for one cohesive theme.
         return (
           '<a class="card" href="'+c.href+'">'
-          + '<div class="card-h"><span class="ci" style="background:'+c.color+'"><i class="fas '+c.icon+'"></i></span>'
+          + '<div class="card-h"><span class="ci" style="background:var(--accent);color:var(--primary)"><i class="fas '+c.icon+'"></i></span>'
           +   '<span class="ct">'+c.title+'</span><span class="cv">View details →</span></div>'
           + '<div class="card-mainrow"><div><div class="big skel" data-f="'+c.big[0]+'" '+bigFmt+'>…</div>'
           +   '<div class="big-l">'+c.big[1]+'</div></div>'
-          +   '<div class="card-art" style="background:'+c.color+'1a;color:'+c.color+'"><i class="fas '+c.art+'"></i></div></div>'
+          +   '<div class="card-art" style="background:var(--accent);color:var(--primary)"><i class="fas '+c.art+'"></i></div></div>'
           + '<div class="subs">'+subCells+'</div>'
           + '<div class="card-foot" data-f="'+c.key+'.foot">&nbsp;</div>'
           + '</a>'
@@ -380,7 +392,7 @@ ${navSidebar('home')}
       const el=document.getElementById('gaugeChart'); if(!el) return;
       const p=Math.max(0,Math.min(100,Math.round(pct)));
       if(gauge) gauge.destroy();
-      gauge=new Chart(el,{ type:'doughnut', data:{ datasets:[{ data:[p,100-p], backgroundColor:['#3ce07f','rgba(255,255,255,.12)'], borderWidth:0, circumference:270, rotation:225 }] },
+      gauge=new Chart(el,{ type:'doughnut', data:{ datasets:[{ data:[p,100-p], backgroundColor:['#8fd3ff','rgba(255,255,255,.14)'], borderWidth:0, circumference:270, rotation:225 }] },
         options:{ cutout:'75%', responsive:false, plugins:{legend:{display:false},tooltip:{enabled:false}} } });
       document.getElementById('gaugePct').textContent=p+'%';
     }
@@ -390,8 +402,8 @@ ${navSidebar('home')}
       const el=document.getElementById('trendChart'); if(!el) return;
       if(trend) trend.destroy();
       trend=new Chart(el,{ type:'line', data:{ labels, datasets }, options:{ responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ display:true, position:'top', labels:{ boxWidth:10, font:{size:10}, color:'#3c4b43' } } },
-        scales:{ x:{ grid:{display:false}, ticks:{font:{size:9},color:'#8a978f'} }, y:{ grid:{color:'#eef3f0'}, ticks:{font:{size:9},color:'#8a978f',callback:v=>compact(v)} } },
+        plugins:{ legend:{ display:true, position:'top', labels:{ boxWidth:10, font:{size:10}, color:'#3a4666' } } },
+        scales:{ x:{ grid:{display:false}, ticks:{font:{size:9},color:'#5e6981'} }, y:{ grid:{color:'#eef2fa'}, ticks:{font:{size:9},color:'#5e6981',callback:v=>compact(v)} } },
         elements:{ point:{radius:0}, line:{tension:.35,borderWidth:2} } } });
     }
 
@@ -469,13 +481,13 @@ ${navSidebar('home')}
           const labels=recent.map(r=>String(r.date).slice(5));
           const reachSeries=recent.map(r=>Number(r.value)||0);
           drawTrend(labels,[
-            { label:'New Reach', data:reachSeries, borderColor:'#F6921E', backgroundColor:'#F6921E22', fill:true },
+            { label:'New Reach', data:reachSeries, borderColor:'#3567de', backgroundColor:'#3567de22', fill:true },
           ]);
           const allVals=bd.map(r=>Number(r.value)||0);
-          drawSpark('youth',  allVals.slice(-14), '#54e08c');
-          drawSpark('female', allVals.slice(-14), '#f6b45a');
-          drawSpark('pwds',   allVals.slice(-14), '#b48ce0');
-          drawSpark('target', allVals.slice(-14), '#5ab6e0');
+          drawSpark('youth',  allVals.slice(-14), '#8fd3ff');
+          drawSpark('female', allVals.slice(-14), '#a9c2ff');
+          drawSpark('pwds',   allVals.slice(-14), '#c9d6ff');
+          drawSpark('target', allVals.slice(-14), '#8fd3ff');
         }
       },
       async frontliners(){
@@ -533,7 +545,8 @@ ${navSidebar('home')}
 
     // ---- District Race (horse-race target achievement) --------------------
     // Palette cycled across districts (distinct, print-friendly).
-    const RACE_COLORS = ['#e08a2b','#d94b3f','#2fae76','#2E9BD6','#7c5cbf','#e0a23a','#1f9e94','#c0392b','#3a5bb0','#8a6d3b'];
+    // Royal-blue race palette (design chart-1..5 + royal accents), distinct per lane.
+    const RACE_COLORS = ['#1225a3','#3567de','#5aa3ec','#0d2272','#7c5cbf','#1837bd','#2E9BD6','#4a6fe3','#8fb4f5','#07116b'];
     // A reusable jockey-on-horse symbol (grey horse + colored rider), from the
     // client's Napkin racing artwork. Scaled to ~0.42 so several fit on the track.
     function raceHorseSVG(color){
@@ -641,12 +654,12 @@ ${navSidebar('home')}
         svg+='<g transform="translate('+(rx-70*scale)+' '+(groundY-horseH)+') scale('+scale+')">'+raceHorseSVG(color)+'</g>';
         // label sits just above the horse in its own lane — no more stacking clashes
         const done=d.pct>=100;
-        const pcol=done?'#2fae76':color;
+        const pcol=done?'#1225a3':color;
         const nearFinish = rx > finishX-40;
         const anchor = nearFinish ? 'end' : 'middle';
         const lx = nearFinish ? finishX-6 : rx;
         const labelY=groundY-horseH-6;
-        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="13" font-weight="800" fill="#1a2b22">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
+        svg+='<text text-anchor="'+anchor+'" x="'+lx+'" y="'+labelY+'" font-size="13" font-weight="800" fill="#0f1932">'+d.name+' · <tspan fill="'+pcol+'">'+d.pct+'%'+(done?' ✓':'')+'</tspan></text>';
       });
 
       svg+='</svg>';
@@ -659,7 +672,7 @@ ${navSidebar('home')}
           const color = i>=0 ? RACE_COLORS[i%RACE_COLORS.length] : '#c3cbc6';
           const stat = d.target>0 ? (fmt(d.trained)+' / '+fmt(d.target)) : (fmt(d.trained)+' reached');
           const pc = d.pct==null?'—':(d.pct+'%');
-          const pcol = d.pct==null?'#9aa5a0':(d.pct>=100?'#2fae76':(d.pct>=60?'#b46e0a':'#c0392b'));
+          const pcol = d.pct==null?'#98a2b8':(d.pct>=100?'#1225a3':(d.pct>=60?'#b46e0a':'#c0392b'));
           return '<div class="rl-row"><span class="rl-dot" style="background:'+color+'"></span>'+
             '<span class="rl-name">'+d.name+'</span>'+
             '<span class="rl-stat">'+stat+'</span>'+
@@ -687,13 +700,14 @@ ${navSidebar('home')}
       const max=Math.max.apply(null, rows.map(r=>Number(r.value)||0)) || 1;
       const ugxC=(n)=>{ n=Number(n)||0; if(n>=1e9) return 'UGX '+(n/1e9).toFixed(2)+'B'; if(n>=1e6) return 'UGX '+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return 'UGX '+(n/1e3).toFixed(0)+'K'; return 'UGX '+fmt(n); };
       host.innerHTML=rows.map(r=>{
-        const m=VC_META[r.chain]||{ i:'fa-basket-shopping', c:'var(--teal)' };
+        // Royal-blue design: uniform accent tile + primary-blue icon and bar.
+        const m=VC_META[r.chain]||{ i:'fa-basket-shopping' };
         const w=Math.max(3, Math.round(100*(Number(r.value)||0)/max));
         return '<div class="vc-row">'+
-          '<span class="vc-ic" style="background:'+m.c+'"><i class="fas '+m.i+'"></i></span>'+
+          '<span class="vc-ic" style="background:var(--accent);color:var(--primary)"><i class="fas '+m.i+'"></i></span>'+
           '<div class="vc-main">'+
             '<div class="vc-top"><span class="vc-name">'+r.chain+'</span><span class="vc-val">'+ugxC(r.value)+'</span></div>'+
-            '<div class="vc-bar"><div class="vc-fill" style="width:'+w+'%;background:'+m.c+'"></div></div>'+
+            '<div class="vc-bar"><div class="vc-fill" style="width:'+w+'%;background:var(--primary)"></div></div>'+
             '<div class="vc-sub">'+fmt(r.sellers)+' youth sellers</div>'+
           '</div></div>';
       }).join('');
@@ -714,8 +728,8 @@ ${navSidebar('home')}
       const vcHost=document.getElementById('valueChains');
       if(vcHost) vcHost.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">Loading…</div>';
       // baseline sparklines so the strip never looks empty
-      drawSpark('youth', null, '#54e08c'); drawSpark('female', null, '#f6b45a');
-      drawSpark('pwds', null, '#b48ce0'); drawSpark('target', null, '#5ab6e0');
+      drawSpark('youth', null, '#8fd3ff'); drawSpark('female', null, '#a9c2ff');
+      drawSpark('pwds', null, '#c9d6ff'); drawSpark('target', null, '#8fd3ff');
       // Run the ~9 dashboard loaders with a concurrency cap (max 3 in flight)
       // instead of firing them all at once. Even with edge caching, a COLD cache
       // (first hit in each 5-min window) means every heavy aggregation would run
@@ -776,7 +790,7 @@ ${navSidebar('home')}
         const d=await r.json();
         if(!d.ok || d.age_minutes===null){ dot.style.background='#e0a800'; txt.textContent='sync unknown'; return; }
         const age=d.age_minutes;
-        if(d.live){ dot.style.background='#00A859'; }
+        if(d.live){ dot.style.background='#1225a3'; }
         else { dot.style.background='#E8556B'; }
         txt.textContent = d.live
           ? ('Live · synced '+(age<1?'just now':age+' min ago'))
