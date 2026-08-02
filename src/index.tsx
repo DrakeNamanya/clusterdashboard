@@ -19,6 +19,7 @@ import {
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
+  ingestTraineeRows,
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
   syncDistributionOData, neonQuery,
 } from './store';
@@ -101,7 +102,12 @@ function storeEnv(c: any): Env {
 // HIT. Cache key = full request URL, so different filter/date selections cache
 // independently. The cache is warmed asynchronously via waitUntil so the
 // producing request still returns immediately.
-const EDGE_TTL = 300;        // seconds a cached entry is considered "fresh"
+// Freshness window raised 300->900s to match the new 15-min cron rotation
+// (Phase-3 overload fix). With stale-while-revalidate the served data is never
+// more than one cron cycle behind, but fewer entries fall "stale" between
+// warms, so fewer background recomputes fire against the slow VM Postgres —
+// directly cutting the request volume that was tripping the CF limits.
+const EDGE_TTL = 900;        // seconds a cached entry is considered "fresh"
 const EDGE_STORE_TTL = 86400; // how long the edge physically keeps the entry
 
 // Build the canonical cache key (bare GET Request on the full URL incl. query).
@@ -490,24 +496,26 @@ app.all('/api/warm-cache', async (c) => {
   const ll = `dateFrom=${monthFrom}&dateTo=${monthTo}`;
 
   // Heavy endpoints to pre-warm, in both "all time" (no filter) and current
-  // month flavours — the two selections the dashboards open with.
-  const paths = [
-    `/api/stats`,
-    `/api/cluster-trainings`, `/api/cluster-trainings?${dr}`,
-    `/api/new-youth`, `/api/new-youth?${dr}`,
-    `/api/frontliners`, `/api/frontliners?${dr}`,
-    `/api/distribution`, `/api/distribution?${dr}`,
-    `/api/shg-distribution`, `/api/shg-distribution?${dr}`,
-    `/api/shg-profiling`, `/api/shg-profiling?${dr}`,
-    `/api/isla`, `/api/isla?${dr}`,
-    `/api/value-chain-sales`, `/api/value-chain-sales?${dr}`,
-    `/api/production`, `/api/production?${dr}`,
-    `/api/sales`, `/api/sales?${dr}`,
-    `/api/poultry-sales`, `/api/poultry-sales?${dr}`,
-    `/api/items-not-sold`,
-    `/api/local-leverage`, `/api/local-leverage?${ll}`,
-    `/api/report`, `/api/report?${dr}`,
-  ];
+  // month flavours — the two selections the dashboards open with. Grouped by a
+  // warm-key so the cron can warm only the heaviest few every tick (?only=...)
+  // and pay the full warm just once per rotation.
+  const groups: Record<string, string[]> = {
+    cluster: [`/api/stats`, `/api/cluster-trainings`, `/api/cluster-trainings?${dr}`],
+    newyouth: [`/api/new-youth`, `/api/new-youth?${dr}`, `/api/frontliners`, `/api/frontliners?${dr}`],
+    distribution: [`/api/distribution`, `/api/distribution?${dr}`, `/api/shg-distribution`, `/api/shg-distribution?${dr}`],
+    shgprofiling: [`/api/shg-profiling`, `/api/shg-profiling?${dr}`],
+    isla: [`/api/isla`, `/api/isla?${dr}`],
+    sales: [`/api/value-chain-sales`, `/api/value-chain-sales?${dr}`, `/api/sales`, `/api/sales?${dr}`, `/api/poultry-sales`, `/api/poultry-sales?${dr}`],
+    production: [`/api/production`, `/api/production?${dr}`],
+    itemsnotsold: [`/api/items-not-sold`],
+    localleverage: [`/api/local-leverage`, `/api/local-leverage?${ll}`],
+    report: [`/api/report`, `/api/report?${dr}`],
+  };
+  const onlyParam = (c.req.query('only') || '').trim();
+  const onlyKeys = onlyParam
+    ? onlyParam.split(',').map((s) => s.trim()).filter(Boolean)
+    : Object.keys(groups);
+  const paths = onlyKeys.flatMap((k) => groups[k] || []);
 
   // Warm by making REAL external requests to each endpoint's public URL. Each
   // such request is a SEPARATE Worker invocation with its OWN CPU/subrequest
@@ -1468,13 +1476,19 @@ app.get('/favicon.ico', (c) =>
 app.get('/health', (c) => c.json({ ok: true, schemas: SCHEMAS.map((s) => s.key) }));
 
 // ---------------------------------------------------------------------------
-// Serve the canonical 5-minute cron driver as plain text, so it can be
-// installed on the VM with a single `curl -o` (no error-prone heredoc paste).
+// Serve the canonical cron driver as plain text, so it can be installed on the
+// VM with a single `curl -o` (no error-prone heredoc paste).
 //   curl -s -o /home/ubuntu/mis-cron.sh https://shg-data-cleaner.pages.dev/api/cron-script
 //   chmod +x /home/ubuntu/mis-cron.sh
+//
+// IMPORTANT (overload fix 2026-08-02): install this on a *15-minute* schedule,
+// NOT the old 5-minute one, or the request budget will be tripped again:
+//   crontab -e  ->  */15 * * * * /home/ubuntu/mis-cron.sh >> /home/ubuntu/mis-cron.log 2>&1
+// The script rotates its heavy work across 3 cycle slots, so a full refresh of
+// every dataset completes about every 45 minutes.
 // ---------------------------------------------------------------------------
 const CRON_SCRIPT = `#!/usr/bin/env bash
-# SHG dashboard 5-minute refresh driver. Installed via /api/cron-script.
+# SHG dashboard refresh driver (run every 15 min). Installed via /api/cron-script.
 set -u
 
 BASE="https://shg-data-cleaner.pages.dev"
@@ -1484,7 +1498,29 @@ LOCK=/tmp/mis-cron.lock
 exec 9>"$LOCK"
 flock -n 9 || { echo "$(date -u) SKIP: previous run still active"; exit 0; }
 
-echo "$(date -u) === cron start ==="
+# ---------------------------------------------------------------------------
+# OVERLOAD FIX (2026-08-02): the previous version fired the ENTIRE workload
+# (heavy multi-page MIS pulls + 6 view syncs + 6 distribution OData feeds +
+# 10 dashboard rebuilds + a full warm-cache) EVERY 5 minutes. That request
+# volume is what "exceeded the limit" and switched the dashboard off. This
+# rewrite:
+#   * keeps ONLY the cheap, must-stay-fresh work every tick (trainee freshness
+#     + light dashboard refresh + warm the 2 heaviest caches);
+#   * SPREADS the heavy work across a 3-cycle rotation (a persisted counter),
+#     so no single tick does everything;
+#   * RUN THIS ON A 15-MINUTE CRON, not 5 (see install note at /api/cron-script).
+# Net effect: ~1/3 the requests per tick and roughly 1/9 the heavy load vs the
+# old 5-min-everything driver, while every dataset still refreshes within ~45m.
+# ---------------------------------------------------------------------------
+
+# Rotating cycle counter (0,1,2,0,1,2,...) persisted between runs so heavy work
+# can be assigned to a specific slot instead of running every tick.
+CYCLE_FILE=/tmp/mis-cron.cycle
+CYCLE=$(cat "$CYCLE_FILE" 2>/dev/null || echo 0)
+case "$CYCLE" in ''|*[!0-9]*) CYCLE=0 ;; esac
+NEXT=$(( (CYCLE + 1) % 3 ))
+echo "$NEXT" > "$CYCLE_FILE"
+echo "$(date -u) === cron start (cycle slot $CYCLE) ==="
 
 # Sync helper: retry up to 3x on a transient MIS 5xx (e.g. "HTTP 502").
 # Brief MIS outages then no longer skip a whole 5-min cycle.
@@ -1501,59 +1537,62 @@ sync_call() {
   echo -n "$label (gave up): "; echo "$out"
 }
 
-# 1) Pull new all_trainees data (freshness pass = page 1 forward) to keep the
-#    most recent trainings current every cycle.
+# ===== EVERY CYCLE (cheap, keeps the headline KPIs live) =====================
+# 1) Trainee freshness pass = page 1 forward. New submissions land on page 1, so
+#    this keeps "Youth Trained" current every tick at minimal gateway cost.
 sync_call "run" "$BASE/api/mis-sync/run"
-# 1b) Advance the DEEP backfill cursor a few pages each cycle so the ~32k older
-#     pending trainee rows converge over time (freshness alone only sweeps page 1).
-#     ?fresh=0 uses the stored backfill cursor; small maxPages keeps the slow VM
-#     under the Worker budget. This is what drives the "catching up" badge to 100%.
-sync_call "run backfill" "$BASE/api/mis-sync/run?fresh=0&maxPages=5&pageSize=2000"
 
-# 2) Pull new data for each mapped view ONE AT A TIME (avoids Cloudflare 1102).
-#    NOTE: distribution is NO LONGER synced via /data/filter here — it now comes
-#    straight from the MIS OData feeds in step 2b below (participants + SHGs).
-for v in shg_groups_view isla_form youth_profiling shg_profiling_form production_and_marketing_tool job_tracking; do
-  sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
-done
-# Local leverage: feed is newest-first, so a small page-1 freshness sweep catches
-# new contributions (e.g. the 31st-Friday amounts) each cycle. Small pageSize
-# keeps the request under the Worker budget (rows no longer carry the photo blob).
-sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=2"
-
-# 2b) DISTRIBUTION — direct from the MIS OData feeds (replaces the stale Excel /
-#     /data/filter flow). One feed per call so each fits a Worker invocation;
-#     participants (~67k) are pulled in 20k slices; a final rebuild regenerates
-#     the distribution_rows / shg_distribution_rows / agrihub_distribution_rows
-#     join tables the three distribution dashboards read.
-sync_call "dist events"       "$BASE/api/distribution-odata/sync?feed=events"
-sync_call "dist shg"          "$BASE/api/distribution-odata/sync?feed=shg"
-sync_call "dist agrihubs"     "$BASE/api/distribution-odata/sync?feed=agrihubs"
-for s in 0 20000 40000 60000; do
-  sync_call "dist participants @$s" "$BASE/api/distribution-odata/sync?feed=participants&skip=$s&limit=20000"
-done
-sync_call "dist rebuild"      "$BASE/api/distribution-odata/sync?feed=rebuild"
-
-# 3) Rebuild each dashboard's fact tables (light clusters every cycle).
-#    'newyouth' now rebuilds the precomputed new_youth_ft first-touch table so
-#    /api/new-youth is a cheap scan instead of a 765k-row live aggregation.
-#    (distribution join tables are rebuilt in step 2b above, not here.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking; do
+# 2) Light dashboard rebuilds that the home page reads directly. Kept every tick
+#    so the landing KPIs never go stale; the heavier rebuilds are rotated below.
+for c in cluster newyouth; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
-# 3b) Items Not Sold depends on distribution_rows (rebuilt in step 2b) ⋈ marketing
-#     records, so it MUST run after the distribution rebuild. Rebuilt every cycle
-#     so the dashboard stays in sync whenever distribution / marketing data change.
-echo -n "refresh itemsnotsold: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=itemsnotsold"; echo
 
-# 4) PRE-WARM the edge cache. The heavy first-compute of each dashboard is paid
-#    HERE, server-to-server, once per 5-min window — so every real browser hit
-#    is a near-instant Cloudflare Cache HIT. This is what stops the recurring
-#    "Exceeded CPU Time Limits" outages (a browser never triggers a cold compute
-#    over ~765k rows again). ?wait=1 makes the warmer compute+store synchronously.
-echo -n "warm-cache: "; curl -s --max-time 300 "$BASE/api/warm-cache?wait=1"; echo
+# 3) Warm ONLY the two heaviest caches every tick (these are the ones whose cold
+#    compute over ~765k rows caused the CPU-limit outages). The rest are warmed
+#    by the full warm-cache on cycle slot 2.
+echo -n "warm-cache(core): "; curl -s --max-time 300 "$BASE/api/warm-cache?wait=1&only=cluster,newyouth"; echo
 
-echo "$(date -u) === cron done ==="
+# ===== CYCLE SLOT 0 — trainee deep backfill + SHG/profiling views ============
+if [ "$CYCLE" = "0" ]; then
+  # Advance the deep backfill cursor a little (converges the ~32k pending rows).
+  # maxPages reduced 5->2 and paced inside the Worker so the gateway isn't hammered.
+  sync_call "run backfill" "$BASE/api/mis-sync/run?fresh=0&maxPages=2&pageSize=2000"
+  for v in shg_groups_view isla_form youth_profiling shg_profiling_form; do
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
+  done
+  for c in shgprofiling isla; do
+    echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
+  done
+fi
+
+# ===== CYCLE SLOT 1 — production / sales / leverage / jobs views =============
+if [ "$CYCLE" = "1" ]; then
+  for v in production_and_marketing_tool job_tracking; do
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
+  done
+  sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=2"
+  for c in production sales poultrysales localleverage jobtracking; do
+    echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
+  done
+fi
+
+# ===== CYCLE SLOT 2 — distribution OData + items-not-sold + full warm ========
+if [ "$CYCLE" = "2" ]; then
+  sync_call "dist events"       "$BASE/api/distribution-odata/sync?feed=events"
+  sync_call "dist shg"          "$BASE/api/distribution-odata/sync?feed=shg"
+  sync_call "dist agrihubs"     "$BASE/api/distribution-odata/sync?feed=agrihubs"
+  for s in 0 20000 40000 60000; do
+    sync_call "dist participants @$s" "$BASE/api/distribution-odata/sync?feed=participants&skip=$s&limit=20000"
+  done
+  sync_call "dist rebuild"      "$BASE/api/distribution-odata/sync?feed=rebuild"
+  # Items Not Sold depends on distribution_rows ⋈ marketing records (after rebuild).
+  echo -n "refresh itemsnotsold: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=itemsnotsold"; echo
+  # Full warm now that every fact table has been refreshed at least once this rotation.
+  echo -n "warm-cache(full): "; curl -s --max-time 300 "$BASE/api/warm-cache?wait=1"; echo
+fi
+
+echo "$(date -u) === cron done (slot $CYCLE) ==="
 `;
 
 app.get('/api/cron-script', (c) =>
@@ -1595,6 +1634,25 @@ app.all('/api/mis-sync/run', async (c) => {
     // Opt out with ?fresh=0 (or provide ?startPage=N) to run a backfill slice.
     const fresh = startPage ? false : !(q.fresh === 'false' || q.fresh === '0');
     const res = await misSyncSlice(storeEnv(c), { pageSize, maxPages, startPage, fresh });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Token-gated BULK INGEST of already-fetched MIS trainee rows. The MIS gateway
+// is too slow/unstable for a Worker to fetch reliably (Youth Trained froze at
+// 99,050 with 32,556 rows pending because Worker fetches 500'd/timed out). An
+// external drain (the sandbox, which CAN reach the gateway) fetches each page
+// and POSTs {rows:[...]} here; this route only does the cheap DB upsert.
+//   POST /api/mis-sync/ingest?token=...   body: {"rows":[ ...raw MIS rows... ]}
+app.post('/api/mis-sync/ingest', async (c) => {
+  if (c.req.query('token') !== 'shg-fix-2026') return c.json({ error: 'forbidden' }, 403);
+  try {
+    const body = await c.req.json().catch(() => ({} as any));
+    const rows = Array.isArray(body?.rows) ? body.rows : [];
+    if (!rows.length) return c.json({ ok: false, error: 'no rows' }, 400);
+    const res = await ingestTraineeRows(storeEnv(c), rows);
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);

@@ -2982,20 +2982,47 @@ async function misFetchPage(
   const url =
     misBase(env) +
     `/data/filter/all_trainees_view?page=${page}&limit=${limit}&search=true`;
-  const res = await misFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: '{}',
-  }, 25000);
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`MIS fetch page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
+  // The MIS gateway is slow/unstable: a full 2000-row page takes 13-19s and it
+  // degrades to fast HTTP 500s or >40s hangs after a few rapid heavy calls.
+  // Retry a couple of times with backoff on 5xx/timeout so one transient blip
+  // doesn't zero out a whole slice; use a generous 40s timeout (25s was too
+  // tight for a busy gateway and caused false "fetched:0" cycles).
+  const tries = 3;
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const res = await misFetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: '{}',
+      }, 40000);
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        // Retry on 5xx (gateway overloaded/warming up); fail fast on 4xx.
+        if (res.status >= 500 && attempt < tries - 1) {
+          lastErr = new Error(`MIS fetch page ${page} HTTP ${res.status}`);
+          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`MIS fetch page ${page} failed: HTTP ${res.status} ${t.slice(0, 160)}`);
+      }
+      const j: any = await res.json();
+      return { rows: Array.isArray(j?.rows) ? j.rows : [], total: Number(j?.totalNumberOfRecords) || 0 };
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e);
+      const retryable = msg.includes('timed out') || msg.includes('HTTP 5');
+      if (retryable && attempt < tries - 1) {
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
   }
-  const j: any = await res.json();
-  return { rows: Array.isArray(j?.rows) ? j.rows : [], total: Number(j?.totalNumberOfRecords) || 0 };
+  throw lastErr || new Error(`MIS fetch page ${page} failed`);
 }
 
 /**
@@ -3115,6 +3142,11 @@ export async function misSyncSlice(
     const fromPage = page;
 
     for (let i = 0; i < maxPages; i++) {
+      // Gateway-friendly pacing: the MIS degrades to 500s/hangs after several
+      // rapid heavy page fetches. A short pause between pages within a slice
+      // keeps each 5-min cycle under the gateway's tolerance instead of
+      // triggering the overload that historically stalled the sync.
+      if (i > 0) await new Promise((r) => setTimeout(r, 1500));
       // Tolerate a transient/deep-page HTTP 500 from the MIS: skip the offending
       // page instead of aborting the whole slice, so one bad page can't stall
       // the cursor forever (root cause of the "numbers frozen" incidents).
@@ -3132,6 +3164,20 @@ export async function misSyncSlice(
         continue;
       }
       totalRecords = total;
+      // Cursor-ceiling guard: if the backfill cursor has marched past the last
+      // reachable page (page count derived from total_records), wrap back to 1
+      // instead of forever skipping unreachable deep pages. Without this, a run
+      // of deep-page 500s pushes next_page ever higher and the backfill silently
+      // stops converging (a subtle "frozen" cause independent of a bad page).
+      if (!fresh && totalRecords > 0) {
+        const lastPage = Math.max(1, Math.ceil(totalRecords / pageSize));
+        if (page > lastPage) {
+          wrapped = true;
+          cycles += 1;
+          page = 1;
+          break;
+        }
+      }
       if (!rawRows.length) {
         // Past the end — wrap to page 1 for the next cycle.
         wrapped = true;
@@ -3223,6 +3269,78 @@ export async function misSyncSlice(
       atRowsCount,
       cycles,
       wrapped,
+    };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Ingest ALREADY-FETCHED MIS all_trainees_view raw rows into at_rows.
+ *
+ * The MIS gateway is slow/unstable (13-19s per 2000-row page, intermittent 500s
+ * and >25s timeouts) — so a Cloudflare Worker frequently cannot complete the
+ * fetch inside its subrequest budget, and the sync silently upserts 0 rows
+ * (this is why "Youth Trained" froze at 99,050 while 32,556 rows stayed
+ * pending). The sandbox / an external caller CAN reach the gateway reliably, so
+ * a one-time drain fetches each page there and POSTs the raw rows here; this
+ * helper only does the cheap DB upsert (no gateway call), reusing the exact same
+ * flatten + dedup logic as misSyncSlice. Idempotent via ON CONFLICT DO NOTHING.
+ */
+export async function ingestTraineeRows(
+  env: Env,
+  rawRows: Record<string, any>[]
+): Promise<{ ok: true; received: number; upserted: number; atRowsCount: number }> {
+  if (!clusterDbUrl(env)) {
+    throw new Error('No cluster DB configured (ORACLE_DATABASE_URL) for ingest');
+  }
+  const schema = SCHEMA_BY_KEY['all_trainees_view'];
+  const client = await connectClusterWithRetry(env);
+  let upserted = 0;
+  try {
+    await ensureSyncState(client);
+    // Flatten + intra-batch de-dupe (dedup_key PK rejects dups across runs).
+    const seen = new Set<string>();
+    const flat = [] as ReturnType<typeof flattenTrainee>[];
+    for (const raw of rawRows || []) {
+      const rec = misRowToRecord(raw);
+      const dk = dedupKeyFor(schema, rec);
+      if (seen.has(dk)) continue;
+      seen.add(dk);
+      flat.push(flattenTrainee(rec, dk, 'mis:all_trainees_view'));
+    }
+    const COLS = 13;
+    const CHUNK = 300;
+    for (let j = 0; j < flat.length; j += CHUNK) {
+      const chunk = flat.slice(j, j + CHUNK);
+      const ph: string[] = [];
+      const params: any[] = [];
+      chunk.forEach((r, k) => {
+        const b = k * COLS;
+        ph.push(
+          `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13})`
+        );
+        params.push(
+          r.dedup_key, r.data_collector, r.participant_id, r.group_id, r.group_name,
+          r.training_type, r.district, r.day, r.sex, r.is_pwd, r.is_farming, r.has_date,
+          r.source_file
+        );
+      });
+      const sql =
+        `INSERT INTO public.at_rows
+         (dedup_key,data_collector,participant_id,group_id,group_name,training_type,
+          district,day,sex,is_pwd,is_farming,has_date,source_file)
+         VALUES ${ph.join(',')}
+         ON CONFLICT (dedup_key) DO NOTHING`;
+      const res = await client.query(sql, params);
+      upserted += res.rowCount ?? 0;
+    }
+    const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM public.at_rows`);
+    return {
+      ok: true,
+      received: (rawRows || []).length,
+      upserted,
+      atRowsCount: Number(cnt.rows?.[0]?.c) || 0,
     };
   } finally {
     try { await client.end(); } catch { /* ignore */ }
