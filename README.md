@@ -33,12 +33,39 @@ self-signed cert. `wrangler.jsonc` binds it as `HYPERDRIVE`, and `storeEnv()`
 passes the binding through so `newClusterClient()` prefers it in production.
 Local `node`/dev still connects directly using the pinned CA in `src/dbcert.ts`.
 
+### at_rows dedup key — stored-columns-only (contamination fix, 2026-08-02)
+`public.at_rows` stores only 13 columns; its `dedup_key` **must** be derived
+only from columns that are physically stored. Historically the key hashed 16
+fields, 8 of which are NOT stored (`participant_name, subcounty, Parish,
+Village, Disability_status, Employment_status, Employment_sector,
+Do_for_living`). Those text fields are formatted differently by the MIS gateway
+vs. the client's Excel export, so the SAME real training event produced a
+DIFFERENT `dedup_key` per source → `ON CONFLICT` never fired → duplicate rows.
+A full-Excel bulk load on top of gateway rows inflated `at_rows` from ~768k to
+1,102,649 (~319k duplicates) and pushed "Youth Trained" from 99,050 → 99,119
+on contaminated data.
+
+**Fix:** `dedupKeyFor()` in `src/store.ts` now special-cases `all_trainees_view`
+via `traineeStoredKey()`, keying only on the STORED business identity
+(`participant_id, training_type, day[YYYY-MM-DD], data_collector, group_id`,
+prefix `a:`). Gateway and Excel rows now dedup consistently → no recontamination.
+
+**Recovery performed:** safety copy `at_rows_bak_20260802` (1,102,649 rows) →
+`TRUNCATE at_rows` → clean rebuild from the authoritative Excel export
+(`all_trainees_view.xlsx`, 813,999 rows) via `scripts/ingest_xlsx.py`. Result:
+**789,275 distinct events, 98,752 distinct participants (= Youth Trained)** —
+matching the file ground-truth (~98,687 participants). The gateway freshness
+pass now only adds genuinely-new latest rows going forward.
+
 ### MIS-direct sync (live data from Heifer SAYE MIS)
 The master sheets are kept fresh by pulling **directly from the Heifer MIS
 gateway** (`https://azure.saye-ug.heifer.org/gateway/api/v1`) instead of manual
 uploads. Two sync paths:
 - **`all_trainees_view`** → flattened into `public.at_rows` (13-col shape).
   Endpoint: `GET /api/mis-sync/run` (cursor in `mis_sync_state`).
+  Bulk backfill from a full Excel export: `scripts/ingest_xlsx.py` →
+  `POST /api/mis-sync/ingest?token=…` (streams the sheet, browser UA required —
+  Cloudflare edge blocks the default urllib UA).
 - **5 mapped master views** → upserted into `public.records`, deduped on the
   MIS `_id` (stable `uuid:…`). Endpoints: `GET /api/mis-sync/view?key=<schema>`,
   `GET /api/mis-sync/all`, status `GET /api/mis-sync/view-status`

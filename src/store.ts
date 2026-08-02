@@ -101,8 +101,39 @@ function fnv1a(str: string): string {
   return ('0000000' + h.toString(16)).slice(-8);
 }
 
+/**
+ * Stored-column-only dedup key for all_trainees_view.
+ *
+ * at_rows physically stores only participant_id, training_type, day,
+ * data_collector, group_id (+ derived flags). The historical dedupCols hash
+ * mixed in 8 UNSTORED text fields (participant_name, subcounty, Parish,
+ * Village, Disability_status, Employment_status, Employment_sector,
+ * Do_for_living) whose formatting differs between the MIS gateway and the
+ * Excel export, so the SAME real event produced DIFFERENT keys per source and
+ * ON CONFLICT never fired -> duplicate rows. Keying only on the stored
+ * business identity makes gateway + Excel dedup consistently and prevents
+ * recontamination. The 'day' component is normalised to YYYY-MM-DD first.
+ */
+function traineeStoredKey(rec: Record<string, string>): string {
+  const activity = (rec['activity_date'] ?? '').trim();
+  const day = /^\d{4}-\d{2}-\d{2}/.test(activity) ? activity.slice(0, 10) : '';
+  const parts = [
+    (rec['participant_id'] ?? '').trim(),
+    (rec['training_type'] ?? '').trim(),
+    day,
+    (rec['data_collector'] ?? '').trim(),
+    (rec['group_id'] ?? '').trim(),
+  ];
+  return 'a:' + fnv1a(parts.join('\u0001'));
+}
+
 /** Compute the effective dedup key for a cleaned record (same rule as before). */
 export function dedupKeyFor(schema: SheetSchema, rec: Record<string, string>): string {
+  // all_trainees_view: use stored-column-only key so gateway + Excel dedup
+  // consistently and can never recontaminate at_rows (see traineeStoredKey).
+  if (schema.key === 'all_trainees_view') {
+    return traineeStoredKey(rec);
+  }
   if (schema.dedupCols && schema.dedupCols.length) {
     const joined = schema.dedupCols.map((c) => (rec[c] ?? '').trim()).join('\u0001');
     return 'h:' + fnv1a(joined);
