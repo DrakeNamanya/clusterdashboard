@@ -57,6 +57,37 @@ prefix `a:`). Gateway and Excel rows now dedup consistently → no recontaminati
 matching the file ground-truth (~98,687 participants). The gateway freshness
 pass now only adds genuinely-new latest rows going forward.
 
+### trainees_v2 — TRUE trainees table from the attendance OData feeds (NEW)
+The legacy `all_trainees_view` is a *derived* view. The real source is the
+**attendance registration** forms, exposed as 4 OData feeds (parent header ⋈
+child participants, for two form versions):
+
+| feed | rows | role |
+|---|---|---|
+| `attendance_registration_form_v2_odata_view` | 54,296 | v2 event header (83 cols) |
+| `attendance_registration_form_v2.shg_participants_odata_view` | 751,258 | v2 participants (12 cols) |
+| `attendance_registration_form_odata_view` | 3,708 | v1 event header (53 cols) |
+| `attendance_registration_form.shg_participants_odata_view` | 53,854 | v1 participants (12 cols) |
+
+- **Join:** `child."__Submissions-id" = parent.docId`. **Union:** v1 + v2.
+- **Grain:** one row per participant-attendance → `public.trainees_v2`.
+- **Why it's better:** the parent header carries the per-training detail the
+  derived view lacks — **cornerstone_training, psrp, vbhcd, isla, crop_mgt,
+  incubation_services, agrihub_training, sacco_training, tot_training,
+  gender_safeguarding** — plus location to village level.
+- **Counting rules:** *Cluster attendances* = `COUNT(*)` (a participant may
+  attend many trainings in a week). *Youth Trained* = `DISTINCT participant_id`.
+  *Monthly New Youth* = participant counted once, in the month of their FIRST
+  `activity_day` (first-touch).
+- **Idempotent key:** `row_key = 'tv2:'+fnv1a(submission_doc_id|participant_id|training_type|activity_day|child_doc_id)` — stored-column-only, cannot recontaminate.
+- **Dashboard tab:** `/trainees-v2` (data `GET /api/trainees-v2?districts=&from=&to=&training_type=`).
+- **Ingest:** `scripts/ingest_trainees_v2.py` (loads parents into a dict, streams
+  children, joins in-sandbox, POSTs to `POST /api/trainees-v2/ingest?token=…`).
+  The fetcher retries a flapping gateway forever with capped backoff;
+  `--skip-start N` resumes a child stream. Table DDL: `migrations/0002_trainees_v2.sql`.
+- **Status:** parallel/candidate source. Once verified it will replace
+  `all_trainees_view` as the trainees source of truth.
+
 ### MIS-direct sync (live data from Heifer SAYE MIS)
 The master sheets are kept fresh by pulling **directly from the Heifer MIS
 gateway** (`https://azure.saye-ug.heifer.org/gateway/api/v1`) instead of manual

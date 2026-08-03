@@ -3378,6 +3378,178 @@ export async function ingestTraineeRows(
   }
 }
 
+// ---------------------------------------------------------------------------
+// trainees_v2 ingest — the TRUE trainees table, joined from the 4 attendance
+// OData feeds. The sandbox ingester joins parent(header)⋈child(participant),
+// unions v1+v2, and POSTs already-flat joined rows here. The row_key is a
+// stored-column business key so the upsert is idempotent + recontamination-safe.
+// ---------------------------------------------------------------------------
+const TRAINEES_V2_COLS = [
+  'row_key', 'form_version', 'submission_doc_id', 'child_doc_id',
+  'participant_name', 'participant_id', 'sex', 'is_pwd',
+  'district', 'subcounty', 'parish', 'village', 'venue',
+  'activity_date', 'activity_day', 'activity_month', 'training_type', 'other_training_type',
+  'no_days', 'hours', 'target_group',
+  'financial_literacy', 'biz_dev_services', 'isla', 'animal_mgt', 'crop_mgt',
+  'gender_safeguarding', 'vbhcd', 'cornerstone_training', 'psrp', 'incubation_services',
+  'agrihub_training', 'sacco_training', 'tot_training', 'life_skills_modules',
+  'mental_health_topics', 'srhr_topics', 'nutrition_training_topics',
+  'date_created', 'source_feed',
+] as const;
+
+/** Bulk-upsert already-joined trainees_v2 rows (POSTed by the sandbox ingester). */
+export async function ingestTraineesV2(
+  env: Env,
+  rows: Record<string, any>[]
+): Promise<{ ok: true; received: number; upserted: number; totalRows: number }> {
+  if (!clusterDbUrl(env)) {
+    throw new Error('No cluster DB configured (ORACLE_DATABASE_URL) for trainees_v2 ingest');
+  }
+  const client = await connectClusterWithRetry(env);
+  let upserted = 0;
+  try {
+    const COLS = TRAINEES_V2_COLS.length; // 40
+    const CHUNK = 150;                     // 150*40 = 6000 params < pg limit
+    // Intra-batch dedupe on row_key (PK also rejects cross-batch dups).
+    const seen = new Set<string>();
+    const flat = [] as Record<string, any>[];
+    for (const r of rows || []) {
+      const k = String(r.row_key ?? '');
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      flat.push(r);
+    }
+    for (let j = 0; j < flat.length; j += CHUNK) {
+      const chunk = flat.slice(j, j + CHUNK);
+      const ph: string[] = [];
+      const params: any[] = [];
+      chunk.forEach((r, k) => {
+        const b = k * COLS;
+        ph.push('(' + TRAINEES_V2_COLS.map((_, i) => `$${b + i + 1}`).join(',') + ')');
+        for (const col of TRAINEES_V2_COLS) {
+          if (col === 'is_pwd') { params.push(Number(r.is_pwd) ? 1 : 0); }
+          else { const v = r[col]; params.push(v === undefined || v === null ? null : String(v)); }
+        }
+      });
+      const sql =
+        `INSERT INTO public.trainees_v2 (${TRAINEES_V2_COLS.join(',')})
+         VALUES ${ph.join(',')}
+         ON CONFLICT (row_key) DO NOTHING`;
+      const res = await client.query(sql, params);
+      upserted += res.rowCount ?? 0;
+    }
+    const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM public.trainees_v2`);
+    return { ok: true, received: (rows || []).length, upserted, totalRows: Number(cnt.rows?.[0]?.c) || 0 };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Aggregate trainees_v2 for the dashboard. Filters: districts[], from, to
+ * (activity_day range), training_type. Returns both KPI families:
+ *   youth_trained = DISTINCT participant_id (unique youth)
+ *   attendances   = COUNT(*) (cluster grain)
+ *   by_month      = Monthly New Youth (participant counted in FIRST month)
+ * The "first month" is computed over the SAME filtered slice so a district/
+ * type filter attributes first-touch within that slice.
+ */
+export async function traineesV2Summary(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string; training_type?: string } = {}
+): Promise<any> {
+  if (!clusterDbUrl(env)) return { configured: false };
+  const where: string[] = [];
+  const params: any[] = [];
+  let i = 1;
+  if (opts.districts && opts.districts.length) {
+    where.push(`district = ANY($${i}::text[])`);
+    params.push(opts.districts.map((d) => d.toUpperCase()));
+    i++;
+  }
+  if (opts.from) { where.push(`activity_day >= $${i}`); params.push(opts.from); i++; }
+  if (opts.to)   { where.push(`activity_day <= $${i}`); params.push(opts.to);   i++; }
+  if (opts.training_type) { where.push(`training_type = $${i}`); params.push(opts.training_type); i++; }
+  const W = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  // Headline KPIs + option lists.
+  const kpiSql = `
+    SELECT
+      COUNT(*)::int                                             AS attendances,
+      COUNT(DISTINCT participant_id)::int                       AS youth_trained,
+      COUNT(DISTINCT CASE WHEN lower(sex)='female' THEN participant_id END)::int AS female_unique,
+      COUNT(DISTINCT CASE WHEN is_pwd=1 THEN participant_id END)::int            AS pwd_unique,
+      COUNT(DISTINCT NULLIF(training_type,''))::int             AS training_types,
+      COUNT(DISTINCT NULLIF(district,''))::int                  AS district_count,
+      COUNT(DISTINCT NULLIF(village,''))::int                   AS village_count,
+      COUNT(DISTINCT NULLIF(activity_month,''))::int            AS month_count
+    FROM public.trainees_v2 ${W}`;
+
+  const byTypeSql = `
+    SELECT COALESCE(NULLIF(training_type,''),'(unspecified)') AS label, COUNT(*)::int AS value
+    FROM public.trainees_v2 ${W}
+    GROUP BY 1 ORDER BY value DESC LIMIT 25`;
+
+  // Monthly New Youth: each participant's FIRST activity_month within the slice.
+  const byMonthSql = `
+    WITH first_month AS (
+      SELECT participant_id, MIN(activity_month) AS m
+      FROM public.trainees_v2 ${W ? W + ' AND' : 'WHERE'} activity_month <> ''
+      GROUP BY participant_id
+    )
+    SELECT m AS month, COUNT(*)::int AS value
+    FROM first_month GROUP BY m ORDER BY m`;
+
+  const byDistrictSql = `
+    WITH base AS ( SELECT * FROM public.trainees_v2 ${W} ),
+    fm AS (
+      SELECT participant_id, MIN(activity_month) AS m
+      FROM base WHERE activity_month <> '' GROUP BY participant_id
+    )
+    SELECT
+      COALESCE(NULLIF(b.district,''),'(blank)') AS district,
+      COUNT(DISTINCT b.participant_id)::int AS youth,
+      COUNT(*)::int AS attendances,
+      COUNT(DISTINCT CASE WHEN lower(b.sex)='female' THEN b.participant_id END)::int AS female,
+      COUNT(DISTINCT CASE WHEN b.is_pwd=1 THEN b.participant_id END)::int AS pwds,
+      COUNT(DISTINCT fm.participant_id)::int AS new_youth
+    FROM base b LEFT JOIN fm ON fm.participant_id = b.participant_id
+    GROUP BY 1 ORDER BY youth DESC LIMIT 40`;
+
+  // Option lists are unfiltered (so the pickers stay stable).
+  const optsSql = `
+    SELECT
+      (SELECT array_agg(DISTINCT district ORDER BY district) FROM public.trainees_v2 WHERE district <> '') AS districts,
+      (SELECT array_agg(DISTINCT training_type ORDER BY training_type) FROM public.trainees_v2 WHERE training_type <> '') AS types`;
+
+  const [kpi, byType, byMonth, byDistrict, optRows] = await Promise.all([
+    neonQuery(env, kpiSql, params),
+    neonQuery(env, byTypeSql, params),
+    neonQuery(env, byMonthSql, params),
+    neonQuery(env, byDistrictSql, params),
+    neonQuery(env, optsSql, []),
+  ]);
+
+  const k = kpi[0] || {};
+  const o = optRows[0] || {};
+  return {
+    configured: true,
+    attendances: k.attendances || 0,
+    youth_trained: k.youth_trained || 0,
+    female_unique: k.female_unique || 0,
+    pwd_unique: k.pwd_unique || 0,
+    training_types: k.training_types || 0,
+    district_count: k.district_count || 0,
+    village_count: k.village_count || 0,
+    month_count: k.month_count || 0,
+    by_training_type: byType,
+    by_month: byMonth,
+    by_district: byDistrict,
+    districts: o.districts || [],
+    training_type_list: o.types || [],
+  };
+}
+
 /** Read current MIS sync progress without pulling any data. */
 export async function misSyncStatus(env: Env): Promise<any> {
   if (!clusterDbUrl(env)) return { configured: false };

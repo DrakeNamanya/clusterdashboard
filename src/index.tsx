@@ -20,6 +20,8 @@ import {
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
   ingestTraineeRows,
+  ingestTraineesV2,
+  traineesV2Summary,
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
   syncDistributionOData, neonQuery,
 } from './store';
@@ -32,6 +34,7 @@ import { ODATA_SOURCES, fetchOdataPage, resolveSource } from './odataimport';
 import { renderPage } from './ui';
 import { renderHome } from './home';
 import { renderClusterTrainings } from './cluster';
+import { renderTraineesV2 } from './trainees_v2';
 import { renderMonthlyNewYouth } from './newyouth';
 import { renderFrontliners } from './frontliner';
 import { renderDistribution } from './distribution';
@@ -717,6 +720,24 @@ app.post('/api/ai/narrate', async (c) => {
 
 // Page (Power BI-style dashboard).
 app.get('/cluster-trainings', (c) => c.html(renderClusterTrainings(baseUrl(c.req.url))));
+
+// NEW trainees dashboard built from the attendance OData feeds (trainees_v2).
+app.get('/trainees-v2', (c) => c.html(renderTraineesV2(baseUrl(c.req.url))));
+app.get('/api/trainees-v2', async (c) => {
+  try {
+    const q = c.req.query();
+    const districts = (q.districts || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const res = await traineesV2Summary(storeEnv(c), {
+      districts: districts.length ? districts : undefined,
+      from: q.from || undefined,
+      to: q.to || undefined,
+      training_type: q.training_type || undefined,
+    });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+});
 
 // Aggregated data feed for the dashboard (KPIs + bar chart), with filters.
 app.get('/api/cluster-trainings', async (c) => {
@@ -1653,6 +1674,21 @@ app.post('/api/mis-sync/ingest', async (c) => {
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     if (!rows.length) return c.json({ ok: false, error: 'no rows' }, 400);
     const res = await ingestTraineeRows(storeEnv(c), rows);
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Bulk-ingest already-joined trainees_v2 rows (POSTed by the sandbox ingester
+// which does the parent⋈child join + v1/v2 union). Token-gated.
+app.post('/api/trainees-v2/ingest', async (c) => {
+  if (c.req.query('token') !== 'shg-fix-2026') return c.json({ error: 'forbidden' }, 403);
+  try {
+    const body = await c.req.json().catch(() => ({} as any));
+    const rows = Array.isArray(body?.rows) ? body.rows : [];
+    if (!rows.length) return c.json({ ok: false, error: 'no rows' }, 400);
+    const res = await ingestTraineesV2(storeEnv(c), rows);
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
