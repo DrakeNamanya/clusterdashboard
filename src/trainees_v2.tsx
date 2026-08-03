@@ -60,6 +60,14 @@ ${navSidebar('traineesv2')}
       </div>
       <div class="text-[11px] text-[var(--muted)]">Source: attendance_registration_form (v1 + v2) · parent ⋈ child</div>
     </div>
+    <div class="card p-3 mb-4 text-[12px] text-[var(--ink)] bg-[var(--green-soft)] border-[var(--green)]">
+      <i class="fas fa-circle-info mr-1 text-[var(--green)]"></i>
+      <b>How youth are counted:</b> a participant is counted <b>once</b> as a
+      <b>new youth</b> — in the month of their <b>first-ever</b> training (all rows
+      checked since inception, v1 + v2 appended). Attending many trainings does
+      <b>not</b> inflate this. The grey <i>“Total attendances”</i> card is the raw
+      session count (a youth trained 8 times = 8 there) and is <b>not</b> a reported figure.
+    </div>
 
     <div class="grid grid-cols-12 gap-4">
 
@@ -90,23 +98,23 @@ ${navSidebar('traineesv2')}
       <!-- Right -->
       <section class="col-span-12 md:col-span-10 space-y-4">
 
-        <!-- KPI cards -->
+        <!-- KPI cards: the REPORTED metric (new youth, counted once ever) leads. -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div class="card p-4 text-center flex flex-col justify-center" title="DISTINCT participant_id — each youth counted once (Youth Trained).">
+          <div class="card p-4 text-center flex flex-col justify-center" style="border:2px solid var(--green)" title="Each participant counted ONCE — as a new youth in the month of their first-ever training (scanning all rows since inception). This is the figure the programme reports.">
             <div id="kpiYouth" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Youth Trained <span class="text-[10px] font-normal text-[var(--muted)]">(unique)</span></div>
-          </div>
-          <div class="card p-4 text-center flex flex-col justify-center" title="COUNT(*) — every participant-session (cluster trainings can repeat a person).">
-            <div id="kpiAttend" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Cluster Attendances</div>
+            <div class="kpi-label text-sm mt-1">New Youth Reached <span class="text-[10px] font-normal text-[var(--muted)]">(counted once)</span></div>
           </div>
           <div class="card p-4 text-center flex flex-col justify-center">
             <div id="kpiFemale" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Female (unique)</div>
+            <div class="kpi-label text-sm mt-1">Female <span class="text-[10px] font-normal text-[var(--muted)]">(unique)</span></div>
           </div>
           <div class="card p-4 text-center flex flex-col justify-center">
             <div id="kpiPwd" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">PWDs (unique)</div>
+            <div class="kpi-label text-sm mt-1">PWDs <span class="text-[10px] font-normal text-[var(--muted)]">(unique)</span></div>
+          </div>
+          <div class="card p-4 text-center flex flex-col justify-center bg-[var(--cream)]" title="Raw session tally = COUNT(*) of every attendance row. A youth attending 8 trainings counts 8 times here. This is NOT a reported headline — it just shows training volume.">
+            <div id="kpiAttend" class="kpi-num text-2xl md:text-3xl text-[var(--muted)]">–</div>
+            <div class="kpi-label text-xs mt-1">Total attendances <span class="text-[10px] font-normal text-[var(--muted)]">(sessions, not youth)</span></div>
           </div>
         </div>
 

@@ -378,6 +378,26 @@ ${navSidebar('programme')}
       });
     }
 
+    // ---- PSRP: psrp.(m|q).(district).(youth|female|attendances) ----------------
+    // (from trainees_v2; sourced from the attendance form's psrp topic column)
+    if (data.psrp) {
+      ['m','q'].forEach(function(p){
+        var map=(p==='m')?data.psrp.month:data.psrp.quarter;
+        var tot={youth:0,female:0,attendances:0};
+        slotKeys.forEach(function(sk,i){
+          var du=slots[i];
+          var y=du?cell(map,du,'youth'):0, fe=du?cell(map,du,'female'):0, a=du?cell(map,du,'attendances'):0;
+          T['psrp.'+p+'.'+sk+'.youth']=fmtNum(y);
+          T['psrp.'+p+'.'+sk+'.female']=fmtNum(fe);
+          T['psrp.'+p+'.'+sk+'.attendances']=fmtNum(a);
+          tot.youth+=y; tot.female+=fe; tot.attendances+=a;
+        });
+        T['psrp.'+p+'.total.youth']=fmtNum(tot.youth);
+        T['psrp.'+p+'.total.female']=fmtNum(tot.female);
+        T['psrp.'+p+'.total.attendances']=fmtNum(tot.attendances);
+      });
+    }
+
     // ---- ISLA savings: isla.(m|q).(district).(savers|saved|loans) --------------
     ['m','q'].forEach(function(p){
       var map=(p==='m')?data.isla.month:data.isla.quarter;
