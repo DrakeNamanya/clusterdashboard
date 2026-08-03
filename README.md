@@ -162,6 +162,39 @@ and are shown as small sub-lines on the KPI cards. **Verified against live DB:**
 IGANGA max-monthly **928**, JINJA **896**, LUUKA **972**, MAYUGE **1,337** — matches
 Power BI exactly. All-time first-touch total = **99,506** (≈ 99,509 distinct).
 
+### Fix 2026-08-03 (Round D.2): docx now injects cluster coordinator + AI narrative
+**Problem:** the downloaded `SAYE_Programme_Report_*.docx` "came the same way we
+uploaded it" for the coordinator, and the narrative was canned. Diagnosis: token
+replacement *was* working (0 unfilled `{{tokens}}`), and the numbers *were* landing —
+but (a) the **Cluster Coordinator** cell was **hard-coded literal text** in the
+template (*Charles Ochom / 0772063030*) with no token, so it never changed with the
+selected cluster; and (b) the "narrative" was pre-written template prose with numbers
+slotted in, not AI-written.
+
+**Fix:**
+- **Coordinator tokens.** Edited `public/static/programme_template.docx`: replaced the
+  three literal runs with `{{coord.name}}` / `{{coord.phone}}` / `{{coord.email}}`
+  (the revision-author "Charles Ochom" attribute was left untouched). `programmedoc.ts`
+  now has a `COORDINATORS` map (iganga→Francis Arinaitwe, bugiri→Ojok Ronald,
+  kamuli→Ruth Nabbanja) and fills those tokens from the **selected cluster**. Verified:
+  Iganga→Francis, Bugiri→Ojok, Kamuli→Ruth.
+- **AI narrative injected into the .docx.** Added a `{{narr.ai_summary}}` paragraph to
+  the template's Executive Summary. The `/api/programme-report/docx` route now calls
+  `narrate()` (Cloudflare Workers AI, Llama 3.3 70B) **server-side** with the live KPIs,
+  and writes the returned prose into that token — so the *downloaded* file contains real
+  AI prose, starting from *"Cluster: <X>. Cluster Coordinator: <name>."* as requested.
+  Falls back to a deterministic one-liner if the AI call fails (download never breaks).
+- Template re-zipped preserving all 44 members / compression; output validated
+  (well-formed `document.xml`, `testzip` clean, 0 unfilled tokens).
+
+### Fix 2026-08-03 (Round D.2b): trainees-v2 cards no longer "flicker"
+Selecting a district + date fired several `change` events whose `fetch`es resolved
+out of order, so the KPI cards were repainted 3–5 times with stale results. Added a
+**request-sequence guard** (`_reqSeq`: only the newest request paints), a 180 ms
+**debounce** (`scheduleLoad`), `cache:'no-store'`, and an *"updating…"* spinner
+(`#tv2Busy`) that dims the cards while a fetch is in flight. The last value shown is
+now always the correct one for the current filters.
+
 ### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
 The Programme Report's **Poultry distribution**, **Goat distribution** and
 **Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`

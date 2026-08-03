@@ -100,6 +100,10 @@ ${navSidebar('traineesv2')}
       <!-- Right -->
       <section class="col-span-12 md:col-span-10 space-y-4">
 
+        <div class="text-right h-4">
+          <span id="tv2Busy" style="display:none" class="text-[11px] text-[var(--muted)]"><i class="fas fa-circle-notch fa-spin mr-1"></i>updating…</span>
+        </div>
+
         <!-- KPI cards: the REPORTED metric (new youth, counted once ever) leads. -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div class="card p-4 text-center flex flex-col justify-center" style="border:2px solid var(--green)" title="Each participant counted ONCE — as a new youth in the month + district of their FIRST-EVER training, computed globally across all rows since inception (Power BI New_Total_Reach / DAX ALLEXCEPT). This is the figure the programme reports.">
@@ -194,14 +198,14 @@ ${navSidebar('traineesv2')}
              + (on ? 'checked' : '') + '/><span>'+(d||'(blank)')+'</span></label>';
       }
       box.innerHTML = html;
-      document.getElementById('selAll').addEventListener('change', ()=>{ selected.clear(); renderDistricts(); load(); });
+      document.getElementById('selAll').addEventListener('change', ()=>{ selected.clear(); renderDistricts(); scheduleLoad(); });
       box.querySelectorAll('input[data-d]').forEach(cb=>{
         cb.addEventListener('change', ()=>{
           const d = cb.getAttribute('data-d');
           if (selected.size === 0){ districts.forEach(x=>selected.add(x)); }
           if (cb.checked) selected.add(d); else selected.delete(d);
           if (selected.size === districts.length) selected.clear();
-          renderDistricts(); load();
+          renderDistricts(); scheduleLoad();
         });
       });
     }
@@ -241,16 +245,36 @@ ${navSidebar('traineesv2')}
         + '<td>'+fmt(r.female)+'</td><td>'+fmt(r.pwds)+'</td><td>'+fmt(r.new_youth)+'</td></tr>').join('');
     }
 
+    // Request-sequence guard: every load() bumps _reqSeq; only the response for
+    // the LATEST request is allowed to paint the cards. This stops the cards
+    // "changing 5 times" when several change-events fire in quick succession
+    // (district + date) and their fetches resolve out of order.
+    let _reqSeq = 0;
+    let _debounce = null;
+    function scheduleLoad(){
+      if (_debounce) clearTimeout(_debounce);
+      _debounce = setTimeout(load, 180);
+    }
+    function setBusy(on){
+      const ids=['kpiYouth','kpiAttend','kpiFemale','kpiPwd','kpiTypes','kpiDistricts','kpiVillages','kpiMonths'];
+      ids.forEach(function(id){ var e=document.getElementById(id); if(e) e.style.opacity = on ? '0.4' : '1'; });
+      var b=document.getElementById('tv2Busy'); if(b) b.style.display = on ? 'inline' : 'none';
+    }
+
     async function load(){
+      const mySeq = ++_reqSeq;
+      setBusy(true);
       const params = new URLSearchParams();
       const dp = selectedParam(); if (dp) params.set('districts', dp);
       const f = document.getElementById('fromDate').value; if (f) params.set('from', f);
       const t = document.getElementById('toDate').value;   if (t) params.set('to', t);
       const tt = document.getElementById('ttypeSel').value; if (tt) params.set('training_type', tt);
       try{
-        const res = await fetch('/api/trainees-v2?' + params.toString());
+        const res = await fetch('/api/trainees-v2?' + params.toString(), { cache: 'no-store' });
         if (!res.ok) throw new Error('HTTP '+res.status);
         const d = await res.json();
+        // Stale-response guard: a newer request has since been fired → drop this one.
+        if (mySeq !== _reqSeq) return;
         if (!districts.length && d.districts){ districts = d.districts; renderDistricts(); }
         if (d.training_type_list){
           const sel = document.getElementById('ttypeSel');
@@ -274,17 +298,20 @@ ${navSidebar('traineesv2')}
         renderBars(d.by_training_type);
         renderMonth(d.by_month);
         renderDistTable(d.by_district);
+        setBusy(false);
       }catch(err){
+        if (mySeq !== _reqSeq) return;
+        setBusy(false);
         document.getElementById('barChart').innerHTML =
           '<div class="text-red-500 text-center py-8">Failed to load: '+err.message+'</div>';
       }
     }
 
-    document.getElementById('fromDate').addEventListener('change', load);
-    document.getElementById('toDate').addEventListener('change', load);
-    document.getElementById('ttypeSel').addEventListener('change', load);
+    document.getElementById('fromDate').addEventListener('change', scheduleLoad);
+    document.getElementById('toDate').addEventListener('change', scheduleLoad);
+    document.getElementById('ttypeSel').addEventListener('change', scheduleLoad);
     document.getElementById('clearDates').addEventListener('click', ()=>{
-      document.getElementById('fromDate').value=''; document.getElementById('toDate').value=''; load();
+      document.getElementById('fromDate').value=''; document.getElementById('toDate').value=''; scheduleLoad();
     });
 
     load();

@@ -49,6 +49,16 @@ export const CLUSTER_DISTRICTS: Record<string, string[]> = {
 
 const slotKeys = ['iganga', 'jinja', 'mayuge', 'luuka'];
 
+// Cluster → coordinator contact (injected into the .docx header table).
+// Kept in sync with the client preview map in programmepage.tsx.
+export const COORDINATORS: Record<string, { name: string; phone: string; email: string }> = {
+  iganga:  { name: 'Francis Arinaitwe', phone: '+256 788 748461', email: 'Francis.Arinaitwe@heifer.org' },
+  bugiri:  { name: 'Ojok Ronald',       phone: '+256 776 913909', email: 'Ojok.ronald@heifer.org' },
+  kamuli:  { name: 'Ruth Nabbanja',     phone: '+256 778 948759', email: 'Ruth.Nabbanja@heifer.org' },
+  central: { name: '—',                 phone: '—',               email: '—' },
+  all:     { name: 'Francis Arinaitwe', phone: '+256 788 748461', email: 'Francis.Arinaitwe@heifer.org' },
+};
+
 function cell(map: any, district: string, field: string): number {
   if (!map) return 0;
   const r = map[String(district || '').toUpperCase()];
@@ -66,6 +76,16 @@ export function buildTokens(data: any, clusterKey: string,
   T['meta.month'] = monthLabel(mFrom);
   T['meta.monthname'] = monthName(mFrom);
   T['meta.quarter'] = quarterLabel(qFrom, qTo);
+
+  // ---- cluster coordinator (header table) ----
+  const coord = COORDINATORS[clusterKey] || COORDINATORS.iganga;
+  T['coord.name'] = coord.name;
+  T['coord.phone'] = coord.phone;
+  T['coord.email'] = coord.email;
+
+  // AI narrative paragraph — filled deterministically as a fallback here, then
+  // overwritten with real AI prose by the route (which can run env.AI async).
+  T['narr.ai_summary'] = '';
 
   // ---- training tables ----
   const trainKeys: Record<string, string> = {

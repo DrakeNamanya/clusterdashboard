@@ -1408,6 +1408,48 @@ app.get('/api/programme-report/docx', async (c) => {
   const tplBytes = new Uint8Array(await tplRes.arrayBuffer());
 
   const tokens = buildDocTokens(data, cluster, mFrom, qFrom, qTo);
+
+  // AI executive-summary narrative, injected into the {{narr.ai_summary}}
+  // paragraph. Runs server-side (Cloudflare Workers AI) so the DOWNLOADED .docx
+  // actually contains AI prose (not just the canned template sentences). If the
+  // AI call fails we fall back to a deterministic one-liner so the download
+  // never breaks.
+  const coordName = tokens['coord.name'] || '';
+  const clusterLabel = cluster.charAt(0).toUpperCase() + cluster.slice(1);
+  try {
+    const aiKpis = {
+      cluster: clusterLabel,
+      cluster_coordinator: coordName,
+      reporting_month: tokens['meta.month'],
+      reporting_quarter: tokens['meta.quarter'],
+      youth_reached_month: tokens['narr.reached'],
+      female_month: tokens['narr.female'],
+      pwd_month: tokens['narr.pwd'],
+      shgs_profiled: tokens['narr.shgs'],
+      savers: tokens['narr.savers'],
+      amount_saved_ugx: tokens['narr.saved'],
+      loans_ugx: tokens['narr.loans'],
+      birds_distributed: tokens['narr.birds_dist'],
+      goats_distributed: tokens['narr.goats'],
+      horticulture_sales_ugx: tokens['narr.hort_sales'],
+      poultry_sales_ugx: tokens['narr.poultry_sales'],
+    };
+    let prose = await narrate(
+      storeEnv(c),
+      `SAYE ${clusterLabel} cluster programme report for ${tokens['meta.month'] || 'the period'}`,
+      aiKpis
+    );
+    prose = (prose || '').trim();
+    if (prose) {
+      // Prefix with the coordinator lead-in the user asked for.
+      tokens['narr.ai_summary'] =
+        `Cluster: ${clusterLabel}. Cluster Coordinator: ${coordName}. ` + prose;
+    }
+  } catch (e) {
+    tokens['narr.ai_summary'] =
+      `Cluster: ${clusterLabel} (Coordinator: ${coordName}). During ${tokens['meta.month'] || 'the reporting period'} the cluster reached ${tokens['narr.reached'] || 0} youth across ${tokens['narr.shgs'] || 0} new SHGs.`;
+  }
+
   const out = generateDocx(tplBytes, tokens);
 
   const fname = 'SAYE_Programme_Report_' + (mFrom || 'report') + '.docx';
