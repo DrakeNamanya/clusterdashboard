@@ -83,10 +83,26 @@ child participants, for two form versions):
 - **Dashboard tab:** `/trainees-v2` (data `GET /api/trainees-v2?districts=&from=&to=&training_type=`).
 - **Ingest:** `scripts/ingest_trainees_v2.py` (loads parents into a dict, streams
   children, joins in-sandbox, POSTs to `POST /api/trainees-v2/ingest?token=…`).
-  The fetcher retries a flapping gateway forever with capped backoff;
-  `--skip-start N` resumes a child stream. Table DDL: `migrations/0002_trainees_v2.sql`.
-- **Status:** parallel/candidate source. Once verified it will replace
-  `all_trainees_view` as the trainees source of truth.
+  The fetcher retries a flapping gateway forever with capped backoff, and
+  enforces a **hard wall-clock deadline per page** (watchdog thread) so a
+  trickling/hung socket can't wedge the run; `--skip-start N` resumes a child
+  stream. Table DDL: `migrations/0002_trainees_v2.sql`.
+- **Status (2026-08-03):** ✅ **FULLY LOADED** — `public.trainees_v2` holds
+  **805,109 attendances** (v1_child 53,854 + v2_child 751,255) across
+  **99,509 distinct youth**, 12 districts, 30 active months. Parallel/candidate
+  source; once user-verified it will replace `all_trainees_view` as the trainees
+  source of truth.
+
+### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
+The Programme Report's **Poultry distribution**, **Goat distribution** and
+**Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`
+stores `livestock_type` **lowercase with sub-type suffixes** (`poultry_meat`,
+`poultry_local`, `poultry_eggs`, `goat_doe`, `goat_buck`, …), but the queries in
+`src/programme.ts` filtered with `LIKE 'Poultry%'` / `LIKE 'Goat%'` (capitalised,
+no underscore) → **0 rows matched**. Fixed to case-insensitive
+`lower(trim(livestock_type)) LIKE 'poultry%'` / `'goat%'`. Poultry distribution now
+reports ~497k birds across the cluster; re-booking (repeat recipients) populates
+per district for windowed reports.
 
 ### MIS-direct sync (live data from Heifer SAYE MIS)
 The master sheets are kept fresh by pulling **directly from the Heifer MIS
