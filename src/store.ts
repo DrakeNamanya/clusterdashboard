@@ -3550,6 +3550,100 @@ export async function traineesV2Summary(
   };
 }
 
+/**
+ * Deep training-type breakdown from trainees_v2.
+ * Beyond the top-level `training_type`, the attendance form captures specific
+ * curricula in detail columns (psrp, cornerstone_training, financial_literacy,
+ * biz_dev_services, …). Each "deep type" below is a predicate over those columns.
+ * Returns, per deep type: unique youth, attendances, unique female, unique PWDs —
+ * plus the same broken down per district and per month — honouring the
+ * district / date filters.
+ */
+export const TV2_DEEP_TYPES: { key: string; label: string; pred: string }[] = [
+  { key: 'psrp',            label: 'PSRP (self-review & planning)', pred: `COALESCE(psrp,'') <> ''` },
+  { key: 'cornerstone',     label: 'Cornerstone (12 cornerstones)', pred: `COALESCE(cornerstone_training,'') <> ''` },
+  { key: 'leadership',      label: 'Leadership training',           pred: `cornerstone_training LIKE '%leadership%'` },
+  { key: 'attitude',        label: 'Attitude & behaviour',          pred: `cornerstone_training LIKE '%attitude%'` },
+  { key: 'group_dynamics',  label: 'Group dynamics',                pred: `cornerstone_training LIKE '%group_dynamics%'` },
+  { key: 'visioning',       label: 'Visioning / action planning',   pred: `cornerstone_training LIKE '%visioning%'` },
+  { key: 'financial_literacy', label: 'Financial literacy',         pred: `COALESCE(financial_literacy,'') <> ''` },
+  { key: 'biz_dev_services',   label: 'Business development services', pred: `COALESCE(biz_dev_services,'') <> ''` },
+];
+
+export async function traineesV2DetailBreakdown(
+  env: Env,
+  opts: { districts?: string[]; from?: string; to?: string } = {}
+): Promise<any> {
+  if (!clusterDbUrl(env)) return { configured: false };
+  const where: string[] = [];
+  const params: any[] = [];
+  let i = 1;
+  if (opts.districts && opts.districts.length) {
+    where.push(`district = ANY($${i}::text[])`);
+    params.push(opts.districts.map((d) => d.toUpperCase()));
+    i++;
+  }
+  if (opts.from) { where.push(`activity_day >= $${i}`); params.push(opts.from); i++; }
+  if (opts.to)   { where.push(`activity_day <= $${i}`); params.push(opts.to);   i++; }
+  const baseWhere = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  // 1) Headline totals per deep type (one scan, FILTER per predicate).
+  const totalsSql = `
+    SELECT
+      ${TV2_DEEP_TYPES.map((d) => `
+      COUNT(DISTINCT participant_id) FILTER (WHERE ${d.pred})::int AS ${d.key}_youth,
+      COUNT(*)                       FILTER (WHERE ${d.pred})::int AS ${d.key}_att,
+      COUNT(DISTINCT CASE WHEN lower(sex)='female' AND (${d.pred}) THEN participant_id END)::int AS ${d.key}_female,
+      COUNT(DISTINCT CASE WHEN is_pwd=1 AND (${d.pred}) THEN participant_id END)::int AS ${d.key}_pwd`).join(',')}
+    FROM public.trainees_v2 ${baseWhere}`;
+
+  // 2) Per-district youth for each deep type.
+  const byDistrictSql = `
+    SELECT COALESCE(NULLIF(district,''),'(blank)') AS district,
+      ${TV2_DEEP_TYPES.map((d) => `
+      COUNT(DISTINCT participant_id) FILTER (WHERE ${d.pred})::int AS ${d.key}`).join(',')}
+    FROM public.trainees_v2 ${baseWhere}
+    GROUP BY 1 ORDER BY 1`;
+
+  // 3) Per-month youth for each deep type (for trend charts).
+  const byMonthSql = `
+    SELECT activity_month AS month,
+      ${TV2_DEEP_TYPES.map((d) => `
+      COUNT(DISTINCT participant_id) FILTER (WHERE ${d.pred})::int AS ${d.key}`).join(',')}
+    FROM public.trainees_v2
+    ${baseWhere ? baseWhere + ` AND activity_month <> ''` : `WHERE activity_month <> ''`}
+    GROUP BY 1 ORDER BY 1`;
+
+  const optsSql = `
+    SELECT array_agg(DISTINCT district ORDER BY district) AS districts
+    FROM public.trainees_v2 WHERE district <> ''`;
+
+  const [totRows, distRows, monthRows, optRows] = await Promise.all([
+    neonQuery(env, totalsSql, params),
+    neonQuery(env, byDistrictSql, params),
+    neonQuery(env, byMonthSql, params),
+    neonQuery(env, optsSql, []),
+  ]);
+
+  const t0 = totRows[0] || {};
+  const totals = TV2_DEEP_TYPES.map((d) => ({
+    key: d.key, label: d.label,
+    youth: t0[`${d.key}_youth`] || 0,
+    attendances: t0[`${d.key}_att`] || 0,
+    female: t0[`${d.key}_female`] || 0,
+    pwd: t0[`${d.key}_pwd`] || 0,
+  }));
+
+  return {
+    configured: true,
+    types: TV2_DEEP_TYPES.map((d) => ({ key: d.key, label: d.label })),
+    totals,
+    by_district: distRows,
+    by_month: monthRows,
+    districts: (optRows[0] || {}).districts || [],
+  };
+}
+
 /** Read current MIS sync progress without pulling any data. */
 export async function misSyncStatus(env: Env): Promise<any> {
   if (!clusterDbUrl(env)) return { configured: false };

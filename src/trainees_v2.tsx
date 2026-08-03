@@ -138,7 +138,8 @@ ${navSidebar('traineesv2')}
             </div>
           </div>
           <div class="card p-5 col-span-12 md:col-span-5">
-            <h2 class="text-center font-bold text-[15px] mb-4">Monthly New Youth <span class="text-[10px] font-normal text-[var(--muted)]">(first-touch)</span></h2>
+            <h2 class="text-center font-bold text-[15px] mb-1">Monthly New Youth <span class="badge">v2</span></h2>
+            <div class="text-center text-[10px] text-[var(--muted)] mb-3">first-touch · from attendance forms · compare with <a href="/monthly-new-youth" class="underline">legacy chart</a></div>
             <canvas id="monthChart" height="220"></canvas>
           </div>
         </div>

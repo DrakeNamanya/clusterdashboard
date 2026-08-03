@@ -93,6 +93,34 @@ child participants, for two form versions):
   source; once user-verified it will replace `all_trainees_view` as the trainees
   source of truth.
 
+### Training Deep-Dive tab + PSRP in the Programme Report (2026-08-03)
+Beyond the top-level `training_type`, the attendance form records specific
+curricula in **detail columns** (`psrp`, `cornerstone_training`,
+`financial_literacy`, `biz_dev_services`). These are space-separated topic lists,
+non-empty when the topic was covered — e.g. `psrp = "reflection_planning voting"`,
+`cornerstone_training = "_12_cornerstones leadership_training group_dynamics"`.
+- **New API:** `GET /api/trainees-v2/details?districts=&from=&to=` →
+  `store.ts:traineesV2DetailBreakdown()`. Returns, per **deep type**
+  (predicate over the detail columns), unique youth / attendances / female / PWD,
+  plus per-district and per-month breakdowns. Deep types (`TV2_DEEP_TYPES`):
+  PSRP, Cornerstone (12 cornerstones), Leadership, Attitude & behaviour, Group
+  dynamics, Visioning/action planning, Financial literacy, Business development
+  services.
+- **New tab:** `/trainees-v2/details` (`src/training_details.tsx`, nav key
+  `trainingdetails`) — KPI card per deep type, "unique youth by deep type" bars,
+  a month-trend line (metric picker), and a by-district × deep-type table. Filters:
+  district (multi) + date range.
+- **Headline all-time figures:** PSRP 33,680 youth · Cornerstone 64,377 ·
+  Leadership 42,951 · Group dynamics 33,380 · Financial literacy 23,706 · BDS 17,280.
+- **PSRP now fills the Programme Report** (`programme.ts:psrpByDistrict`, tokens in
+  `programmedoc.ts`, table in `programmepage.tsx`) — was a blank "we shall add
+  later" placeholder; now sourced from `trainees_v2` per district (youth / female /
+  attendances, month + quarter windows).
+- **Monthly New Youth v2:** the trainees-v2 tab's month chart *is* the first-touch
+  "Monthly New Youth" computed from `trainees_v2` (each participant counted once in
+  the month of their first `activity_day`); links to the legacy `/monthly-new-youth`
+  chart for side-by-side comparison. All-time first-touch total ≈ 99,506.
+
 ### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
 The Programme Report's **Poultry distribution**, **Goat distribution** and
 **Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`

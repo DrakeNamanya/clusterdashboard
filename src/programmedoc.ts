@@ -158,6 +158,25 @@ export function buildTokens(data: any, clusterKey: string,
     agg.pdist[p] = tot;
   });
 
+  // ---- PSRP (from trainees_v2: youth / attendances / female per district) ----
+  (['m', 'q'] as const).forEach((p) => {
+    const map = p === 'm' ? data.psrp?.month : data.psrp?.quarter;
+    const tot = { youth: 0, attendances: 0, female: 0 };
+    slotKeys.forEach((sk, i) => {
+      const du = slots[i];
+      const y = du ? cell(map, du, 'youth') : 0;
+      const a = du ? cell(map, du, 'attendances') : 0;
+      const fe = du ? cell(map, du, 'female') : 0;
+      T[`psrp.${p}.${sk}.youth`] = nf(y);
+      T[`psrp.${p}.${sk}.attendances`] = nf(a);
+      T[`psrp.${p}.${sk}.female`] = nf(fe);
+      tot.youth += y; tot.attendances += a; tot.female += fe;
+    });
+    T[`psrp.${p}.total.youth`] = nf(tot.youth);
+    T[`psrp.${p}.total.attendances`] = nf(tot.attendances);
+    T[`psrp.${p}.total.female`] = nf(tot.female);
+  });
+
   // ---- goat distribution (Luuka + total only) ----
   (['m', 'q'] as const).forEach((p) => {
     const map = p === 'm' ? data.goatDist?.month : data.goatDist?.quarter;

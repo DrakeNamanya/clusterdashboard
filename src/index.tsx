@@ -22,6 +22,7 @@ import {
   ingestTraineeRows,
   ingestTraineesV2,
   traineesV2Summary,
+  traineesV2DetailBreakdown,
   youthInWorkDash, youthInWorkSummary, refreshJobTracking,
   syncDistributionOData, neonQuery,
 } from './store';
@@ -35,6 +36,7 @@ import { renderPage } from './ui';
 import { renderHome } from './home';
 import { renderClusterTrainings } from './cluster';
 import { renderTraineesV2 } from './trainees_v2';
+import { renderTrainingDetails } from './training_details';
 import { renderMonthlyNewYouth } from './newyouth';
 import { renderFrontliners } from './frontliner';
 import { renderDistribution } from './distribution';
@@ -732,6 +734,23 @@ app.get('/api/trainees-v2', async (c) => {
       from: q.from || undefined,
       to: q.to || undefined,
       training_type: q.training_type || undefined,
+    });
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+});
+
+// Training deep-dive tab: PSRP / cornerstone / leadership etc. by district & date.
+app.get('/trainees-v2/details', (c) => c.html(renderTrainingDetails(baseUrl(c.req.url))));
+app.get('/api/trainees-v2/details', async (c) => {
+  try {
+    const q = c.req.query();
+    const districts = (q.districts || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const res = await traineesV2DetailBreakdown(storeEnv(c), {
+      districts: districts.length ? districts : undefined,
+      from: q.from || undefined,
+      to: q.to || undefined,
     });
     return c.json(res);
   } catch (e: any) {

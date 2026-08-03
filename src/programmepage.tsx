@@ -153,7 +153,6 @@ ${navSidebar('programme')}
     no data source in the system, so they are left blank and
     <span class="yellowchip">highlighted yellow</span> for you to fill by hand:
     <ul class="tight">
-      <li><b>PSRP</b> (psychosocial referral pathway) — <i>"we shall add later"</i></li>
       <li><b>SACCO</b> table</li>
     </ul>
     Any other value we could not match will also appear highlighted. Everything else — including the
@@ -672,10 +671,12 @@ ${navSidebar('programme')}
       h += districtTable(tokens, tt[0], youthFields, dl, labels);
     });
 
-    // --- PSRP (blank / manual) -------------------------------------------------
+    // --- PSRP (from trainees_v2) -----------------------------------------------
     h += '<h3>PSRP</h3>';
-    h += '<p class="cap">No data source yet — <b>"we shall add later"</b>. Fill by hand.</p>';
-    h += blankTable(['District','Month','Quarter'], dl.length);
+    h += '<p class="cap">Participatory Self-Review &amp; Planning (reflection/planning, self-review, voting) — sourced from the attendance form (trainees_v2).</p>';
+    h += districtTable(tokens,'psrp',
+          [{key:'youth',label:'No of Youth'},{key:'female',label:'Female'},{key:'attendances',label:'Attendances'}],
+          dl, labels);
 
     // --- Horticulture ----------------------------------------------------------
     h += '<h3>Harvest &amp; sales (Horticulture / oil seeds)</h3>';

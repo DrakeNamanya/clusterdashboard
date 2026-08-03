@@ -50,6 +50,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'cluster', href: '/cluster-trainings', label: 'Cluster Trainings', icon: 'fa-chart-simple' },
   { key: 'newyouth', href: '/monthly-new-youth', label: 'Monthly New Youth', icon: 'fa-user-plus' },
   { key: 'traineesv2', href: '/trainees-v2', label: 'Trainees (Attendance) · NEW', icon: 'fa-user-check' },
+  { key: 'trainingdetails', href: '/trainees-v2/details', label: 'Training Deep-Dive (PSRP…)', icon: 'fa-layer-group' },
   { key: 'frontliners', href: '/frontliners', label: 'Trainings by Frontliners', icon: 'fa-table' },
   // ── Distribution group ──
   { key: 'distribution', href: '/distribution', label: 'Distribution to Participants', icon: 'fa-boxes-stacked', group: 'grp-distribution' },

@@ -189,6 +189,34 @@ async function poultryRebookByDistrict(
   return neonQuery(env, sql, params);
 }
 
+// --- PSRP (trainees_v2) --------------------------------------------------------
+// PSRP (Participatory Self-Review & Planning: reflection_planning, self-review,
+// voting) is a training sub-topic captured on the attendance form — stored in the
+// trainees_v2.psrp column (space-separated topic list, empty when not covered).
+// A row "is PSRP" when that column is non-empty. Counted per district for the
+// window: unique youth, attendances, and unique female youth.
+async function psrpByDistrict(
+  env: Env, districts: string[], from?: string, to?: string
+): Promise<Row[]> {
+  const params: any[] = [];
+  let where = `WHERE COALESCE(psrp,'') <> ''`;
+  if (districts.length) {
+    params.push(districts.map((d) => d.toUpperCase()));
+    where += ` AND upper(trim(district)) = ANY($${params.length}::text[])`;
+  }
+  if (from) { params.push(from); where += ` AND activity_day >= $${params.length}`; }
+  if (to)   { params.push(to);   where += ` AND activity_day <= $${params.length}`; }
+  const sql = `
+    SELECT upper(trim(district)) AS district,
+           COUNT(DISTINCT participant_id) AS youth,
+           COUNT(*)                        AS attendances,
+           COUNT(DISTINCT CASE WHEN lower(sex)='female' THEN participant_id END) AS female
+    FROM public.trainees_v2
+    ${where}
+    GROUP BY 1`;
+  return neonQuery(env, sql, params);
+}
+
 // --- poultry sales (poultry_sales_rows) ---------------------------------------
 async function poultrySalesByDistrict(
   env: Env, districts: string[], from?: string, to?: string
@@ -289,6 +317,7 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     poultryDistM, poultryDistQ, goatDistM, goatDistQ,
     poultrySalesM, poultrySalesQ,
     rebookM, rebookQ,
+    psrpM, psrpQ,
     islaM, islaQ,
     levM, levQ,
     yiwM, yiwQ,
@@ -315,6 +344,8 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     poultrySalesByDistrict(env, districts, f.qFrom, f.qTo),
     poultryRebookByDistrict(env, districts, f.from, f.to),
     poultryRebookByDistrict(env, districts, f.qFrom, f.qTo),
+    psrpByDistrict(env, districts, f.from, f.to),
+    psrpByDistrict(env, districts, f.qFrom, f.qTo),
     islaByDistrict(env, districts, f.from, f.to),
     islaByDistrict(env, districts, f.qFrom, f.qTo),
     leverageTotal(env, districts, f.from, f.to),
@@ -333,6 +364,7 @@ export async function programmeReport(env: Env, f: ProgFilters): Promise<any> {
     goatDist: { month: indexByDistrict(goatDistM), quarter: indexByDistrict(goatDistQ) },
     poultrySales: { month: indexByDistrict(poultrySalesM), quarter: indexByDistrict(poultrySalesQ) },
     rebooking: { month: indexByDistrict(rebookM), quarter: indexByDistrict(rebookQ) },
+    psrp: { month: indexByDistrict(psrpM), quarter: indexByDistrict(psrpQ) },
     isla: { month: indexByDistrict(islaM), quarter: indexByDistrict(islaQ) },
     leverage: { month: levM, quarter: levQ },
     youthInWork: { month: yiwM, quarter: yiwQ },
