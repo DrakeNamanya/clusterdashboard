@@ -119,9 +119,12 @@ async function horticultureByDistrict(
 async function livestockDistByDistrict(
   env: Env, kind: 'poultry' | 'goat', districts: string[], from?: string, to?: string
 ): Promise<Row[]> {
-  const like = kind === 'poultry' ? 'Poultry%' : 'Goat%';
+  // Source data stores livestock_type lowercase with sub-type suffixes
+  // (poultry_meat, poultry_local, poultry_eggs, goat_doe, goat_buck, ...),
+  // so match case-insensitively on the family prefix.
+  const like = kind === 'poultry' ? 'poultry%' : 'goat%';
   const params: any[] = [like];
-  let where = `WHERE livestock_type LIKE $1`;
+  let where = `WHERE lower(trim(livestock_type)) LIKE $1`;
   if (districts.length) {
     params.push(districts.map((d) => d.toUpperCase()));
     where += ` AND upper(trim(district)) = ANY($${params.length}::text[])`;
@@ -150,7 +153,7 @@ async function poultryRebookByDistrict(
   env: Env, districts: string[], from?: string, to?: string
 ): Promise<Row[]> {
   if (!from) return []; // rebooking is only meaningful with a window start
-  const params: any[] = ['Poultry%', from];
+  const params: any[] = ['poultry%', from];
   let dwhere = '';
   if (districts.length) {
     params.push(districts.map((d) => d.toUpperCase()));
@@ -165,7 +168,7 @@ async function poultryRebookByDistrict(
       SELECT upper(trim(district)) AS district, participant_id,
              SUM(qty_received) AS birds
       FROM distribution_rows
-      WHERE livestock_type LIKE $1
+      WHERE lower(trim(livestock_type)) LIKE $1
         AND participant_id IS NOT NULL
         AND dist_date >= $2::date ${toClause} ${dwhere}
       GROUP BY 1,2
@@ -173,7 +176,7 @@ async function poultryRebookByDistrict(
     prior AS (
       SELECT DISTINCT participant_id
       FROM distribution_rows
-      WHERE livestock_type LIKE $1
+      WHERE lower(trim(livestock_type)) LIKE $1
         AND participant_id IS NOT NULL
         AND dist_date < $2::date
     )
