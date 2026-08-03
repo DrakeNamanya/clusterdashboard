@@ -139,6 +139,29 @@ non-empty when the topic was covered — e.g. `psrp = "reflection_planning votin
   of their first-ever training, all rows since inception); raw attendances demoted to
   a grey **“Total attendances (sessions, not youth)”** card; info banner added.
 
+### Fix 2026-08-03 (Round D.1): Monthly New Youth — GLOBAL first-touch (Power BI DAX parity)
+**Bug:** per-district Monthly New Youth in `/trainees-v2` was inflated (Jinja/Luuka/
+Iganga showed **>2,000** new monthly youth; the field expectation — and Power BI —
+is **<1,000 for every Iganga-cluster district except Mayuge**). Root cause: in
+`store.ts:traineesV2Summary`, `byMonthSql` / `byDistrictSql` / the youth KPIs
+computed each participant's first-touch month with `MIN(activity_month)` **within
+the filtered slice**. When a district (or date) filter was applied, first-touch was
+recomputed **locally**, so a youth first trained in district A then re-trained in
+district B was wrongly counted as "new" in B too.
+
+**Fix:** compute first-touch **globally**, matching the user's Power BI measure
+`New_Total_Reach` (`DISTINCTCOUNT(participant_id)` filtered to rows where
+`activity_date = MIN(activity_date)` under `ALLEXCEPT(all, participant_id)` — i.e.
+the participant's earliest date over the **entire** table). Implemented as a
+`first_touch` CTE (`ROW_NUMBER() OVER (PARTITION BY participant_id ORDER BY
+activity_day, child_doc_id)`, `rn=1`) built with **no slice filter**; district /
+date / training_type filters are then applied to the first-touch record (`ft.*`).
+New KPIs exposed: `new_youth`, `new_female`, `new_pwd` (global first-touch).
+`youth_trained` / `female_unique` / `pwd_unique` remain "ever appeared in slice"
+and are shown as small sub-lines on the KPI cards. **Verified against live DB:**
+IGANGA max-monthly **928**, JINJA **896**, LUUKA **972**, MAYUGE **1,337** — matches
+Power BI exactly. All-time first-touch total = **99,506** (≈ 99,509 distinct).
+
 ### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
 The Programme Report's **Poultry distribution**, **Goat distribution** and
 **Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`

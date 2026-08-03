@@ -63,8 +63,10 @@ ${navSidebar('traineesv2')}
     <div class="card p-3 mb-4 text-[12px] text-[var(--ink)] bg-[var(--green-soft)] border-[var(--green)]">
       <i class="fas fa-circle-info mr-1 text-[var(--green)]"></i>
       <b>How youth are counted:</b> a participant is counted <b>once</b> as a
-      <b>new youth</b> — in the month of their <b>first-ever</b> training (all rows
-      checked since inception, v1 + v2 appended). Attending many trainings does
+      <b>new youth</b> — in the month + district of their <b>first-ever</b> training,
+      computed <b>globally</b> across every district (a youth first trained in Mayuge
+      then re-trained in Jinja is "new" in Mayuge only — never counted twice). All
+      rows checked since inception, v1 + v2 appended. Attending many trainings does
       <b>not</b> inflate this. The grey <i>“Total attendances”</i> card is the raw
       session count (a youth trained 8 times = 8 there) and is <b>not</b> a reported figure.
     </div>
@@ -100,17 +102,20 @@ ${navSidebar('traineesv2')}
 
         <!-- KPI cards: the REPORTED metric (new youth, counted once ever) leads. -->
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div class="card p-4 text-center flex flex-col justify-center" style="border:2px solid var(--green)" title="Each participant counted ONCE — as a new youth in the month of their first-ever training (scanning all rows since inception). This is the figure the programme reports.">
+          <div class="card p-4 text-center flex flex-col justify-center" style="border:2px solid var(--green)" title="Each participant counted ONCE — as a new youth in the month + district of their FIRST-EVER training, computed globally across all rows since inception (Power BI New_Total_Reach / DAX ALLEXCEPT). This is the figure the programme reports.">
             <div id="kpiYouth" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">New Youth Reached <span class="text-[10px] font-normal text-[var(--muted)]">(counted once)</span></div>
+            <div class="kpi-label text-sm mt-1">New Youth Reached <span class="text-[10px] font-normal text-[var(--muted)]">(global first-touch)</span></div>
+            <div id="kpiYouthSub" class="text-[10px] text-[var(--muted)] mt-1"></div>
           </div>
-          <div class="card p-4 text-center flex flex-col justify-center">
+          <div class="card p-4 text-center flex flex-col justify-center" title="Female among the New Youth (global first-touch).">
             <div id="kpiFemale" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">Female <span class="text-[10px] font-normal text-[var(--muted)]">(unique)</span></div>
+            <div class="kpi-label text-sm mt-1">Female <span class="text-[10px] font-normal text-[var(--muted)]">(new youth)</span></div>
+            <div id="kpiFemaleSub" class="text-[10px] text-[var(--muted)] mt-1"></div>
           </div>
-          <div class="card p-4 text-center flex flex-col justify-center">
+          <div class="card p-4 text-center flex flex-col justify-center" title="PWDs among the New Youth (global first-touch).">
             <div id="kpiPwd" class="kpi-num text-3xl md:text-4xl">–</div>
-            <div class="kpi-label text-sm mt-1">PWDs <span class="text-[10px] font-normal text-[var(--muted)]">(unique)</span></div>
+            <div class="kpi-label text-sm mt-1">PWDs <span class="text-[10px] font-normal text-[var(--muted)]">(new youth)</span></div>
+            <div id="kpiPwdSub" class="text-[10px] text-[var(--muted)] mt-1"></div>
           </div>
           <div class="card p-4 text-center flex flex-col justify-center bg-[var(--cream)]" title="Raw session tally = COUNT(*) of every attendance row. A youth attending 8 trainings counts 8 times here. This is NOT a reported headline — it just shows training volume.">
             <div id="kpiAttend" class="kpi-num text-2xl md:text-3xl text-[var(--muted)]">–</div>
@@ -253,10 +258,15 @@ ${navSidebar('traineesv2')}
             for (const t of d.training_type_list){ const o=document.createElement('option'); o.value=t; o.textContent=t; sel.appendChild(o); }
           }
         }
-        document.getElementById('kpiYouth').textContent = fmt(d.youth_trained);
+        // New Youth Reached = global first-touch count (matches Power BI New_Total_Reach).
+        document.getElementById('kpiYouth').textContent = fmt(d.new_youth);
         document.getElementById('kpiAttend').textContent = fmt(d.attendances);
-        document.getElementById('kpiFemale').textContent = fmt(d.female_unique);
-        document.getElementById('kpiPwd').textContent = fmt(d.pwd_unique);
+        document.getElementById('kpiFemale').textContent = fmt(d.new_female);
+        document.getElementById('kpiPwd').textContent = fmt(d.new_pwd);
+        // Secondary "ever appeared in slice" figures shown under each card.
+        var yl=document.getElementById('kpiYouthSub'); if(yl) yl.textContent = fmt(d.youth_trained)+' ever appeared';
+        var fl=document.getElementById('kpiFemaleSub'); if(fl) fl.textContent = fmt(d.female_unique)+' ever appeared';
+        var pl=document.getElementById('kpiPwdSub'); if(pl) pl.textContent = fmt(d.pwd_unique)+' ever appeared';
         document.getElementById('kpiTypes').textContent = fmt(d.training_types);
         document.getElementById('kpiDistricts').textContent = fmt(d.district_count);
         document.getElementById('kpiVillages').textContent = fmt(d.village_count);

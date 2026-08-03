@@ -3447,12 +3447,26 @@ export async function ingestTraineesV2(
 
 /**
  * Aggregate trainees_v2 for the dashboard. Filters: districts[], from, to
- * (activity_day range), training_type. Returns both KPI families:
- *   youth_trained = DISTINCT participant_id (unique youth)
- *   attendances   = COUNT(*) (cluster grain)
- *   by_month      = Monthly New Youth (participant counted in FIRST month)
- * The "first month" is computed over the SAME filtered slice so a district/
- * type filter attributes first-touch within that slice.
+ * (activity_day range), training_type.
+ *
+ * "New youth" uses GLOBAL first-touch semantics, matching the Power BI DAX
+ * measure New_Total_Reach:
+ *
+ *   CALCULATE(DISTINCTCOUNT(participant_id),
+ *     FILTER(all, activity_date = CALCULATE(MIN(activity_date),
+ *                                   ALLEXCEPT(all, participant_id))))
+ *
+ * ALLEXCEPT(..., participant_id) strips every filter except participant_id, so
+ * each participant's first-touch date is computed OVER THE ENTIRE TABLE, then
+ * the participant is counted only in the row(s) at that global-first date. A
+ * youth first trained in Mayuge and later re-trained in Jinja is therefore
+ * "new" in Mayuge only — never double-counted per district.
+ *
+ * Implementation: a `first_touch` CTE (ROW_NUMBER over the UNFILTERED table,
+ * one row per participant = their earliest activity) is the ground truth for
+ * every "new youth" number. Filters (district / date / training_type) are then
+ * applied to that first-touch record. Slice grain metrics (attendances, total
+ * distinct youth, by_type) stay filtered over the raw slice as before.
  */
 export async function traineesV2Summary(
   env: Env,
@@ -3472,49 +3486,92 @@ export async function traineesV2Summary(
   if (opts.training_type) { where.push(`training_type = $${i}`); params.push(opts.training_type); i++; }
   const W = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  // Headline KPIs + option lists.
+  // The same filter set, but applied to the first_touch record (ft.*) so
+  // "new youth" queries honour district/date/type on each participant's
+  // GLOBAL first-touch row rather than recomputing first-touch per slice.
+  const ftWhere: string[] = [];
+  if (opts.districts && opts.districts.length) ftWhere.push(`ft.district = ANY($1::text[])`);
+  // param positions match `params` above (districts=$1, then from/to/type in order).
+  {
+    let p = opts.districts && opts.districts.length ? 2 : 1;
+    if (opts.from) { ftWhere.push(`ft.activity_day >= $${p}`); p++; }
+    if (opts.to)   { ftWhere.push(`ft.activity_day <= $${p}`); p++; }
+    if (opts.training_type) { ftWhere.push(`ft.training_type = $${p}`); p++; }
+  }
+  const FTW = ftWhere.length ? `WHERE ${ftWhere.join(' AND ')}` : '';
+
+  // Global first-touch CTE: one row per participant = their earliest activity
+  // across the ENTIRE table (ALLEXCEPT(participant_id) equivalent). Reused by
+  // every "new youth" query below. NOTE: built with NO slice filter.
+  const FIRST_TOUCH_CTE = `
+    first_touch AS (
+      SELECT participant_id, district, activity_day, activity_month, sex, is_pwd, training_type
+      FROM (
+        SELECT participant_id, district, activity_day, activity_month, sex, is_pwd, training_type,
+               ROW_NUMBER() OVER (
+                 PARTITION BY participant_id
+                 ORDER BY activity_day ASC, child_doc_id ASC
+               ) AS rn
+        FROM public.trainees_v2
+        WHERE activity_day <> ''
+      ) z WHERE rn = 1
+    )`;
+
+  // Headline KPIs. Slice-grain metrics (attendances, total distinct youth,
+  // female/pwd over the slice) use the raw filter. `new_youth` uses first-touch.
   const kpiSql = `
+    WITH ${FIRST_TOUCH_CTE}
     SELECT
-      COUNT(*)::int                                             AS attendances,
-      COUNT(DISTINCT participant_id)::int                       AS youth_trained,
-      COUNT(DISTINCT CASE WHEN lower(sex)='female' THEN participant_id END)::int AS female_unique,
-      COUNT(DISTINCT CASE WHEN is_pwd=1 THEN participant_id END)::int            AS pwd_unique,
-      COUNT(DISTINCT NULLIF(training_type,''))::int             AS training_types,
-      COUNT(DISTINCT NULLIF(district,''))::int                  AS district_count,
-      COUNT(DISTINCT NULLIF(village,''))::int                   AS village_count,
-      COUNT(DISTINCT NULLIF(activity_month,''))::int            AS month_count
-    FROM public.trainees_v2 ${W}`;
+      (SELECT COUNT(*)::int                       FROM public.trainees_v2 ${W}) AS attendances,
+      (SELECT COUNT(DISTINCT participant_id)::int FROM public.trainees_v2 ${W}) AS youth_trained,
+      (SELECT COUNT(DISTINCT CASE WHEN lower(sex)='female' THEN participant_id END)::int FROM public.trainees_v2 ${W}) AS female_slice,
+      (SELECT COUNT(DISTINCT CASE WHEN is_pwd=1 THEN participant_id END)::int          FROM public.trainees_v2 ${W}) AS pwd_slice,
+      (SELECT COUNT(DISTINCT NULLIF(training_type,''))::int FROM public.trainees_v2 ${W}) AS training_types,
+      (SELECT COUNT(DISTINCT NULLIF(district,''))::int      FROM public.trainees_v2 ${W}) AS district_count,
+      (SELECT COUNT(DISTINCT NULLIF(village,''))::int       FROM public.trainees_v2 ${W}) AS village_count,
+      (SELECT COUNT(DISTINCT NULLIF(activity_month,''))::int FROM public.trainees_v2 ${W}) AS month_count,
+      (SELECT COUNT(*)::int FROM first_touch ft ${FTW})                                      AS new_youth,
+      (SELECT COUNT(*)::int FROM first_touch ft ${FTW ? FTW + ' AND' : 'WHERE'} lower(ft.sex)='female') AS new_female,
+      (SELECT COUNT(*)::int FROM first_touch ft ${FTW ? FTW + ' AND' : 'WHERE'} ft.is_pwd=1)             AS new_pwd`;
 
   const byTypeSql = `
     SELECT COALESCE(NULLIF(training_type,''),'(unspecified)') AS label, COUNT(*)::int AS value
     FROM public.trainees_v2 ${W}
     GROUP BY 1 ORDER BY value DESC LIMIT 25`;
 
-  // Monthly New Youth: each participant's FIRST activity_month within the slice.
+  // Monthly New Youth: each participant counted once, in the month of their
+  // GLOBAL first-touch (matching the DAX). Filters apply to that first record.
   const byMonthSql = `
-    WITH first_month AS (
-      SELECT participant_id, MIN(activity_month) AS m
-      FROM public.trainees_v2 ${W ? W + ' AND' : 'WHERE'} activity_month <> ''
-      GROUP BY participant_id
-    )
-    SELECT m AS month, COUNT(*)::int AS value
-    FROM first_month GROUP BY m ORDER BY m`;
+    WITH ${FIRST_TOUCH_CTE}
+    SELECT ft.activity_month AS month, COUNT(*)::int AS value
+    FROM first_touch ft
+    ${FTW ? FTW + ' AND' : 'WHERE'} ft.activity_month <> ''
+    GROUP BY ft.activity_month ORDER BY ft.activity_month`;
 
+  // Per-district table. `youth`/`attendances`/`female`/`pwds` describe the raw
+  // slice (who attended in this district within the filters); `new_youth` is
+  // the GLOBAL first-touch attributed to the district of the first-touch row.
   const byDistrictSql = `
-    WITH base AS ( SELECT * FROM public.trainees_v2 ${W} ),
-    fm AS (
-      SELECT participant_id, MIN(activity_month) AS m
-      FROM base WHERE activity_month <> '' GROUP BY participant_id
+    WITH ${FIRST_TOUCH_CTE},
+    slice AS (
+      SELECT
+        COALESCE(NULLIF(district,''),'(blank)') AS district,
+        COUNT(DISTINCT participant_id)::int AS youth,
+        COUNT(*)::int AS attendances,
+        COUNT(DISTINCT CASE WHEN lower(sex)='female' THEN participant_id END)::int AS female,
+        COUNT(DISTINCT CASE WHEN is_pwd=1 THEN participant_id END)::int AS pwds
+      FROM public.trainees_v2 ${W}
+      GROUP BY 1
+    ),
+    newy AS (
+      SELECT COALESCE(NULLIF(ft.district,''),'(blank)') AS district, COUNT(*)::int AS new_youth
+      FROM first_touch ft ${FTW}
+      GROUP BY 1
     )
-    SELECT
-      COALESCE(NULLIF(b.district,''),'(blank)') AS district,
-      COUNT(DISTINCT b.participant_id)::int AS youth,
-      COUNT(*)::int AS attendances,
-      COUNT(DISTINCT CASE WHEN lower(b.sex)='female' THEN b.participant_id END)::int AS female,
-      COUNT(DISTINCT CASE WHEN b.is_pwd=1 THEN b.participant_id END)::int AS pwds,
-      COUNT(DISTINCT fm.participant_id)::int AS new_youth
-    FROM base b LEFT JOIN fm ON fm.participant_id = b.participant_id
-    GROUP BY 1 ORDER BY youth DESC LIMIT 40`;
+    SELECT s.district, s.youth, s.attendances, s.female, s.pwds,
+           COALESCE(n.new_youth,0)::int AS new_youth
+    FROM slice s LEFT JOIN newy n ON n.district = s.district
+    ORDER BY s.youth DESC LIMIT 40`;
 
   // Option lists are unfiltered (so the pickers stay stable).
   const optsSql = `
@@ -3536,8 +3593,13 @@ export async function traineesV2Summary(
     configured: true,
     attendances: k.attendances || 0,
     youth_trained: k.youth_trained || 0,
-    female_unique: k.female_unique || 0,
-    pwd_unique: k.pwd_unique || 0,
+    // slice-grain female/pwd (who appears in the filtered slice)
+    female_unique: k.female_slice || 0,
+    pwd_unique: k.pwd_slice || 0,
+    // NEW-YOUTH KPIs (global first-touch, matches Power BI New_Total_Reach)
+    new_youth: k.new_youth || 0,
+    new_female: k.new_female || 0,
+    new_pwd: k.new_pwd || 0,
     training_types: k.training_types || 0,
     district_count: k.district_count || 0,
     village_count: k.village_count || 0,
