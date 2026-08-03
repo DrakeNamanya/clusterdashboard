@@ -121,6 +121,24 @@ non-empty when the topic was covered — e.g. `psrp = "reflection_planning votin
   the month of their first `activity_day`); links to the legacy `/monthly-new-youth`
   chart for side-by-side comparison. All-time first-touch total ≈ 99,506.
 
+### Fixes 2026-08-03 (later): PSRP token wiring + trainees-v2 KPI framing
+- **PSRP empty in the report — fixed (preview).** The report page has **two**
+  token builders: server-side `programmedoc.ts:buildTokens` (for the .docx) and a
+  **client-side `buildTokens()` in `programmepage.tsx`** (for the on-screen preview
+  tables). PSRP was added to the server one but not the client one, so the preview
+  PSRP table stayed blank. Added the `psrp.{m,q}.{district}.{youth,female,attendances}`
+  block to the client builder → preview now fills (Month total ≈ 7,402 youth for the
+  Iganga cluster FY window).
+  **NOTE:** the Word **template** (`public/static/programme_template.docx`) currently
+  has **no `{{psrp…}}` placeholders**, so the *downloaded .docx* cannot show PSRP until
+  a PSRP table with those tokens is added to the template.
+- **trainees-v2 KPI framing.** Distinct youth (99,509) already matched the legacy
+  reported figure (98,757); the confusion was the prominent raw **attendances
+  (805,109)** card. Reframed: **“New Youth Reached (counted once)”** is now the
+  highlighted headline KPI (first-touch: each participant counted once, in the month
+  of their first-ever training, all rows since inception); raw attendances demoted to
+  a grey **“Total attendances (sessions, not youth)”** card; info banner added.
+
 ### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
 The Programme Report's **Poultry distribution**, **Goat distribution** and
 **Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`
