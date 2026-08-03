@@ -26,7 +26,7 @@ Usage:
                                         [--batch 500] [--max-child-pages N] [--dry]
 Env: DEPLOY, TOKEN, ODATA_PROFILING_USER, ODATA_PROFILING_PASS (from .dev.vars)
 """
-import argparse, base64, json, os, sys, time, urllib.request, urllib.error
+import argparse, base64, json, os, sys, time, threading, urllib.request, urllib.error
 
 DEPLOY = os.environ.get("DEPLOY", "https://shg-data-cleaner.pages.dev")
 TOKEN = os.environ.get("TOKEN", "shg-fix-2026")
@@ -80,19 +80,48 @@ def odata_get(path, top, skip, want_count=False, tries=0):
     req = urllib.request.Request(url, headers={
         "Authorization": basic_auth(), "Accept": "application/json", "User-Agent": UA})
     attempt = 0
+    HARD_DEADLINE = 120  # wall-clock seconds per page; a trickling/hung socket
+                         # must NOT wedge the run (urlopen timeout resets per recv).
     while True:
         attempt += 1
-        try:
-            with urllib.request.urlopen(req, timeout=90) as r:
-                doc = json.loads(r.read().decode("utf-8"))
-                return doc.get("value", []), doc.get("@odata.count")
-        except Exception as e:
-            if tries and attempt >= tries:
-                raise RuntimeError(f"odata_get failed {path} skip={skip}: {str(e)[:120]}")
-            backoff = min(10 + attempt * 5, 60)  # 15s..60s capped
-            if attempt % 5 == 1:
-                print(f"    [gateway down] {path} skip={skip} attempt {attempt}: {str(e)[:80]} — retry in {backoff}s", flush=True)
-            time.sleep(backoff)
+        resp = {"r": None}
+        result = {"doc": None, "err": None}
+
+        def _do():
+            try:
+                # Socket-level timeout is a lower bound; the watchdog below is the
+                # hard cap that force-closes a connection stuck mid-read.
+                r = urllib.request.urlopen(req, timeout=60)
+                resp["r"] = r
+                data = r.read()
+                result["doc"] = json.loads(data.decode("utf-8"))
+            except Exception as e:  # noqa: BLE001
+                result["err"] = e
+
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()
+        t.join(HARD_DEADLINE)
+        if t.is_alive():
+            # Wedged past the hard deadline — force the socket closed so read()
+            # raises inside the worker thread and it can be abandoned.
+            try:
+                if resp["r"] is not None:
+                    resp["r"].close()
+            except Exception:
+                pass
+            result["err"] = TimeoutError(f"hard deadline {HARD_DEADLINE}s exceeded")
+
+        if result["err"] is None and result["doc"] is not None:
+            doc = result["doc"]
+            return doc.get("value", []), doc.get("@odata.count")
+
+        e = result["err"] or RuntimeError("empty response")
+        if tries and attempt >= tries:
+            raise RuntimeError(f"odata_get failed {path} skip={skip}: {str(e)[:120]}")
+        backoff = min(10 + attempt * 5, 60)  # 15s..60s capped
+        if attempt % 5 == 1:
+            print(f"    [gateway down] {path} skip={skip} attempt {attempt}: {str(e)[:80]} — retry in {backoff}s", flush=True)
+        time.sleep(backoff)
 
 def load_parents(version, top):
     """Return {docId: parent_detail_dict} for the given version."""
