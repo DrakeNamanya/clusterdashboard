@@ -75,18 +75,29 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
     GROUP BY 1
   ),
-  -- ---- A9 TRAININGS: groups trained, youth trained ----
+  -- ---- A9 TRAININGS: sourced from the Frontliners dashboard (at_rows), the
+  -- attendance-grain training data — NOT from profiling. Matched to the CF
+  -- universe on the normalised name key (data_collector is a lowercase, no-space
+  -- rendering of the collector's name; we prefix-match it to the CF key so
+  -- suffixes like "flep"/"teffe" on the data_collector still line up).
+  -- youth_trained = attendance count (has_date); groups_trained = distinct groups.
   trained AS (
-    SELECT public.mel_norm_name(profiler_name) AS nm,
-           COUNT(*) FILTER (WHERE NULLIF(btrim(trainings),'') IS NOT NULL
-                               OR COALESCE(participants_trained,0) > 0)::int AS groups_trained,
-           COALESCE(SUM(participants_trained),0)::int AS youth_trained
-    FROM shg_profiling_rows
-    WHERE profiler_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR created_date >= p_date_from)
-      AND (p_date_to   IS NULL OR created_date <= p_date_to)
-    GROUP BY 1
+    SELECT c.nm,
+           COUNT(DISTINCT a.group_id) FILTER (WHERE a.group_id IS NOT NULL)::int AS groups_trained,
+           SUM(CASE WHEN a.has_date = 1 THEN 1 ELSE 0 END)::int                  AS youth_trained
+    FROM at_rows a
+    JOIN cfs c ON (
+      public.mel_norm_key(a.data_collector) = public.mel_norm_key(c.nm)
+      OR (length(public.mel_norm_key(c.nm)) >= 8
+          AND public.mel_norm_key(a.data_collector) LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(public.mel_norm_key(a.data_collector)) >= 8
+          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(a.data_collector) || '%')
+    )
+    WHERE a.data_collector IS NOT NULL
+      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
+    GROUP BY c.nm
   ),
   -- ---- A6 PRODUCTION: youth in horticulture production + SHGs ----
   prod AS (
@@ -101,27 +112,32 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
     GROUP BY 1
   ),
-  -- ---- A7 DISTRIBUTION OF BIRDS: distinct youth who received birds + SHGs ----
+  -- ---- A7 DISTRIBUTION OF BIRDS: from the /distribution dashboard
+  -- (distribution_rows), filter Livestock + unit = 'Number' (the bird count).
+  -- We report the NUMBER OF BIRDS distributed (SUM of qty where unit=Number),
+  -- the recipients, and the SHGs reached — mirroring the dashboard's slicers.
   dist_matched AS (
-    SELECT c.nm, d.participant_id, d.shg_name
+    SELECT c.nm, d.participant_id, d.shg_name, d.qty_received
     FROM distribution_rows d
     JOIN cfs c ON (
       public.mel_norm_key(d.submitted_by) = public.mel_norm_key(c.nm)
       OR (length(public.mel_norm_key(c.nm)) >= 8
           AND public.mel_norm_key(d.submitted_by) LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(public.mel_norm_key(d.submitted_by)) >= 8
+          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(d.submitted_by) || '%')
     )
-    WHERE d.material_type = 'Livestock'
+    WHERE lower(coalesce(d.material_type,'')) = 'livestock'
       AND d.livestock_type ILIKE '%poultry%'
       AND lower(coalesce(d.unit,'')) = 'number'
-      AND d.participant_id IS NOT NULL
       AND (v_dl IS NULL OR upper(d.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR d.dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR d.dist_date <= p_date_to)
   ),
   dist_birds AS (
     SELECT nm,
-           COUNT(DISTINCT participant_id)::int AS dist_participants,
-           COUNT(DISTINCT shg_name)::int       AS dist_shgs
+           COUNT(DISTINCT participant_id) FILTER (WHERE participant_id IS NOT NULL)::int AS dist_participants,
+           COUNT(DISTINCT shg_name)::int       AS dist_shgs,
+           COALESCE(SUM(qty_received),0)::int   AS dist_birds
     FROM dist_matched
     GROUP BY nm
   ),
@@ -140,19 +156,22 @@ BEGIN
     ) u
     GROUP BY nm
   ),
-  -- ---- A8 DISTRIBUTION TO SHG (non-bird inputs handed to groups) ----
+  -- ---- A8 DISTRIBUTION TO SHG: from the /shg-distribution dashboard
+  -- (shg_distribution_rows) — inputs handed to whole groups, a DIFFERENT feed
+  -- from A7's participant-level distribution_rows. Grouped by shg_group_name.
   dist_shg AS (
     SELECT c.nm,
-           COUNT(DISTINCT d.shg_name)::int AS distshg_shgs,
-           COUNT(*)::int                   AS distshg_lines
-    FROM distribution_rows d
+           COUNT(DISTINCT d.shg_group_name)::int AS distshg_shgs,
+           COUNT(*)::int                         AS distshg_lines
+    FROM shg_distribution_rows d
     JOIN cfs c ON (
       public.mel_norm_key(d.submitted_by) = public.mel_norm_key(c.nm)
       OR (length(public.mel_norm_key(c.nm)) >= 8
           AND public.mel_norm_key(d.submitted_by) LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(public.mel_norm_key(d.submitted_by)) >= 8
+          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(d.submitted_by) || '%')
     )
-    WHERE NOT (d.material_type = 'Livestock' AND d.livestock_type ILIKE '%poultry%'
-               AND lower(coalesce(d.unit,'')) = 'number')
+    WHERE d.submitted_by IS NOT NULL
       AND (v_dl IS NULL OR upper(d.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR d.dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR d.dist_date <= p_date_to)
@@ -239,6 +258,7 @@ BEGIN
       COALESCE(py.youth_production,0)  AS youth_production,
       COALESCE(db.dist_participants,0) AS dist_participants,
       COALESCE(db.dist_shgs,0)         AS dist_shgs,
+      COALESCE(db.dist_birds,0)        AS dist_birds,
       COALESCE(ds.distshg_shgs,0)      AS distshg_shgs,
       COALESCE(ds.distshg_lines,0)     AS distshg_lines,
       COALESCE(po.birds_sold,0)        AS birds_sold,
@@ -319,6 +339,7 @@ BEGIN
         -- A7 distribution of birds
         'dist_participants', dist_participants,
         'dist_shgs',         dist_shgs,
+        'dist_birds',        dist_birds,
         -- A8 distribution to SHG
         'distshg_shgs',      distshg_shgs,
         'distshg_lines',     distshg_lines,

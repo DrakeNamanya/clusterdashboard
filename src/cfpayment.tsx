@@ -90,9 +90,15 @@ export function renderCfPaymentReport(base: string): string {
     .scale .s{ font-size:10.5px; border:1px solid var(--border); border-radius:2px; padding:4px 8px; }
     .signoff{ display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:26px; }
     .signoff .sg{ font-size:12px; }
-    .signoff .line{ border-bottom:1px solid var(--fg); height:30px; margin-bottom:5px; }
-    .signoff .role{ font-weight:700; }
-    .signoff .hint{ font-family:var(--mono); font-size:9.5px; color:var(--muted-fg); text-transform:uppercase; letter-spacing:.1em; }
+    .signoff .sg{ position:relative; }
+    .signoff .line{ border-bottom:1px solid var(--fg); height:56px; margin-bottom:0; }
+    .signoff .sigimg{ display:block; height:56px; width:auto; max-width:230px; object-fit:contain;
+                      object-position:left bottom; mix-blend-mode:multiply; }
+    .signoff .role{ font-weight:700; border-top:1px solid var(--fg); padding-top:5px; margin-top:0; }
+    .signoff .hint{ font-family:var(--mono); font-size:9.5px; color:var(--muted-fg); text-transform:uppercase; letter-spacing:.1em; margin-top:2px; }
+    .disclaimer{ margin-top:18px; padding:9px 12px; font-size:10.5px; line-height:1.5;
+                 color:var(--muted-fg); background:var(--primary-tint); border-left:3px solid var(--primary);
+                 border-radius:3px; }
     .footer{ margin-top:20px; padding-top:10px; border-top:1px solid var(--border); font-size:10.5px; color:var(--muted-fg); display:flex; justify-content:space-between; }
 
     @media print{
@@ -220,9 +226,9 @@ ${navSidebar('cfpayment')}
         groups:function(r){ return fmt(r.prod_shgs)+' group(s)'; } },
 
       { code:'A7', title:'Distribution of Birds',
-        desc:'Birds distributed to participants.',
-        has:function(r){ return r.dist_participants>0; },
-        summary:function(r){ return 'Distributed birds to '+fmt(r.dist_participants)+' participants across '+fmt(r.dist_shgs)+' SHGs.'; },
+        desc:'Birds distributed to participants (Livestock · unit = Number).',
+        has:function(r){ return (r.dist_birds||0)>0 || r.dist_participants>0; },
+        summary:function(r){ return 'Distributed '+fmt(r.dist_birds||0)+' birds to '+fmt(r.dist_participants)+' participants across '+fmt(r.dist_shgs)+' SHGs.'; },
         groups:function(r){ return fmt(r.dist_shgs)+' SHG(s)'; } },
 
       { code:'A8', title:'Distribution to SHG',
@@ -307,9 +313,14 @@ ${navSidebar('cfpayment')}
         +   '<span class="s"><b>E</b> Needs Improvement · 0–19%</span>'
         + '</div>'
         + '<div class="signoff">'
-        +   '<div class="sg"><div class="line"></div><div class="role">Submitted by — Cluster M&amp;E Officer</div><div class="hint">Name · Signature · Date</div></div>'
+        +   '<div class="sg">'
+        +     (meta.clusterKey==='iganga'
+              ? '<img class="sigimg" src="'+BASE+'/static/sig_iganga_mel.png" alt="Cluster M&amp;E Officer signature" />'
+              : '<div class="line"></div>')
+        +     '<div class="role">Submitted by — Cluster M&amp;E Officer</div><div class="hint">Name · Signature · Date</div></div>'
         +   '<div class="sg"><div class="line"></div><div class="role">Approved by — District Business Facilitator</div><div class="hint">Name · Signature · Date</div></div>'
         + '</div>'
+        + '<p class="disclaimer"><b>Disclaimer:</b> This is a system-generated report. Please validate the information against the corresponding CF reports, as some recent updates or corrections may not yet be reflected.</p>'
         + '<div class="footer"><span>SAYE Uganda · Heifer International — CF Payment Report</span><span>Generated '+new Date().toLocaleDateString('en-GB')+'</span></div>'
         + '</section>';
       body.innerHTML = h;
@@ -328,6 +339,7 @@ ${navSidebar('cfpayment')}
       if(from) params.set('from', from);
       if(to)   params.set('to', to);
       var meta = {
+        clusterKey: cl,
         cluster: CLUSTER_LABELS[cl] || 'All clusters',
         district: dist || 'All in cluster',
         period: periodLabel(from,to)
