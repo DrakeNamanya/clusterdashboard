@@ -69,10 +69,25 @@ export function renderProgrammeReport(base: string): string {
     .pv-modal{ position:fixed; top:3vh; left:50%; transform:translateX(-50%); width:min(1000px,94vw); height:94vh; background:#fff; border-radius:14px; box-shadow:0 18px 60px rgba(0,0,0,.35); z-index:2001; display:none; flex-direction:column; overflow:hidden; }
     .pv-modal.open{ display:flex; }
     .pv-head{ display:flex; align-items:center; gap:14px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--lgreen); }
-    .pv-head h2{ margin:0; font-size:16px; font-weight:800; color:var(--green); flex:1; }
-    .pv-head .meta{ font-size:12px; color:var(--muted); font-weight:700; }
+    .pv-head h2{ margin:0; font-size:16px; font-weight:800; color:var(--green); white-space:nowrap; }
+    .pv-head .meta{ font-size:12px; color:var(--muted); font-weight:700; flex:1; }
+    .pv-dl{ display:flex; gap:8px; }
+    .btn-dl{ border:0; border-radius:8px; padding:8px 13px; font-size:12.5px; font-weight:800; cursor:pointer; color:#fff; display:inline-flex; align-items:center; gap:6px; transition:.15s; }
+    .btn-dl:hover{ filter:brightness(1.07); }
+    .btn-dl:disabled{ opacity:.55; cursor:not-allowed; filter:none; }
+    .btn-dl.pdf{ background:#c0392b; }
+    .btn-dl.word{ background:#2b5797; }
+    .btn-dl.xls{ background:#1d6f42; }
     .pv-close{ border:0; background:#fff; border:1px solid var(--line); border-radius:8px; width:34px; height:34px; cursor:pointer; font-size:16px; color:var(--ink); }
     .pv-close:hover{ background:#f2f2f2; }
+    @media print{
+      body * { visibility:hidden !important; }
+      #pvModal, #pvModal *{ visibility:visible !important; }
+      #pvModal{ position:absolute !important; top:0 !important; left:0 !important; transform:none !important; width:100% !important; height:auto !important; box-shadow:none !important; border-radius:0 !important; }
+      .pv-head, .pv-dl, .pv-close, #pvAiBtn{ display:none !important; }
+      .pv-body{ overflow:visible !important; padding:0 !important; background:#fff !important; }
+      .pv-doc{ border:0 !important; box-shadow:none !important; max-width:none !important; padding:0 !important; }
+    }
     .pv-body{ overflow:auto; padding:22px 26px 40px; background:#f6f8f7; }
     .pv-legend{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin:0 0 18px; }
     .pv-doc{ background:#fff; max-width:900px; margin:0 auto; border:1px solid var(--line); border-radius:8px; padding:30px 34px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
@@ -144,7 +159,8 @@ ${navSidebar('programme')}
     <p class="hint">
       Tip: month + quarter both fill in the same document — the report shows a monthly column and a
       quarterly (cumulative) column side-by-side, exactly like the template. Use
-      <b>Preview Report</b> to read the auto-filled tables on screen before you download.
+      <b>Preview Report</b> to read the auto-filled tables on screen — the preview has
+      <b>PDF</b>, <b>Word</b> and <b>Excel</b> download buttons in its top bar.
     </p>
   </section>
 
@@ -167,6 +183,11 @@ ${navSidebar('programme')}
   <div class="pv-head">
     <h2><i class="fas fa-file-lines"></i> Programme Report — Preview</h2>
     <span class="meta" id="pvMeta"></span>
+    <div class="pv-dl">
+      <button class="btn-dl pdf" id="pvDlPdf" title="Download as PDF"><i class="fas fa-file-pdf"></i> PDF</button>
+      <button class="btn-dl word" id="pvDlWord" title="Download as Word (.docx)"><i class="fas fa-file-word"></i> Word</button>
+      <button class="btn-dl xls" id="pvDlXls" title="Download as Excel (.xls)"><i class="fas fa-file-excel"></i> Excel</button>
+    </div>
     <button class="pv-close" id="pvClose" title="Close">&times;</button>
   </div>
   <div class="pv-body">
@@ -787,6 +808,66 @@ ${navSidebar('programme')}
   pvClose.addEventListener('click', closePreview);
   document.addEventListener('keydown', function(e){ if(e.key==='Escape') closePreview(); });
 
+  // ------------------------------------------------------------------------
+  //  DOWNLOAD from the preview: PDF (browser print), Word (server .docx),
+  //  Excel (.xls built from the on-screen tables). The current preview
+  //  selection is captured in pvCtx each time a preview is built.
+  // ------------------------------------------------------------------------
+  var pvCtx = null; // {cluster,mFrom,mTo,qFrom,qTo}
+  var pvDlPdf  = document.getElementById('pvDlPdf');
+  var pvDlWord = document.getElementById('pvDlWord');
+  var pvDlXls  = document.getElementById('pvDlXls');
+
+  // PDF: rely on the @media print rules that isolate #pvModal, then let the
+  // user "Save as PDF" from the browser print dialog. No server load, no libs.
+  if (pvDlPdf) pvDlPdf.addEventListener('click', function(){
+    var prev = document.title;
+    document.title = 'SAYE_Programme_Report_' + ((pvCtx&&pvCtx.mFrom)||'report');
+    window.print();
+    setTimeout(function(){ document.title = prev; }, 800);
+  });
+
+  // Word: reuse the reliable server-side .docx generator.
+  if (pvDlWord) pvDlWord.addEventListener('click', async function(){
+    if(!pvCtx){ return; }
+    var slots = CLUSTER_DISTRICTS[pvCtx.cluster] || CLUSTER_DISTRICTS.iganga;
+    var qs = new URLSearchParams({ cluster: pvCtx.cluster, districts: slots.join(','),
+      from: pvCtx.mFrom, to: pvCtx.mTo, qFrom: pvCtx.qFrom, qTo: pvCtx.qTo });
+    pvDlWord.disabled = true;
+    var old = pvDlWord.innerHTML; pvDlWord.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Word…';
+    try {
+      var res = await fetch('/api/programme-report/docx?' + qs.toString());
+      if(!res.ok){ throw new Error('Server returned ' + res.status); }
+      download(await res.blob(), 'SAYE_Programme_Report_' + (pvCtx.mFrom||'report') + '.docx');
+    } catch(err){ alert('Word download failed: ' + (err&&err.message||err)); }
+    finally { pvDlWord.disabled = false; pvDlWord.innerHTML = old; }
+  });
+
+  // Excel: wrap the on-screen tables in an Excel-openable HTML workbook. Excel
+  // (and LibreOffice) opens this .xls natively; no library needed.
+  if (pvDlXls) pvDlXls.addEventListener('click', function(){
+    if(!pvCtx){ return; }
+    // Grab only the tables/headings from the rendered preview (skip the AI box).
+    var src = pvDoc.cloneNode(true);
+    var ai = src.querySelector('#pvAiBox'); if(ai) ai.remove();
+    var inner = src.innerHTML;
+    var head = '<h2>SAYE Programme Report — ' + esc(pvCtx.cluster.charAt(0).toUpperCase()+pvCtx.cluster.slice(1)) + '</h2>';
+    var xls =
+      '<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
+      'xmlns:x="urn:schemas-microsoft-com:office:excel" ' +
+      'xmlns="http://www.w3.org/TR/REC-html40">' +
+      '<head><meta charset="utf-8">' +
+      '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>' +
+      '<x:Name>Programme Report</x:Name>' +
+      '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>' +
+      '</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->' +
+      '<style>table{border-collapse:collapse}td,th{border:1px solid #999;padding:4px 8px;mso-number-format:"\\@"}' +
+      'th{background:#dbeadb;font-weight:bold}h3{color:#006837}</style></head>' +
+      '<body>' + head + inner + '</body></html>';
+    var blob = new Blob([xls], { type: 'application/vnd.ms-excel' });
+    download(blob, 'SAYE_Programme_Report_' + (pvCtx.mFrom||'report') + '.xls');
+  });
+
   pvBtn.addEventListener('click', async function(){
     var cluster = document.getElementById('cluster').value;
     var mFrom = document.getElementById('mFrom').value;
@@ -810,6 +891,7 @@ ${navSidebar('programme')}
         + '<button id="pvAiBtn" style="margin-left:8px;font-size:10px;text-transform:none;letter-spacing:0;padding:2px 8px;border:1px solid #003399;background:#fff;color:#003399;border-radius:6px;cursor:pointer">Generate</button></div>'
         + '<div id="pvAiBody" style="font-size:13.5px;line-height:1.6;color:#28303f">Click <b>Generate</b> to have the AI write an executive summary of this report.</div></div>';
       pvDoc.innerHTML = aiBox + buildPreviewHTML(tokens, data, cluster, mFrom, qFrom, qTo);
+      pvCtx = { cluster: cluster, mFrom: mFrom, mTo: mTo, qFrom: qFrom, qTo: qTo };
       pvMeta.textContent = (t(tokens,'meta.month')||'') + '  ·  ' + (t(tokens,'meta.quarter')||'');
       // wire the AI summary generator (uses the freshly-fetched programme data)
       (function(){

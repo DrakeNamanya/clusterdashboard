@@ -1657,10 +1657,13 @@ fi
 
 # ===== CYCLE SLOT 1 — production / sales / leverage / jobs views =============
 if [ "$CYCLE" = "1" ]; then
+  # These three views have WIDE rows (many numeric columns) so their per-row
+  # map+JSON cost is higher than the slot-0 views; 1000 still tripped 1102, so
+  # they run 1 page * 500 rows each.
   for v in production_and_marketing_tool job_tracking; do
-    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=500"
   done
-  sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=1"
+  sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=250&maxPages=1"
   for c in production sales poultrysales localleverage jobtracking; do
     echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
   done
