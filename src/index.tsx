@@ -17,7 +17,7 @@ import {
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
-  melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague,
+  melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague, cfPaymentReport,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
   ingestTraineeRows,
   ingestTraineesV2,
@@ -52,6 +52,7 @@ import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
 import { renderCfPremierLeague } from './cfleague';
+import { renderCfPaymentReport } from './cfpayment';
 import { clusterDistricts } from './clusters';
 import { renderProgrammeReport } from './programmepage';
 import { renderYouthInWork } from './youthinwork';
@@ -1380,6 +1381,21 @@ app.get('/api/cf-premier-league', async (c) => {
   // Accept either an explicit districts list or a cluster key (resolved here).
   const districts = q.districts ? split(q.districts) : clusterDistricts(q.cluster);
   const data = await cfPremierLeague(storeEnv(c), {
+    districts,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- CF Payment Report (all CFs in one month-end report, grade instead of status) ----
+app.get('/cf-payment-report', (c) => c.html(renderCfPaymentReport(baseUrl(c.req.url))));
+app.get('/api/cf-payment-report', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  // Accept either an explicit districts list or a cluster key (resolved here).
+  const districts = q.districts ? split(q.districts) : clusterDistricts(q.cluster);
+  const data = await cfPaymentReport(storeEnv(c), {
     districts,
     from: q.from || undefined,
     to: q.to || undefined,

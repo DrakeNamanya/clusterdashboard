@@ -2444,6 +2444,27 @@ export async function cfPremierLeague(env: Env, opts: MelReportFilters = {}): Pr
 }
 
 // --------------------------------------------------------------------------
+// CF Payment Report — ONE consolidated end-of-month report combining ALL CFs
+// (unlike CF Report which prints one CF at a time). Filtered by date +
+// district. Each row carries per-indicator figures + overall grade (letter
+// A..E derived client-side; replaces the old manual "Status" column).
+// mel_cf_payment_report(districts text[], from date, to date) -> jsonb[].
+// [Oracle VM]
+// --------------------------------------------------------------------------
+export async function cfPaymentReport(env: Env, opts: MelReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_payment_report',
+    '$1::text[], $2::date, $3::date',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+// --------------------------------------------------------------------------
 // Sales in Horticulture/Oilseeds — production_and_marketing_tool filtered
 // pdn_level='marketing', joined to participants + shg profiling.
 // --------------------------------------------------------------------------
