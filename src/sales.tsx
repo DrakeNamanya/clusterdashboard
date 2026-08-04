@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "SALES IN HORTICULTURE/OILSEEDS"
 //   Marketing_Table = production_and_marketing_tool filtered pdn_level='marketing'
@@ -39,9 +40,16 @@ export function renderSales(base: string, opts: any = {}): string {
     thead th.num{ text-align:right; }
     tbody td{ padding:5px 9px; font-size:11.5px; vertical-align:top; border-bottom:1px solid #f0e6d8; }
     tbody td.num{ text-align:right; }
-    tbody tr:nth-child(even) td{ background:var(--row-alt); }
-    tbody tr:hover td{ background:#f4fafb; }
+    tbody tr.grp{ background:#fff; }
+    tbody tr.grp td{ font-weight:700; border-bottom:2px solid var(--amber); }
+    tbody tr.det td{ background:var(--row-alt); font-weight:400; border-bottom:1px solid #f0e6d8; }
+    tbody tr.grp:hover td{ background:#f4fafb; }
+    tbody tr.det:hover td{ background:#f6ead9; }
     tbody tr.total-row td{ background:var(--head) !important; color:#fff; font-weight:700; border-bottom:none; }
+    .toggle{ cursor:pointer; user-select:none; display:inline-flex; align-items:center; gap:6px; }
+    .toggle .box{ width:13px; height:13px; border:1px solid var(--muted); border-radius:2px; display:inline-flex;
+                  align-items:center; justify-content:center; font-size:9px; line-height:1; color:var(--head); }
+    .det-name{ padding-left:22px; }
     .sortable{ cursor:pointer; user-select:none; }
     .sortable .arrow{ opacity:.7; font-size:9px; margin-left:2px; }
     .dist-item{ display:flex; align-items:center; gap:6px; padding:2px 2px; cursor:pointer; font-size:12px; }
@@ -87,10 +95,13 @@ ${navSidebar('sales')}
         <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
       </div>
 
+      <button id="btnExcel" class="dt-btn excel"><i class="fas fa-file-excel"></i> Export Excel</button>
+      <button id="btnPrint" class="dt-btn print"><i class="fas fa-print"></i> Print</button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
+    ${dashToolsAssets()}
 
     <div class="grid grid-cols-12 gap-3">
       <section class="col-span-12 lg:col-span-10">
@@ -138,7 +149,10 @@ ${navSidebar('sales')}
     SL.forEach(s => S[s.id] = { id:s.id, opts:[], sel:new Set(), all:true, cfg:s });
 
     let sortKey = 'total_planting_value';
+    let sortDir = -1;              // -1 desc, 1 asc
     let lastData = null;
+    let expanded = new Set();      // SHG names currently expanded
+    let detailCache = {};          // shg -> participant rows
 
     function param(id){ const s=S[id]; return s.all ? '' : [...s.sel].join(','); }
 
@@ -190,16 +204,24 @@ ${navSidebar('sales')}
       return '<td>'+(v==null?'':v)+'</td>';
     }
     function renderHead(){
-      let html = '<tr><th style="min-width:260px">shg_name</th>';
+      // Every column is click-sortable. Sorting re-orders the SHG GROUP rows
+      // only, so the +/- participant hierarchy stays intact. Click toggles
+      // asc/desc. (Custom sort used instead of DashTools.makeSortable so the
+      // expanded participant rows are not flattened / re-ordered.)
+      let html = '<tr><th class="sortable" data-k="shg_name" style="min-width:260px">shg_name'
+               + '<span class="arrow" data-k="shg_name"></span></th>';
       for (const c of COLS){
-        const sortable = c.type==='num' ? ' sortable' : '';
-        const arrow = c.type==='num' ? '<span class="arrow" data-k="'+c.key+'"></span>' : '';
-        html += '<th class="'+(c.type==='num'?'num':'')+sortable+'" '+(c.type==='num'?'data-k="'+c.key+'"':'')+'>'+c.label+arrow+'</th>';
+        html += '<th class="'+(c.type==='num'?'num ':'')+'sortable" data-k="'+c.key+'">'+c.label
+              + '<span class="arrow" data-k="'+c.key+'"></span></th>';
       }
       html += '</tr>';
       document.getElementById('thead').innerHTML = html;
       document.querySelectorAll('#thead th.sortable').forEach(th=>
-        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
+        th.addEventListener('click', ()=>{
+          const k = th.getAttribute('data-k');
+          if (sortKey === k){ sortDir = -sortDir; } else { sortKey = k; sortDir = (k==='shg_name') ? 1 : -1; }
+          renderTable();
+        }));
     }
     function renderTable(){
       if (!lastData){ return; }
@@ -209,10 +231,35 @@ ${navSidebar('sales')}
       const tbody = document.getElementById('tbody');
       const span = COLS.length + 1;
       if (!rows.length){ tbody.innerHTML='<tr><td colspan="'+span+'" class="text-center text-[var(--muted)] py-8">No data for this selection.</td></tr>'; return; }
-      const sorted = [...rows].sort((a,b)=> (Number(b[sortKey])||0) - (Number(a[sortKey])||0));
+      const sorted = [...rows].sort((a,b)=>{
+        if (sortKey === 'shg_name'){
+          return sortDir * String(a.shg_name||'').localeCompare(String(b.shg_name||''));
+        }
+        return sortDir * ((Number(a[sortKey])||0) - (Number(b[sortKey])||0));
+      });
       let html='';
       for (const r of sorted){
-        html += '<tr><td>'+(r.shg_name||'')+'</td>' + COLS.map(c=>cell(r,c)).join('') + '</tr>';
+        const isOpen = expanded.has(r.shg_name);
+        html += '<tr class="grp" data-shg="'+encodeURIComponent(r.shg_name||'')+'">'
+          + '<td><span class="toggle" data-shg="'+encodeURIComponent(r.shg_name||'')+'">'
+          +   '<span class="box">'+(isOpen?'−':'+')+'</span>'+(r.shg_name||'')+'</span></td>'
+          + COLS.map(c=>cell(r,c)).join('')
+          + '</tr>';
+        if (isOpen){
+          const det = detailCache[r.shg_name];
+          if (!det){
+            html += '<tr class="det"><td class="det-name text-[var(--muted)]"><i class="fas fa-spinner fa-spin"></i> Loading…</td><td colspan="'+COLS.length+'"></td></tr>';
+          } else if (!det.length){
+            html += '<tr class="det"><td class="det-name text-[var(--muted)]">No participants.</td><td colspan="'+COLS.length+'"></td></tr>';
+          } else {
+            for (const p of det){
+              html += '<tr class="det">'
+                + '<td class="det-name">'+(p.participant_name||'')+'</td>'
+                + COLS.map(c=>cell(p,c)).join('')
+                + '</tr>';
+            }
+          }
+        }
       }
       const totalKeys = { qty_harvested:1, total_planting_value:1, net_planting:1 };
       html += '<tr class="total-row"><td>Total</td>'
@@ -222,9 +269,28 @@ ${navSidebar('sales')}
           }).join('')
         + '</tr>';
       tbody.innerHTML = html;
+      // sort arrow (▲ asc / ▼ desc on the active column)
       document.querySelectorAll('#thead .arrow').forEach(a=>a.textContent='');
       const ar = document.querySelector('#thead .arrow[data-k="'+sortKey+'"]');
-      if (ar) ar.textContent='▼';
+      if (ar) ar.textContent = sortDir>0 ? '▲' : '▼';
+      // toggle handlers
+      tbody.querySelectorAll('.toggle').forEach(t=>{
+        t.addEventListener('click', ()=>toggleGroup(decodeURIComponent(t.getAttribute('data-shg'))));
+      });
+    }
+
+    async function toggleGroup(shg){
+      if (expanded.has(shg)){ expanded.delete(shg); renderTable(); return; }
+      expanded.add(shg); renderTable();
+      if (!detailCache[shg]){
+        try{
+          const params = filterParams(); params.set('shg', shg);
+          const res = await fetch('/api/sales/detail?'+params.toString());
+          const d = await res.json();
+          detailCache[shg] = d.rows || [];
+        }catch(err){ detailCache[shg] = []; }
+        renderTable();
+      }
     }
 
     function filterParams(){
@@ -250,6 +316,8 @@ ${navSidebar('sales')}
     }
 
     async function load(){
+      // filters changed -> detail cache is stale
+      detailCache = {}; expanded = new Set();
       const params = filterParams();
       const tb = document.getElementById('tbody');
       if (tb) tb.innerHTML = '<tr><td class="text-center text-[var(--muted)] py-8"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>';
@@ -306,6 +374,11 @@ ${navSidebar('sales')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    if (window.DashTools){
+      window.DashTools.wireExcel('btnExcel', '#tbl', 'Sales');
+      window.DashTools.wirePrint('btnPrint', '#tbl', 'Sales / Production Marketing by SHG');
+    }
 
     loadOptions();
     load();

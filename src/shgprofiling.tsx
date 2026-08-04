@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "SHG PROFILING AND GROUP STATISTICS" — shg_groups_view ⋈ Dim_SHG
 //   Dim_SHG = SUMMARIZE(shg_profiling_form, refID, shg_name, MAX(Profilers_name))
@@ -94,6 +95,7 @@ ${navSidebar('shgprofiling')}
         </button>
       </div>
     </header>
+    ${dashToolsAssets()}
 
     <!-- Date filter toolbar -->
     <div class="flex flex-wrap items-center gap-3 mb-3 no-print">
@@ -265,16 +267,14 @@ ${navSidebar('shgprofiling')}
       return '<td>'+(v==null?'':v)+'</td>';
     }
     function renderHead(){
+      // Column click-sort handled generically by DashTools.makeSortable
+      // (works on every column, num or text, toggles up/down).
       let html = '<tr><th style="min-width:260px">SHG Name</th>';
       for (const c of COLS){
-        const sortable = c.type==='num' ? ' sortable' : '';
-        const arrow = c.type==='num' ? '<span class="arrow" data-k="'+c.key+'"></span>' : '';
-        html += '<th class="'+(c.type==='num'?'num':'')+sortable+'" '+(c.type==='num'?'data-k="'+c.key+'"':'')+'>'+c.label+arrow+'</th>';
+        html += '<th class="'+(c.type==='num'?'num':'')+'">'+c.label+'</th>';
       }
       html += '</tr>';
       document.getElementById('thead').innerHTML = html;
-      document.querySelectorAll('#thead th.sortable').forEach(th=>
-        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
     }
     function renderTable(){
       if (!lastData){ return; }
@@ -297,9 +297,7 @@ ${navSidebar('shgprofiling')}
           }).join('')
         + '</tr>';
       tbody.innerHTML = html;
-      document.querySelectorAll('#thead .arrow').forEach(a=>a.textContent='');
-      const ar = document.querySelector('#thead .arrow[data-k="'+sortKey+'"]');
-      if (ar) ar.textContent='▼';
+      if (window.DashTools) window.DashTools.makeSortable('#tbl');
     }
 
     function filterParams(){
@@ -396,8 +394,12 @@ ${navSidebar('shgprofiling')}
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
 
-    // ---- Print / Save as PDF ----
-    document.getElementById('printBtn').addEventListener('click', ()=>window.print());
+    // ---- Print / Save as PDF (table columns only, current filtered view) ----
+    if (window.DashTools){
+      window.DashTools.wirePrint('printBtn', '#tbl', 'SHG Profiling');
+    } else {
+      document.getElementById('printBtn').addEventListener('click', ()=>window.print());
+    }
 
     // ---- Export to Excel (SheetJS) ----
     document.getElementById('excelBtn').addEventListener('click', ()=>{

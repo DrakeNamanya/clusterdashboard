@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "LOCAL LEVERAGE"  — Leverage Contributions by Category
 //   Source: local_leverage_fund_contribution_form OData feed.
@@ -120,10 +121,13 @@ ${navSidebar('localleverage')}
 
       <div class="flex-1"></div>
 
+      <button id="btnExcel" class="dt-btn excel"><i class="fas fa-file-excel"></i> Export Excel</button>
+      <button id="btnPrint" class="dt-btn print"><i class="fas fa-print"></i> Print</button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[#f2f6f7] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
+    ${dashToolsAssets()}
 
     <div class="grid grid-cols-12 gap-3">
       <section class="col-span-12 lg:col-span-10 space-y-3">
@@ -365,15 +369,14 @@ ${navSidebar('localleverage')}
     }
 
     function renderHead(){
+      // Column click-sort is handled generically by DashTools.makeSortable
+      // (works on every column, toggles up/down). We just render labels here.
       let html = '<tr>';
       for (const [key,label,type] of COLS){
-        const sortable = type==='num';
-        html += '<th class="'+(type==='num'?'num':'')+(sortable?' cursor-pointer':'')+'" '+(sortable?'data-k="'+key+'"':'')+'>'+label+(key===sortKey?' ▼':'')+'</th>';
+        html += '<th class="'+(type==='num'?'num':'')+'">'+label+'</th>';
       }
       html += '</tr>';
       document.getElementById('thead').innerHTML = html;
-      document.querySelectorAll('#thead th[data-k]').forEach(th=>
-        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
     }
     function fmtCell(v, type){
       if (v==null || v==='') return '';
@@ -402,6 +405,7 @@ ${navSidebar('localleverage')}
         html += '</tr>';
       }
       tbody.innerHTML = html;
+      if (window.DashTools) window.DashTools.makeSortable('#tbl');
     }
 
     function filterParams(){
@@ -493,6 +497,11 @@ ${navSidebar('localleverage')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    if (window.DashTools){
+      window.DashTools.wireExcel('btnExcel', '#tbl', 'Local_Leverage');
+      window.DashTools.wirePrint('btnPrint', '#tbl', 'Leverage Contributions by Category');
+    }
 
     loadOptions();
     load();

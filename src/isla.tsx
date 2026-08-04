@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "SHGs SAVING IN A CLUSTER (ISLA)" — isla_form ⋈ Dim_SHG_ISLA
 //   ISLA FINAL = isla_form LEFT JOIN shg_profiling_form on shg_id = refID
@@ -81,10 +82,13 @@ ${navSidebar('isla')}
         <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
       </div>
 
+      <button id="btnExcel" class="dt-btn excel"><i class="fas fa-file-excel"></i> Export Excel</button>
+      <button id="btnPrint" class="dt-btn print"><i class="fas fa-print"></i> Print</button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
+    ${dashToolsAssets()}
 
     <div class="grid grid-cols-12 gap-3">
 
@@ -190,16 +194,14 @@ ${navSidebar('isla')}
       return '<td>'+(v==null?'':v)+'</td>';
     }
     function renderHead(){
+      // Column click-sort is now handled generically by DashTools.makeSortable
+      // (works on every column, toggles up/down). We just render labels here.
       let html = '<tr><th style="min-width:260px">shg_name</th>';
       for (const c of COLS){
-        const sortable = c.type==='num' ? ' sortable' : '';
-        const arrow = c.type==='num' ? '<span class="arrow" data-k="'+c.key+'"></span>' : '';
-        html += '<th class="'+(c.type==='num'?'num':'')+sortable+'" '+(c.type==='num'?'data-k="'+c.key+'"':'')+'>'+c.label+arrow+'</th>';
+        html += '<th class="'+(c.type==='num'?'num':'')+'">'+c.label+'</th>';
       }
       html += '</tr>';
       document.getElementById('thead').innerHTML = html;
-      document.querySelectorAll('#thead th.sortable').forEach(th=>
-        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
     }
     function renderTable(){
       if (!lastData){ return; }
@@ -225,6 +227,8 @@ ${navSidebar('isla')}
       document.querySelectorAll('#thead .arrow').forEach(a=>a.textContent='');
       const ar = document.querySelector('#thead .arrow[data-k="'+sortKey+'"]');
       if (ar) ar.textContent='▼';
+      // Enable click-to-sort on EVERY column (DOM reorder, up/down toggle).
+      if (window.DashTools) window.DashTools.makeSortable('#tbl');
     }
 
     function filterParams(){
@@ -305,6 +309,11 @@ ${navSidebar('isla')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    if (window.DashTools){
+      window.DashTools.wireExcel('btnExcel', '#tbl', 'ISLA_Savings');
+      window.DashTools.wirePrint('btnPrint', '#tbl', 'SHGs Saving in a Cluster (ISLA)');
+    }
 
     loadOptions();
     load();

@@ -226,6 +226,81 @@ $$;
 alter function public.production_dash(text[],text[],date,date,int) set statement_timeout='40000';
 grant execute on function public.production_dash(text[],text[],date,date,int) to anon, service_role;
 
+-- ---- Per-participant detail rows for one SHG (expandable "+" hierarchy) -----
+-- Same column shape as the group rows, but one row per participant_name so the
+-- dashboard can show the youth breakdown under each SHG name.
+create or replace function public.production_detail(
+  p_shg          text,
+  p_districts    text[] default null,
+  p_valuechains  text[] default null,
+  p_from         date   default null,
+  p_to           date   default null
+)
+returns jsonb
+language sql
+stable
+as $$
+  with sel as (
+    select
+      case when p_districts is null or array_length(p_districts,1) is null then null
+           else p_districts end as dl,
+      case when p_valuechains is null or array_length(p_valuechains,1) is null then null
+           else p_valuechains end as vl
+  ),
+  f as (
+    select r.* from public.production_rows r, sel
+    where r.shg_name = p_shg
+      and (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+      and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
+      and (p_from is null or r.activity_date >= p_from)
+      and (p_to   is null or r.activity_date <= p_to)
+  ),
+  g as (
+    select
+      participant_name,
+      min(horticulture)        as horticulture,
+      sum(acres)               as acres,
+      min(other_horticulture)  as other_horticulture,
+      min(oil_seeds)           as oil_seeds,
+      min(other_oil_seeds)     as other_oil_seeds,
+      sum(qty_seed)            as qty_seed,
+      min(qty_seed_measure)    as qty_seed_measure,
+      min(poultry)             as poultry,
+      min(other_poultry)       as other_poultry,
+      min(district_name)       as district_name,
+      min(profilers_name)      as profilers_name,
+      count(distinct shg_id)                                    as shg_count,
+      count(distinct shg_participant_id)                        as participant_count,
+      count(distinct case when lower(coalesce(disability_status,''))='yes'
+                          then shg_participant_id end)          as pwds
+    from f
+    where participant_name is not null
+    group by participant_name
+    order by participant_name
+  )
+  select jsonb_build_object(
+    'rows', coalesce(jsonb_agg(jsonb_build_object(
+        'participant_name', participant_name,
+        'horticulture', horticulture,
+        'acres', acres,
+        'other_horticulture', other_horticulture,
+        'oil_seeds', oil_seeds,
+        'other_oil_seeds', other_oil_seeds,
+        'qty_seed', qty_seed,
+        'qty_seed_measure', qty_seed_measure,
+        'poultry', poultry,
+        'other_poultry', other_poultry,
+        'district_name', district_name,
+        'profilers_name', profilers_name,
+        'shg_count', shg_count,
+        'participant_count', participant_count,
+        'pwds', pwds
+      ) order by participant_name), '[]'::jsonb)
+  ) from g;
+$$;
+alter function public.production_detail(text,text[],text[],date,date) set statement_timeout='30000';
+grant execute on function public.production_detail(text,text[],text[],date,date) to anon, service_role;
+
 -- ---- Lightweight slicer option lists only ----------------------------------
 create or replace function public.production_options()
 returns jsonb

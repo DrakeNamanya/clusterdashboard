@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "Trainings by Frontliners" — Power BI-style TRAININGS table for
 // all_trainees_view, grouped by data_collector.
@@ -64,10 +65,12 @@ ${navSidebar('frontliners')}
       </div>
 
       <span class="text-[11px] text-[var(--muted)] ml-auto"><span id="rowCount">–</span> frontliners</span>
+      <button id="btnPrint" class="dt-btn print"><i class="fas fa-print"></i> Print</button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
+    ${dashToolsAssets()}
 
     <div class="grid grid-cols-12 gap-3">
 
@@ -79,10 +82,10 @@ ${navSidebar('frontliners')}
               <thead>
                 <tr>
                   <th>data_collector</th>
-                  <th class="num sortable" data-k="pwds_trained">PWDs_Trained<span class="arrow"></span></th>
-                  <th class="num sortable" data-k="female_reached">Female_Reached<span class="arrow"></span></th>
-                  <th class="num sortable" data-k="youth_trained">Youth_Trained<span class="arrow">▼</span></th>
-                  <th class="num sortable" data-k="groups_reached">Groups_Reached<span class="arrow"></span></th>
+                  <th class="num">PWDs_Trained</th>
+                  <th class="num">Female_Reached</th>
+                  <th class="num">Youth_Trained</th>
+                  <th class="num">Groups_Reached</th>
                   <th>Training_Types_ListY</th>
                   <th>Group_Names_ListY</th>
                   <th>First district</th>
@@ -209,10 +212,7 @@ ${navSidebar('frontliners')}
         + '<td>'+(r.first_district||'')+'</td>'
         + '</tr>'
       ).join('');
-      // update sort arrows
-      document.querySelectorAll('th.sortable .arrow').forEach(a=>a.textContent='');
-      const th = document.querySelector('th.sortable[data-k="'+sortKey+'"] .arrow');
-      if (th) th.textContent = '▼';
+      if (window.DashTools) window.DashTools.makeSortable('#tbl');
     }
 
     async function load(){
@@ -278,8 +278,9 @@ ${navSidebar('frontliners')}
     document.getElementById('collNoneBtn').addEventListener('click', collUnselectAll);
     document.querySelectorAll('.preset').forEach(b=>
       b.addEventListener('click', ()=>applyPreset(b.getAttribute('data-preset'))));
-    document.querySelectorAll('th.sortable').forEach(th=>
-      th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(lastRows); }));
+    if (window.DashTools){
+      window.DashTools.wirePrint('btnPrint', '#tbl', 'Frontliners');
+    }
 
     document.getElementById('refreshBtn').addEventListener('click', async (e)=>{
       const btn = e.currentTarget; const old = btn.innerHTML;

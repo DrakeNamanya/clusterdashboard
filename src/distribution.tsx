@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "Distribution to Participants" — participants_shg ⋈ distribution_form_v2
 // (join on participants_shg[__Submissions-id] = distribution_form_v2[_id]).
@@ -84,10 +85,13 @@ ${navSidebar('distribution')}
         <button data-preset="year" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Year</button>
       </div>
 
-      <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)] ml-auto">
+      <button id="btnExcel" class="dt-btn excel ml-auto"><i class="fas fa-file-excel"></i> Export Excel</button>
+      <button id="btnPrint" class="dt-btn print"><i class="fas fa-print"></i> Print</button>
+      <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
+    ${dashToolsAssets()}
 
     <!-- KPI cards -->
     <div class="grid grid-cols-3 gap-3 mb-3">
@@ -193,6 +197,7 @@ ${navSidebar('distribution')}
     SL.forEach(s => S[s.id] = { id:s.id, opts:[], sel:new Set(), all:true, cfg:s });
 
     let sortKey = 'qty_received';
+    let sortDir = -1;              // -1 desc, 1 asc
     let lastData = null;
     let expanded = new Set();      // SHG names currently expanded
     let detailCache = {};          // shg -> participant rows
@@ -264,16 +269,23 @@ ${navSidebar('distribution')}
       return '<td>'+(v==null?'':v)+'</td>';
     }
     function renderHead(cols){
-      let html = '<tr><th style="min-width:220px">SHG_Name_</th>';
+      // Every column (SHG name + all data columns) is click-sortable. Sorting
+      // re-orders the SHG GROUP rows only, so the hierarchy stays intact (any
+      // expanded participant rows follow their own group). Click toggles asc/desc.
+      let html = '<tr><th class="sortable" data-k="shg_name" style="min-width:220px">SHG Name'
+               + '<span class="arrow" data-k="shg_name"></span></th>';
       for (const c of cols){
-        const sortable = c.type==='num' ? ' sortable' : '';
-        const arrow = c.type==='num' ? '<span class="arrow" data-k="'+c.key+'"></span>' : '';
-        html += '<th class="'+(c.type==='num'?'num':'')+sortable+'" '+(c.type==='num'?'data-k="'+c.key+'"':'')+'>'+c.label+arrow+'</th>';
+        html += '<th class="'+(c.type==='num'?'num ':'')+'sortable" data-k="'+c.key+'">'+c.label
+              + '<span class="arrow" data-k="'+c.key+'"></span></th>';
       }
       html += '</tr>';
       document.getElementById('thead').innerHTML = html;
       document.querySelectorAll('#thead th.sortable').forEach(th=>
-        th.addEventListener('click', ()=>{ sortKey = th.getAttribute('data-k'); renderTable(); }));
+        th.addEventListener('click', ()=>{
+          const k = th.getAttribute('data-k');
+          if (sortKey === k){ sortDir = -sortDir; } else { sortKey = k; sortDir = (k==='shg_name') ? 1 : -1; }
+          renderTable();
+        }));
     }
     function renderTable(){
       if (!lastData){ return; }
@@ -284,7 +296,12 @@ ${navSidebar('distribution')}
       const tbody = document.getElementById('tbody');
       const span = cols.length + 1;
       if (!rows.length){ tbody.innerHTML='<tr><td colspan="'+span+'" class="text-center text-[var(--muted)] py-8">No data for this selection.</td></tr>'; return; }
-      const sorted = [...rows].sort((a,b)=> (Number(b[sortKey])||0) - (Number(a[sortKey])||0));
+      const sorted = [...rows].sort((a,b)=>{
+        if (sortKey === 'shg_name'){
+          return sortDir * String(a.shg_name||'').localeCompare(String(b.shg_name||''));
+        }
+        return sortDir * ((Number(a[sortKey])||0) - (Number(b[sortKey])||0));
+      });
       let html='';
       for (const r of sorted){
         const isOpen = expanded.has(r.shg_name);
@@ -317,10 +334,10 @@ ${navSidebar('distribution')}
           }).join('')
         + '</tr>';
       tbody.innerHTML = html;
-      // sort arrow
+      // sort arrow (▲ asc / ▼ desc on the active column)
       document.querySelectorAll('#thead .arrow').forEach(a=>a.textContent='');
       const ar = document.querySelector('#thead .arrow[data-k="'+sortKey+'"]');
-      if (ar) ar.textContent='▼';
+      if (ar) ar.textContent = sortDir>0 ? '▲' : '▼';
       // toggle handlers
       tbody.querySelectorAll('.toggle').forEach(t=>{
         t.addEventListener('click', ()=>toggleGroup(decodeURIComponent(t.getAttribute('data-shg'))));
@@ -443,6 +460,11 @@ ${navSidebar('distribution')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    if (window.DashTools){
+      window.DashTools.wireExcel('btnExcel', '#tbl', 'Distribution_to_Participants');
+      window.DashTools.wirePrint('btnPrint', '#tbl', 'Distribution to Participants (by SHG)');
+    }
 
     loadOptions();   // fill slicers immediately (independent of the heavy query)
     load();

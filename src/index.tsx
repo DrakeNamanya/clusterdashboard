@@ -12,8 +12,8 @@ import {
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
   shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
   islaDash, islaOptions, refreshIsla, valueChainSales,
-  productionDash, productionOptions, refreshProduction,
-  salesDash, salesOptions, refreshSales, Env,
+  productionDash, productionOptions, productionDetail, refreshProduction,
+  salesDash, salesOptions, salesDetail, refreshSales, Env,
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
@@ -1163,6 +1163,22 @@ app.get('/api/production/options', async (c) => {
   return c.json(data);
 });
 
+// Per-participant detail rows for one SHG (expandable "+" hierarchy).
+app.get('/api/production/detail', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const shg = q.shg || '';
+  if (!shg) return c.json({ rows: [] });
+  const data = await productionDetail(storeEnv(c), shg, {
+    districts: split(q.districts),
+    valuechains: split(q.valuechains),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
 // Rebuild the production_rows table (run after uploads / imports change data).
 app.post('/api/production/refresh', async (c) => {
   const n = await refreshProduction(storeEnv(c));
@@ -1192,6 +1208,22 @@ app.get('/api/sales', async (c) => {
 // Lightweight slicer option lists.
 app.get('/api/sales/options', async (c) => {
   const data = await salesOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Per-participant detail rows for one SHG (expandable "+" hierarchy).
+app.get('/api/sales/detail', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const shg = q.shg || '';
+  if (!shg) return c.json({ rows: [] });
+  const data = await salesDetail(storeEnv(c), shg, {
+    districts: split(q.districts),
+    valuechains: split(q.valuechains),
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
   return c.json(data);
 });
 

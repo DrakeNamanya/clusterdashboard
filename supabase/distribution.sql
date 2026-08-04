@@ -175,7 +175,7 @@ as $$
       min(submitted_by)              as first_submitted_by,
       min(supplier)                  as first_supplier,
       min(other_supplier)            as first_other_supplier,
-      count(participant_name)        as count_participants,
+      count(distinct coalesce(participant_id, participant_name)) as count_participants,
       count(*) filter (where is_pwd) as pwds_distributees,
       -- Per-unit quantity sums
       sum(qty_received) filter (where unit='Seedlings') as qty_seedlings,

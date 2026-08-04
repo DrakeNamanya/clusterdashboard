@@ -205,6 +205,66 @@ $$;
 alter function public.sales_dash(text[],text[],date,date,int) set statement_timeout='40000';
 grant execute on function public.sales_dash(text[],text[],date,date,int) to anon, service_role;
 
+-- ---- Per-participant detail rows for one SHG (expandable "+" hierarchy) -----
+-- Same column shape as the group rows, but one row per participant_name so the
+-- dashboard can show the youth breakdown under each SHG name.
+create or replace function public.sales_detail(
+  p_shg          text,
+  p_districts    text[] default null,
+  p_valuechains  text[] default null,
+  p_from         date   default null,
+  p_to           date   default null
+)
+returns jsonb
+language sql
+stable
+as $$
+  with sel as (
+    select
+      case when p_districts is null or array_length(p_districts,1) is null then null
+           else p_districts end as dl,
+      case when p_valuechains is null or array_length(p_valuechains,1) is null then null
+           else p_valuechains end as vl
+  ),
+  f as (
+    select r.* from public.sales_rows r, sel
+    where r.shg_name = p_shg
+      and (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+      and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
+      and (p_from is null or r.activity_date >= p_from)
+      and (p_to   is null or r.activity_date <= p_to)
+  ),
+  g as (
+    select
+      participant_name,
+      min(horticulture)          as horticulture,
+      sum(qty_harvested)         as qty_harvested,
+      min(qty_harvested_measure) as qty_harvested_measure,
+      sum(total_planting_value)  as total_planting_value,
+      sum(net_planting)          as net_planting,
+      min(district_name)         as district_name,
+      min(profilers_name)        as profilers_name
+    from f
+    where participant_name is not null
+    group by participant_name
+    order by participant_name
+  )
+  select jsonb_build_object(
+    'rows', coalesce(jsonb_agg(jsonb_build_object(
+        'participant_name', participant_name,
+        'horticulture', horticulture,
+        'qty_harvested', qty_harvested,
+        'qty_harvested_measure', qty_harvested_measure,
+        'total_planting_value', total_planting_value,
+        'net_planting', net_planting,
+        'district_name', district_name,
+        'profilers_name', profilers_name
+      ) order by participant_name), '[]'::jsonb)
+  ) from g;
+$$;
+alter function public.sales_detail(text,text[],text[],date,date) set statement_timeout='30000';
+grant execute on function public.sales_detail(text,text[],text[],date,date) to anon, service_role;
+
 -- ---- Lightweight slicer option lists only ----------------------------------
 create or replace function public.sales_options()
 returns jsonb

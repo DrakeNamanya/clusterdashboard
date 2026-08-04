@@ -2324,6 +2324,26 @@ export async function productionOptions(env: Env): Promise<any> {
   return neonRpcJson(env, 'production_options', '', []);
 }
 
+/** Per-participant detail rows for one SHG group (expandable hierarchy). [Neon] */
+export async function productionDetail(
+  env: Env,
+  shg: string,
+  opts: ProductionFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'production_detail',
+    '$1, $2::text[], $3::text[], $4::date, $5::date',
+    [
+      shg,
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.valuechains && opts.valuechains.length ? opts.valuechains : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
 /** Rebuild production_rows from records (call after uploads). [Neon] */
 export async function refreshProduction(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_production_rows');
@@ -2452,6 +2472,26 @@ export async function salesDash(env: Env, opts: SalesFilters = {}): Promise<any>
 /** Lightweight slicer option lists only (district_name + value_chain). [Neon] */
 export async function salesOptions(env: Env): Promise<any> {
   return neonRpcJson(env, 'sales_options', '', []);
+}
+
+/** Per-participant detail rows for one SHG group (expandable hierarchy). [Neon] */
+export async function salesDetail(
+  env: Env,
+  shg: string,
+  opts: SalesFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'sales_detail',
+    '$1, $2::text[], $3::text[], $4::date, $5::date',
+    [
+      shg,
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.valuechains && opts.valuechains.length ? opts.valuechains : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
 }
 
 /** Rebuild sales_rows from records (call after uploads). [Neon] */
@@ -4390,21 +4430,31 @@ async function rebuildDistributionRowsFromOData(
   // — a distribution submission is EITHER an SHG-group distribution OR a
   // per-participant distribution, never both (verified: 0 participant
   // submissions share a submission_id with any SHG row). The participant feed
-  // therefore carries no SHG-group name. So the "distribution to participants"
-  // matrix groups by the PARTICIPANT (name + id), which is the entity that
-  // actually receives here; distribution_detail then lists that participant's
-  // individual allocation lines. (The separate "distribution to SHGs" dashboard
-  // groups the SHG stream by shg_group_name.)
+  // itself carries no SHG-group name — only the youth's participant_name and
+  // their shg_participant_id (HEI-…). We therefore RECOVER the real SHG name by
+  // joining each participant to their profile (dim_profile.participant_id →
+  // shg_name), which comes from the SHG-profiling roster. ~99.7% of the ~25.8k
+  // distinct distribution participants match a profile with a real SHG name.
+  //
+  // This makes the "Distribution to Participants" matrix group by the REAL SHG
+  // NAME (parent rows), and distribution_detail then lists the individual
+  // participants who received under that SHG (child rows) — i.e. the correct
+  // SHG distributees. Participants with no profile match fall back to a
+  // "(Unmatched) <participant name>" bucket so nothing is silently dropped.
 
-  // participants → distribution_rows (RPC groups by shg_name, which we set to
-  // the participant identity so each participant is one matrix group).
+  // participants → distribution_rows. shg_name = the participant's REAL SHG
+  // (from dim_profile); the RPC groups parent rows by shg_name and the detail
+  // RPC lists participants within each SHG.
   await q(`DROP TABLE IF EXISTS public.distribution_rows`);
   await q(`CREATE TABLE public.distribution_rows AS
     WITH j AS (
       SELECT p.shg_participant_id                       AS participant_id,
              p.participant_name                         AS participant_name,
-             COALESCE(NULLIF(TRIM(p.participant_name),''), p.shg_participant_id, '(Unnamed)') AS shg_name,
-             UPPER(COALESCE(e.district_name,''))         AS district,
+             COALESCE(
+               NULLIF(TRIM(dp.shg_name),''),
+               '(Unmatched) ' || COALESCE(NULLIF(TRIM(p.participant_name),''), p.shg_participant_id, 'Unnamed')
+             )                                          AS shg_name,
+             UPPER(COALESCE(NULLIF(TRIM(dp.district_name),''), e.district_name,''))         AS district,
              e.subcounty_name                            AS subcounty,
              e.material_type                             AS material_type,
              NULL::text                                  AS other_material_type,
@@ -4426,6 +4476,7 @@ async function rebuildDistributionRowsFromOData(
              NULLIF(COALESCE(e.distribution_date, p.date_created),'')::date AS dist_date
       FROM public.odata_dist_participants p
       JOIN public.odata_dist_events e ON e.doc_id = p.submission_id
+      LEFT JOIN public.dim_profile dp ON dp.participant_id = p.shg_participant_id
     )
     SELECT j.*,
            MIN(dist_date) OVER (PARTITION BY participant_id) AS first_date
