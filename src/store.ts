@@ -3855,8 +3855,12 @@ export async function misSyncView(
   if (!schema) throw new Error(`Unknown schema '${schemaKey}'`);
   if (!clusterDbUrl(env)) throw new Error('No cluster DB configured for MIS view sync');
 
-  const pageSize = Math.max(1, Math.min(opts.pageSize ?? 2000, 5000));
-  const maxPages = Math.max(1, Math.min(opts.maxPages ?? 3, 50));
+  // Smaller defaults (1000 rows * 2 pages) than before (2000 * 3) so a single
+  // view-sync request stays under the Cloudflare Worker CPU budget and stops
+  // returning "error code: 1102". The cron already passes explicit small slices;
+  // this just makes a bare/defaulted call safe too.
+  const pageSize = Math.max(1, Math.min(opts.pageSize ?? 1000, 5000));
+  const maxPages = Math.max(1, Math.min(opts.maxPages ?? 2, 50));
   // Freshness mode: always sweep page 1 forward (new rows land on page 1),
   // independent of the deep-backfill cursor. Safe because appendRecords dedups.
   const fresh = opts.fresh === true;

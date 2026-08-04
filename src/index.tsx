@@ -1637,11 +1637,18 @@ echo -n "warm-cache(core): "; curl -s --max-time 300 "$BASE/api/warm-cache?wait=
 
 # ===== CYCLE SLOT 0 — trainee deep backfill + SHG/profiling views ============
 if [ "$CYCLE" = "0" ]; then
-  # Advance the deep backfill cursor a little (converges the ~32k pending rows).
-  # maxPages reduced 5->2 and paced inside the Worker so the gateway isn't hammered.
-  sync_call "run backfill" "$BASE/api/mis-sync/run?fresh=0&maxPages=2&pageSize=2000"
-  for v in shg_groups_view isla_form youth_profiling shg_profiling_form; do
-    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
+  # Advance the deep backfill cursor a little. Kept SMALL (1 page * 1000 rows)
+  # so a compute-heavy page (many new inserts) can't blow the Worker CPU budget
+  # and return "error code: 1102". The backfill is already caught up (gap:0), so
+  # a small slice per slot is enough to keep wrapping/staying fresh.
+  sync_call "run backfill" "$BASE/api/mis-sync/run?fresh=0&maxPages=1&pageSize=1000"
+  # View syncs one page of 1000 at a time (was 3*2000) for the same CPU-limit
+  # reason; split across two slots so no single tick syncs all four heavy views.
+  for v in shg_groups_view isla_form; do
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
+  done
+  for v in youth_profiling shg_profiling_form; do
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
   done
   for c in shgprofiling isla; do
     echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
@@ -1651,9 +1658,9 @@ fi
 # ===== CYCLE SLOT 1 — production / sales / leverage / jobs views =============
 if [ "$CYCLE" = "1" ]; then
   for v in production_and_marketing_tool job_tracking; do
-    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v"
+    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
   done
-  sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=2"
+  sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=500&maxPages=1"
   for c in production sales poultrysales localleverage jobtracking; do
     echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
   done

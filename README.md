@@ -195,6 +195,44 @@ out of order, so the KPI cards were repainted 3–5 times with stale results. Ad
 (`#tv2Busy`) that dims the cards while a fetch is in flight. The last value shown is
 now always the correct one for the current filters.
 
+### Fix 2026-08-04 (Round E): sync data-path errors that froze the dashboard
+The VM cron was firing every cycle (service up, `*/5` schedule) but the **freshness
+timestamp stopped advancing** because specific scheduled steps failed, so `last_run`
+went stale (`live:false`, `age_minutes:210`) and every live-SQL dashboard read old
+numbers. Root causes fixed:
+
+- **`refresh shgdistribution` — `column "dist_date" is of type date but expression
+  is of type numeric` (E.2, the real code bug).** The live `shg_distribution_rows`
+  table's physical column order (qty_* block *after* `dist_date`) differs from the
+  `refresh_shg_distribution_rows()` SELECT's expression order (qty_* block *before*
+  `partner`/`dist_date`). The function did a **positional** `insert … select` with no
+  column list, so numeric qty values shifted onto text/date columns and a numeric
+  landed in the `date` column. **Fix:** added an **explicit column list** to the
+  INSERT so it maps by NAME regardless of physical order (`supabase/shg_distribution.sql`).
+  Re-applied the corrected function to the live DB via `/api/_ddl`. Now rebuilds 938 rows.
+- **`invalid input syntax for type bigint: "VBHCD Model"` (E.1).** Same *class* of
+  positional-INSERT / column-shift bug. After the shgdistribution fix, no live insert
+  path reproduces it: the `run`/`run backfill` at_rows INSERT and the view-sync
+  `records` INSERT both use explicit column lists with only 0/1 (bigint) or jsonb
+  values — a training-type string can no longer land in a numeric column. Verified by
+  hammering `/api/mis-sync/run` and every `/api/refresh-all?only=` job → all `ok:true`.
+- **`error code: 1102` (Cloudflare Worker CPU limit) on `run backfill` and the view
+  syncs (E.3/E.4).** The slices were too heavy per request. **Shortened** them: the
+  cron backfill is now `maxPages=1&pageSize=1000` (was 2×2000), every `view` call is
+  `maxPages=1&pageSize=1000`, and `misSyncView`'s defaults dropped to 1000×2 (was
+  2000×3). All slot-0/1 view syncs + backfill now return `ok:true`.
+- **`/api/frontliners: 503` in warm-cache (E.5).** Transient cold-cache CPU spike on
+  the live 814k-row aggregate; with the lighter sync load the warm-cache core now
+  returns `200` for both frontliner variants. Self-recovers via `cachedJson`.
+
+**Net effect:** every cron step (`run`, `refresh cluster/newyouth`, `warm-cache(core)`,
+plus all slot 0/1/2 heavy work) now succeeds, so `last_run` keeps advancing and
+`/api/freshness` stays `live:true` (age ~1–3 min, gap 0).
+
+> **VM action required:** the cron-script text changed (smaller backfill/view slices),
+> so on the VM re-download it:
+> `curl -s -o /home/ubuntu/mis-cron.sh https://shg-data-cleaner.pages.dev/api/cron-script`
+
 ### Programme Report — livestock distribution / re-booking filter fix (2026-08-03)
 The Programme Report's **Poultry distribution**, **Goat distribution** and
 **Poultry re-booking** tables were rendering empty. Root cause: `distribution_rows`

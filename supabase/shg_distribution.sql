@@ -84,7 +84,23 @@ as $$
 declare rows_out bigint;
 begin
   truncate public.shg_distribution_rows;
-  insert into public.shg_distribution_rows
+  -- Explicit column list so the mapping is by NAME, not physical column order.
+  -- The live table's column order differs from this SELECT (the qty_* block was
+  -- appended after dist_date in an earlier schema revision); a positional
+  -- `insert ... select` therefore mis-aligned numeric qty values onto the date
+  -- column ("dist_date is of type date but expression is of type numeric").
+  insert into public.shg_distribution_rows (
+    distribution_id, shg_group_name, shg_group_id, district, subcounty,
+    unit_received, other_unit_received, qty_received,
+    material_type, other_material_type, livestock_type, other_livestock_type,
+    crop_type, other_crop_type, agri_resources_type, other_agri_resources_type,
+    isla_kits, other_isla_kits,
+    qty_kgs, qty_grams, qty_liters, qty_seedlings, qty_packets, qty_tins,
+    qty_pieces, qty_dozens, qty_sackets, qty_boxes, qty_number, qty_meters,
+    qty_kit, qty_hectare, qty_acre, qty_foot, qty_other,
+    partner, supplier, other_supplier, distributor, distributor_title,
+    submitted_by, dist_date
+  )
   select
     nullif(trim(d.data->>'_id'),'')                       as distribution_id,
     nullif(trim(g.data->>'shg_name'),'')                  as shg_group_name,
