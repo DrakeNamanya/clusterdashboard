@@ -85,7 +85,7 @@ BEGIN
   -- actually received BIRDS (not feeds/KGs). Poultry livestock, unit = Number.
   birds AS (
     SELECT participant_id, shg_name FROM dist
-    WHERE material_type = 'Livestock'
+    WHERE lower(coalesce(material_type,'')) = 'livestock'
       AND livestock_type ILIKE '%poultry%'
       AND lower(coalesce(unit,'')) = 'number'
   ),

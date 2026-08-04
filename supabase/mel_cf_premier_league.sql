@@ -102,8 +102,10 @@ BEGIN
       public.mel_norm_key(d.submitted_by) = public.mel_norm_key(c.nm)
       OR (length(public.mel_norm_key(c.nm)) >= 8
           AND public.mel_norm_key(d.submitted_by) LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(public.mel_norm_key(d.submitted_by)) >= 8
+          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(d.submitted_by) || '%')
     )
-    WHERE d.material_type = 'Livestock'
+    WHERE lower(coalesce(d.material_type,'')) = 'livestock'
       AND d.livestock_type ILIKE '%poultry%'
       AND lower(coalesce(d.unit,'')) = 'number'
       AND d.participant_id IS NOT NULL

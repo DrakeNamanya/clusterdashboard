@@ -219,7 +219,7 @@ BEGIN
   -- Livestock recipients from this CF's distribution (matched on squashed username).
   prod_livestock AS (
     SELECT participant_id, shg_name FROM distribution_rows
-    WHERE material_type = 'Livestock'
+    WHERE lower(coalesce(material_type,'')) = 'livestock'
       AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
                   WHERE public.mel_norm_key(submitted_by) = k
                      OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))

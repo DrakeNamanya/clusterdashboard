@@ -99,6 +99,22 @@ BEGIN
       AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
     GROUP BY c.nm
   ),
+  -- GRADE training input: must MIRROR the CF Performance Card / Premier League,
+  -- which derives "groups trained" from PROFILING (trainings text OR
+  -- participants_trained>0) — NOT from at_rows. Kept separate from `trained`
+  -- (above, which drives the A9 *display*) so the printed GRADE matches the card
+  -- exactly while A9 still shows the richer Frontliners attendance figures.
+  trained_grade AS (
+    SELECT public.mel_norm_name(profiler_name) AS nm,
+           COUNT(*) FILTER (WHERE NULLIF(btrim(trainings),'') IS NOT NULL
+                               OR COALESCE(participants_trained,0) > 0)::int AS groups_trained_grade
+    FROM shg_profiling_rows
+    WHERE profiler_name IS NOT NULL
+      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR created_date >= p_date_from)
+      AND (p_date_to   IS NULL OR created_date <= p_date_to)
+    GROUP BY 1
+  ),
   -- ---- A6 PRODUCTION: youth in horticulture production + SHGs ----
   prod AS (
     SELECT public.mel_norm_name(profilers_name) AS nm,
@@ -253,6 +269,7 @@ BEGIN
       COALESCE(i.isla_loans_value,0)   AS isla_loans_value,
       COALESCE(t.groups_trained,0)     AS groups_trained,
       COALESCE(t.youth_trained,0)      AS youth_trained,
+      COALESCE(tg.groups_trained_grade,0) AS groups_trained_grade,
       COALESCE(pr.prod_youth_hort,0)   AS prod_youth_hort,
       COALESCE(pr.prod_shgs,0)         AS prod_shgs,
       COALESCE(py.youth_production,0)  AS youth_production,
@@ -273,7 +290,8 @@ BEGIN
     FROM cfs c
     LEFT JOIN prof p        ON p.nm  = c.nm
     LEFT JOIN isla i        ON i.nm  = c.nm
-    LEFT JOIN trained t     ON t.nm  = c.nm
+    LEFT JOIN trained t       ON t.nm  = c.nm
+    LEFT JOIN trained_grade tg ON tg.nm = c.nm
     LEFT JOIN prod pr       ON pr.nm = c.nm
     LEFT JOIN prod_youth py ON py.nm = c.nm
     LEFT JOIN dist_birds db ON db.nm = c.nm
@@ -293,7 +311,7 @@ BEGIN
     SELECT s.*,
       least(100, m_saving_ratio)                    AS p1_saving,
       least(100, round(100.0*youth_production/400))  AS p2_production,
-      least(100, round(100.0*groups_trained/16))     AS p3_trained,
+      least(100, round(100.0*groups_trained_grade/16)) AS p3_trained,
       least(100, m_yiw_pct)                          AS p4_yiw,
       CASE WHEN birds_sold > 0 THEN 100 ELSE 0 END   AS p5_poultry,
       CASE WHEN hs_value   > 0 THEN 100 ELSE 0 END   AS p6_hortsales,
