@@ -52,23 +52,30 @@ BEGIN
            COUNT(*) FILTER (WHERE COALESCE(total,0) >= 25)::int AS shgs_25_plus
     FROM prof
   ),
+  -- ---------- TRAINING (from the Frontliners attendance master, at_rows) ----------
+  -- Single source of truth for trainings across all CF reports. Matched to this
+  -- CF by the normalised no-space name key (bidirectional prefix so suffixes on
+  -- data_collector like "flep"/"teffe" still line up).
+  --   groups_trained = distinct groups the CF trained
+  --   youth_trained  = attendance rows with a date (has_date=1)
+  --   training_areas = distinct training types run
   tr AS (
-    SELECT shg_id, shg_name, participants_trained,
-           NULLIF(btrim(trainings),'') AS trainings
-    FROM prof
-  ),
-  tr_topics AS (
-    SELECT DISTINCT btrim(lower(t)) AS topic
-    FROM tr, LATERAL regexp_split_to_table(coalesce(tr.trainings,''), '\s*,\s*') AS t
-    WHERE btrim(t) <> ''
+    SELECT a.group_id, a.training_type, a.has_date
+    FROM at_rows a
+    WHERE a.data_collector IS NOT NULL
+      AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
+                  WHERE public.mel_norm_key(a.data_collector) = k
+                     OR (length(k) >= 8 AND public.mel_norm_key(a.data_collector) LIKE k || '%')
+                     OR (length(public.mel_norm_key(a.data_collector)) >= 8 AND k LIKE public.mel_norm_key(a.data_collector) || '%'))
+      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
   ),
   tr_t AS (
     SELECT
-      COALESCE(SUM(participants_trained),0)::int AS youth_trained,
-      (SELECT COUNT(*) FROM tr_topics)::int AS training_areas,
-      COUNT(*) FILTER (
-        WHERE trainings IS NOT NULL OR COALESCE(participants_trained,0) > 0
-      )::int AS groups_trained
+      COALESCE(SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END),0)::int          AS youth_trained,
+      COUNT(DISTINCT NULLIF(btrim(lower(training_type)),''))::int             AS training_areas,
+      COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int       AS groups_trained
     FROM tr ),
   -- ---------- DISTRIBUTION (all lines, for the "items handed out" text) ----------
   dist AS (

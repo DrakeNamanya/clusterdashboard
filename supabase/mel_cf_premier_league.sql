@@ -73,17 +73,30 @@ BEGIN
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
     GROUP BY 1
   ),
-  -- ---- GROUPS TRAINED (from profiling: trainings present OR trained>0) ----
+  -- ---- GROUPS TRAINED (from the Frontliners attendance master, at_rows) ----
+  -- Single source of truth for trainings across ALL CF reports: the "Trainings
+  -- by Frontliners" dashboard. groups_trained = distinct groups attended;
+  -- youth_trained = attendance rows with a date (has_date=1). Matched to the CF
+  -- universe by the normalised name key (data_collector is a lowercase, no-space
+  -- rendering of the collector's name; prefix-matched both ways so suffixes like
+  -- "flep"/"teffe" still line up).
   trained AS (
-    SELECT public.mel_norm_name(profiler_name) AS nm,
-           COUNT(*) FILTER (WHERE NULLIF(btrim(trainings),'') IS NOT NULL
-                               OR COALESCE(participants_trained,0) > 0)::int AS groups_trained
-    FROM shg_profiling_rows
-    WHERE profiler_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR created_date >= p_date_from)
-      AND (p_date_to   IS NULL OR created_date <= p_date_to)
-    GROUP BY 1
+    SELECT c.nm,
+           COUNT(DISTINCT a.group_id) FILTER (WHERE a.group_id IS NOT NULL)::int AS groups_trained,
+           SUM(CASE WHEN a.has_date = 1 THEN 1 ELSE 0 END)::int                  AS youth_trained
+    FROM at_rows a
+    JOIN cfs c ON (
+      public.mel_norm_key(a.data_collector) = public.mel_norm_key(c.nm)
+      OR (length(public.mel_norm_key(c.nm)) >= 8
+          AND public.mel_norm_key(a.data_collector) LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(public.mel_norm_key(a.data_collector)) >= 8
+          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(a.data_collector) || '%')
+    )
+    WHERE a.data_collector IS NOT NULL
+      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
+    GROUP BY c.nm
   ),
   -- ---- YOUTH INTO PRODUCTION = horticulture youth + bird recipients ----
   prod_hort_pairs AS (
@@ -185,6 +198,7 @@ BEGIN
       COALESCE(p.youth_mobilized,0)   AS youth_mobilized,
       COALESCE(i.shgs_saving,0)       AS shgs_saving,
       COALESCE(t.groups_trained,0)    AS groups_trained,
+      COALESCE(t.youth_trained,0)     AS youth_trained,
       COALESCE(py.youth_production,0) AS youth_production,
       COALESCE(po.birds_sold,0)       AS birds_sold,
       COALESCE(hs.hs_value,0)         AS hs_value,
@@ -235,6 +249,7 @@ BEGIN
         'saving_ratio',     m_saving_ratio,
         'youth_production', youth_production,
         'groups_trained',   groups_trained,
+        'youth_trained',    youth_trained,
         'youth_mobilized',  youth_mobilized,
         'employed_youth',   employed_youth,
         'yiw_pct',          m_yiw_pct,
