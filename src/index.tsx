@@ -10,7 +10,9 @@ import {
   frontlinerDash, refreshFrontliners,
   distributionDash, distributionDetail, distributionOptions, refreshDistribution,
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
-  refreshCfUniverse,
+  refreshCfAll,
+  adminPersonList, adminOrphanList, adminPersonDetail, adminAddAlias, adminDelAlias,
+  adminMergeAccounts, adminUnmergeAccount, adminRenamePerson, adminTransferShg, adminUntransferShg,
   shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
   islaDash, islaOptions, refreshIsla, valueChainSales,
   productionDash, productionOptions, productionDetail, refreshProduction,
@@ -54,6 +56,7 @@ import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
 import { renderCfPremierLeague } from './cfleague';
 import { renderCfPaymentReport } from './cfpayment';
+import { renderFieldStaff } from './fieldstaff';
 import { clusterDistricts } from './clusters';
 import { renderProgrammeReport } from './programmepage';
 import { renderYouthInWork } from './youthinwork';
@@ -1389,11 +1392,13 @@ app.get('/api/cf-premier-league', async (c) => {
   return c.json(data);
 });
 
-// Manually rebuild the CF universe cache (the "Refresh CF list" button). Also
-// runs automatically every 15 min via the VM cron (?only=cfuniverse).
+// Manually rebuild the CF identity + universe cache (the "Refresh CF list"
+// button). Runs the full Task-E chain (person registry -> activity resolve ->
+// universe) so the "who owns this name" mapping is current. Also runs
+// automatically every 15 min via the VM cron (?only=cfuniverse).
 app.post('/api/cf-universe/refresh', async (c) => {
   try {
-    const n = await refreshCfUniverse(storeEnv(c));
+    const n = await refreshCfAll(storeEnv(c));
     return c.json({ ok: true, cfs: n });
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -1402,6 +1407,79 @@ app.post('/api/cf-universe/refresh', async (c) => {
 
 // ---- CF Payment Report (all CFs in one month-end report, grade instead of status) ----
 app.get('/cf-payment-report', (c) => c.html(renderCfPaymentReport(baseUrl(c.req.url))));
+
+// ---- Field Staff (CF Registry) admin tab + JSON API (Task E) ----
+app.get('/field-staff', (c) => c.html(renderFieldStaff(baseUrl(c.req.url))));
+
+// read: canonical people (search + district filter)
+app.get('/api/field-staff/people', async (c) => {
+  try {
+    const rows = await adminPersonList(
+      storeEnv(c), c.req.query('q') || undefined, c.req.query('district') || undefined, 800);
+    return c.json(rows);
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+// read: unmatched (orphan) profiler names
+app.get('/api/field-staff/orphans', async (c) => {
+  try {
+    const rows = await adminOrphanList(storeEnv(c), c.req.query('q') || undefined, 400);
+    return c.json(rows);
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+// read: one person's accounts / aliases / activity
+app.get('/api/field-staff/person', async (c) => {
+  try {
+    const id = c.req.query('id') || '';
+    if (!id) return c.json({ error: 'missing id' }, 400);
+    return c.json(await adminPersonDetail(storeEnv(c), id));
+  } catch (e: any) { return c.json({ error: String(e?.message || e) }, 500); }
+});
+// write: fold an orphan name / add a manual alias to a person
+app.post('/api/field-staff/add-alias', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminAddAlias(storeEnv(c), b.person_id, b.alias_key, b.note));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+app.post('/api/field-staff/del-alias', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminDelAlias(storeEnv(c), b.person_id, b.alias_key));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+// write: merge a duplicate account into a keeper
+app.post('/api/field-staff/merge', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminMergeAccounts(storeEnv(c), b.loser_ref, b.keep_ref, b.note));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+app.post('/api/field-staff/unmerge', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminUnmergeAccount(storeEnv(c), b.loser_ref));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+// write: rename a person's display name
+app.post('/api/field-staff/rename', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminRenamePerson(storeEnv(c), b.person_id, b.display_name));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+// write: transfer / untransfer an SHG's owner
+app.post('/api/field-staff/transfer-shg', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminTransferShg(storeEnv(c), b.group_name, b.person_id, b.note));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
+app.post('/api/field-staff/untransfer-shg', async (c) => {
+  try {
+    const b = await c.req.json();
+    return c.json(await adminUntransferShg(storeEnv(c), b.group_name));
+  } catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 500); }
+});
 app.get('/api/cf-payment-report', async (c) => {
   const q = c.req.query();
   const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -1579,8 +1657,10 @@ app.all('/api/refresh-all', async (c) => {
   if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
-  // CF universe cache — cheap; keeps the CF Report/League/Payment CF list current.
-  if (want('cfuniverse'))   jobs.push({ key: 'cfuniverse',   fn: () => refreshCfUniverse(env) });
+  // CF identity + universe cache — Task E full chain (person registry ->
+  // activity resolve -> universe). Keeps the "who owns this name" mapping and the
+  // CF Report/League/Payment CF list current. Still cheap enough for every cycle.
+  if (want('cfuniverse'))   jobs.push({ key: 'cfuniverse',   fn: () => refreshCfAll(env) });
 
   const results: Record<string, { ok: boolean; rows?: number; error?: string }> = {};
   for (const j of jobs) {
@@ -1692,10 +1772,12 @@ for c in cluster newyouth; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
-# 2b) Rebuild the CF universe cache every tick (cheap ~1s). Keeps the CF list on
-#     the CF Report / Premier League / Payment Report current within 15 min as
-#     new Community Facilitators are ingested — no manual refresh needed.
-echo -n "refresh cfuniverse: "; curl -s --max-time 60 -X POST "$BASE/api/refresh-all?only=cfuniverse"; echo
+# 2b) Rebuild the CF identity + universe cache every tick (Task E full chain:
+#     person registry -> activity resolve -> universe, a few seconds). Keeps the
+#     "who owns this name" mapping AND the CF list on the CF Report / Premier
+#     League / Payment Report current within 15 min as new Community Facilitators
+#     and Frontliner/profiling data are ingested — no manual refresh needed.
+echo -n "refresh cfuniverse: "; curl -s --max-time 120 -X POST "$BASE/api/refresh-all?only=cfuniverse"; echo
 
 # 3) Warm ONLY the two heaviest caches every tick (these are the ones whose cold
 #    compute over ~765k rows caused the CPU-limit outages). The rest are warmed

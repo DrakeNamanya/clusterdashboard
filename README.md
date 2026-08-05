@@ -816,6 +816,54 @@ Chunk size adapts to table width (wide tables like `distribution_form_v2` with
 with backoff, and the client retries HTTP 503/5xx per chunk — so large uploads
 complete instead of failing mid-way.
 
+## Task E — Canonical field-staff / CF-name registry (2026-08-05)
+Fixes CF names appearing incompletely (or not at all) on the CF reports — e.g.
+*Abubakar (Luuka)* was missing from the CF report, and *Titus (Jinja)* showed
+with 0 groups. Root causes: profiling stores SHORT names ("Abubakar","Titus")
+that never matched training keys; a CF can own MORE THAN ONE account; and the
+registry district can be stale (Titus: registry=Mayuge, data=Jinja).
+
+**3-layer identity model** (all pre-computed caches, sub-second at read time):
+- **Layer 1 — Identity**: `field_staff` (878 CFs, from the uploaded HR CSV).
+  Authoritative for who-is-who; NOT for district (can be stale).
+- **Layer 2 — Alias / merge**: `mel_person` (one row per canonical human) +
+  `mel_person_alias` (username/firstname/lastname/fullname/manual/refid keys) +
+  `mel_person_merge` (fold duplicate accounts) + `mel_shg_owner_override`
+  (transfer an SHG's owner). `mel_refresh_person_registry()` rebuilds it (878).
+- **Layer 3 — Activity**: profiling / at_rows / production / sales / poultry /
+  isla / leverage, joined THROUGH the alias layer. `mel_resolve_person()` is
+  tiered — strong keys (username/fullname) match globally, weak keys
+  (firstname/lastname) only within the person's **data-derived** district
+  (`mel_person_district`). `mel_refresh_activity_person()` is two-pass (3154).
+
+`mel_cf_universe` now carries `person_id` + `akeys` (every activity key that
+rolls up to a person). The reports join a `keymap` CTE (`akeys → canonical nm`)
+by **exact** `mel_norm_key`, so reversed names, short names and merged accounts
+all roll up to one CF. `mel_refresh_cf_all()` runs the whole chain
+(registry → activity resolve → universe) and is what the 15-min VM cron and the
+"Refresh identities" button call.
+
+**Verified live**: *Kisira Abubakar* (Luuka) 17 groups / 21 profiled; *Titus
+Sebayiga* (Jinja) 4 groups / 146 youth trained / 11 profiled — on the CF Report
+Card, CF Premier League and CF Payment Report.
+
+### Field Staff (CF Registry) admin tab — `/field-staff`
+Backend control panel for the M&E team to keep the registry correct:
+- **People** tab — search every canonical person (account count, data-derived
+  districts, activity totals); open a person to **rename**, **merge in** a
+  duplicate account, **unlink** an account, add/remove a manual **name key**, or
+  **transfer an SHG** to them.
+- **Unmatched names** tab — profiler names that resolved to NO person; **fold**
+  each into the right CF (fixes the "Abubakar doesn't appear" class of bug).
+- **Refresh identities** — runs `mel_refresh_cf_all()`.
+Every write re-runs the Task-E chain so the reports update immediately.
+
+JSON API (all under `/api/field-staff/`): `GET people?q=&district=`,
+`GET orphans?q=`, `GET person?id=`, `POST add-alias`, `POST del-alias`,
+`POST merge`, `POST unmerge`, `POST rename`, `POST transfer-shg`,
+`POST untransfer-shg`. SQL lives in `supabase/mel_field_staff.sql`,
+`supabase/mel_person_resolve.sql`, `supabase/mel_field_staff_admin.sql`.
+
 ## Deployment
 - **Platform**: Cloudflare Pages (project `shg-data-cleaner`, branch `main`, BYOK to drnamanya@gmail.com)
 - **Production URL**: https://shg-data-cleaner.pages.dev

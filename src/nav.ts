@@ -64,6 +64,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird', group: 'grp-sales' },
   { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation', group: 'grp-sales' },
   { key: 'localleverage', href: '/local-leverage', label: 'Local Leverage', icon: 'fa-hand-holding-dollar' },
+  { key: 'fieldstaff', href: '/field-staff', label: 'Field Staff (CF Registry)', icon: 'fa-users-gear' },
   { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom' },
 ];
 

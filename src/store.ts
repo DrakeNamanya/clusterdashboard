@@ -2154,6 +2154,80 @@ export async function refreshCfUniverse(env: Env): Promise<number> {
   return neonRpcScalar(env, 'mel_refresh_cf_universe');
 }
 
+// Task E: full CF identity refresh — rebuilds the person registry (Layer 1/2),
+// re-resolves all activity to persons (Layer 3, data-derived districts) and then
+// rebuilds mel_cf_universe (person_id + akeys). This is the one-shot chain the
+// cron should run so the "who owns this name" mapping stays current as new
+// Frontliner/profiling data and field_staff uploads arrive. Slightly heavier
+// than refreshCfUniverse alone but still well under the edge ceiling.
+export async function refreshCfAll(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'mel_refresh_cf_all');
+}
+
+// ---- Field Staff admin (Task E "CF Registry" tab) --------------------------
+// Thin wrappers over the mel_admin_* RPCs. Read helpers return jsonb; write
+// helpers return { ok, ... } and internally re-run the Task-E refresh chain so
+// the reports reflect the change immediately.
+
+export async function adminPersonList(
+  env: Env, search?: string, district?: string, limit = 500
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_person_list', '$1,$2,$3',
+    [search || null, district || null, limit]) || [];
+}
+
+export async function adminOrphanList(
+  env: Env, search?: string, limit = 300
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_orphan_list', '$1,$2',
+    [search || null, limit]) || [];
+}
+
+export async function adminPersonDetail(env: Env, personId: string): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_person_detail', '$1', [personId]);
+}
+
+export async function adminAddAlias(
+  env: Env, personId: string, aliasKey: string, note?: string
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_add_alias', '$1,$2,$3',
+    [personId, aliasKey, note || null]);
+}
+
+export async function adminDelAlias(
+  env: Env, personId: string, aliasKey: string
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_del_alias', '$1,$2', [personId, aliasKey]);
+}
+
+export async function adminMergeAccounts(
+  env: Env, loserRef: string, keepRef: string, note?: string
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_merge_accounts', '$1,$2,$3',
+    [loserRef, keepRef, note || null]);
+}
+
+export async function adminUnmergeAccount(env: Env, loserRef: string): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_unmerge_account', '$1', [loserRef]);
+}
+
+export async function adminRenamePerson(
+  env: Env, personId: string, displayName: string
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_rename_person', '$1,$2', [personId, displayName]);
+}
+
+export async function adminTransferShg(
+  env: Env, groupName: string, personId: string, note?: string
+): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_transfer_shg', '$1,$2,$3',
+    [groupName, personId, note || null]);
+}
+
+export async function adminUntransferShg(env: Env, groupName: string): Promise<any> {
+  return neonRpcJson(env, 'mel_admin_untransfer_shg', '$1', [groupName]);
+}
+
 // ---- SHG Profiling (shg_groups_view ⋈ Dim_SHG[shg_profiling_form]) ----------
 
 export interface ProfilingFilters {
