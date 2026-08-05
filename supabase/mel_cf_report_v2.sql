@@ -59,24 +59,32 @@ BEGIN
   --   groups_trained = distinct groups the CF trained
   --   youth_trained  = attendance rows with a date (has_date=1)
   --   training_areas = distinct training types run
-  tr AS (
-    SELECT a.group_id, a.training_type, a.has_date
-    FROM at_rows a
-    WHERE a.data_collector IS NOT NULL
-      AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
-                  WHERE public.mel_norm_key(a.data_collector) = k
-                     OR (length(k) >= 8 AND public.mel_norm_key(a.data_collector) LIKE k || '%')
-                     OR (length(public.mel_norm_key(a.data_collector)) >= 8 AND k LIKE public.mel_norm_key(a.data_collector) || '%'))
-      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
-      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
+  -- PERF: at_rows has ~820k rows. We FIRST collapse to one row per collector
+  -- (indexed district/day filter) so the fuzzy name-key match runs on a tiny
+  -- set — matching the raw table per-row caused 503 timeouts.
+  at_dc AS (
+    SELECT public.mel_norm_key(data_collector) AS k,
+           COUNT(DISTINCT NULLIF(btrim(lower(training_type)),'')) AS training_areas,
+           COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL) AS groups_trained,
+           SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END) AS youth_trained
+    FROM at_rows
+    WHERE data_collector IS NOT NULL
+      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR day <= p_date_to::text)
+    GROUP BY 1
   ),
   tr_t AS (
     SELECT
-      COALESCE(SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END),0)::int          AS youth_trained,
-      COUNT(DISTINCT NULLIF(btrim(lower(training_type)),''))::int             AS training_areas,
-      COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int       AS groups_trained
-    FROM tr ),
+      COALESCE(SUM(a.youth_trained),0)::int                       AS youth_trained,
+      COALESCE(SUM(a.training_areas),0)::int                      AS training_areas,
+      COALESCE(SUM(a.groups_trained),0)::int                      AS groups_trained
+    FROM at_dc a
+    WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) k
+                  WHERE a.k = k
+                     OR (length(k) >= 8 AND a.k LIKE k || '%')
+                     OR (length(a.k) >= 8 AND k LIKE a.k || '%'))
+  ),
   -- ---------- DISTRIBUTION (all lines, for the "items handed out" text) ----------
   dist AS (
     SELECT * FROM distribution_rows

@@ -31,22 +31,46 @@ CREATE OR REPLACE FUNCTION public.mel_refresh_cf_universe()
 AS $function$
 DECLARE n integer;
 BEGIN
+  -- Task E: the universe is now REGISTRY-DRIVEN. It is the union of
+  --   (1) every canonical person (mel_person) -> so field-staff like Abubakar
+  --       appear even when their form name is a single word, and their district
+  --       comes from mel_person_district (data-derived, so Titus shows in Jinja);
+  --   (2) any UNRESOLVED activity name-key not covered by a person -> so nobody's
+  --       work silently disappears while the registry is being cleaned.
+  -- nm for persons is the official "first last" (normalised); its mel_norm_key
+  -- equals the username key, which the reports' bidirectional-prefix joins use.
+  --
+  -- Prereq: mel_refresh_person_registry() and mel_refresh_activity_person()
+  -- must have run first (the wrapper mel_refresh_cf_all() does all three).
   CREATE TEMP TABLE _u ON COMMIT DROP AS
+  WITH person_rows AS (
+    SELECT public.mel_norm_name(p.display_name) AS nm,
+           upper(pd.district) AS d
+    FROM public.mel_person p
+    JOIN public.mel_person_district pd ON pd.person_id = p.person_id
+    WHERE coalesce(p.display_name,'') <> ''
+  ),
+  -- unresolved activity names (person_id IS NULL) that still carry a real name
+  orphan_rows AS (
+    SELECT ap.name_key AS nm, ap.district AS d
+    FROM public.mel_activity_person ap
+    WHERE ap.person_id IS NULL
+      AND ap.district <> ''
+      AND ap.name_key ~ '[a-z]'
+      AND ap.name_key !~ '(group|association|farmers|provision|selfhelp|shg|village|cluster|community)'
+  ),
+  allnames AS (
+    SELECT nm, d FROM person_rows
+    UNION ALL
+    SELECT nm, d FROM orphan_rows
+  )
   SELECT nm,
          public.mel_norm_key(nm) AS ck,
          (SELECT string_agg(w, ' ' ORDER BY w)
             FROM unnest(regexp_split_to_array(nm,' ')) w WHERE w <> '') AS sortkey,
          array_agg(DISTINCT d) AS districts
-  FROM (
-    SELECT public.mel_norm_name(profiler_name)  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(submitter_name), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
-  ) allnames
-  WHERE nm <> '' AND nm ~ '[a-z]' AND nm ~ ' '
-    AND nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
+  FROM allnames
+  WHERE coalesce(nm,'') <> ''
   GROUP BY nm;
 
   TRUNCATE public.mel_cf_universe;
@@ -55,3 +79,20 @@ BEGIN
   RETURN n;
 END;
 $function$;
+
+-- ---------------------------------------------------------------------------
+-- ONE-SHOT wrapper: rebuild the whole identity->activity->universe chain in the
+-- correct order. Called by the API / cron so a single call keeps everything in
+-- sync after new data (or a field_staff re-upload).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.mel_refresh_cf_all()
+ RETURNS integer LANGUAGE plpgsql AS
+$fn$
+DECLARE v_universe integer;
+BEGIN
+  PERFORM public.mel_refresh_person_registry();
+  PERFORM public.mel_refresh_activity_person();
+  v_universe := public.mel_refresh_cf_universe();
+  RETURN v_universe;
+END;
+$fn$;
