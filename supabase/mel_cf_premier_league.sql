@@ -29,26 +29,15 @@ BEGIN
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
-  -- Universe of CFs (same discovery rules as mel_cf_report_staff).
+  -- Universe of CFs — read from the pre-computed cache (public.mel_cf_universe,
+  -- rebuilt by public.mel_refresh_cf_universe()). This replaces a ~20s inline
+  -- scan of 6 source tables (which tripped the edge/Hyperdrive statement ceiling
+  -- and returned 503) with a sub-second lookup. District filter is applied
+  -- against the cached districts[] array so cluster/district slicing is intact.
   cfs AS (
-    SELECT nm,
-           -- sorted-token key (word order independent) for job_tracking match
-           (SELECT string_agg(w, ' ' ORDER BY w)
-              FROM unnest(regexp_split_to_array(nm,' ')) w WHERE w <> '') AS sortkey
-    FROM (
-      SELECT nm FROM (
-        SELECT public.mel_norm_name(profiler_name)  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(submitter_name), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
-      ) allnames
-      WHERE nm <> '' AND nm ~ '[a-z]' AND nm ~ ' '
-        AND nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
-        AND (v_dl IS NULL OR d = ANY(v_dl))
-      GROUP BY nm
-    ) u
+    SELECT nm, sortkey
+    FROM public.mel_cf_universe
+    WHERE (v_dl IS NULL OR districts && v_dl)
   ),
   -- ---- PROFILING: SHGs profiled + youth mobilized (for ratio & YiW target) ----
   prof AS (
@@ -76,26 +65,32 @@ BEGIN
   -- ---- GROUPS TRAINED (from the Frontliners attendance master, at_rows) ----
   -- Single source of truth for trainings across ALL CF reports: the "Trainings
   -- by Frontliners" dashboard. groups_trained = distinct groups attended;
-  -- youth_trained = attendance rows with a date (has_date=1). Matched to the CF
-  -- universe by the normalised name key (data_collector is a lowercase, no-space
-  -- rendering of the collector's name; prefix-matched both ways so suffixes like
-  -- "flep"/"teffe" still line up).
+  -- youth_trained = attendance rows with a date (has_date=1).
+  -- PERF: at_rows has ~820k rows, so we FIRST collapse it to one row per
+  -- data_collector using the indexed district/day columns (fast), THEN run the
+  -- fuzzy name-key match on that tiny set. Matching the raw table would force a
+  -- ~820k × Ncf nested loop with function calls (10s+ -> 503 timeouts).
+  at_dc AS (
+    SELECT public.mel_norm_key(data_collector) AS k,
+           COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int AS groups_trained,
+           SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END)::int                AS youth_trained
+    FROM at_rows
+    WHERE data_collector IS NOT NULL
+      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR day <= p_date_to::text)
+    GROUP BY 1
+  ),
   trained AS (
     SELECT c.nm,
-           COUNT(DISTINCT a.group_id) FILTER (WHERE a.group_id IS NOT NULL)::int AS groups_trained,
-           SUM(CASE WHEN a.has_date = 1 THEN 1 ELSE 0 END)::int                  AS youth_trained
-    FROM at_rows a
+           SUM(a.groups_trained)::int AS groups_trained,
+           SUM(a.youth_trained)::int  AS youth_trained
+    FROM at_dc a
     JOIN cfs c ON (
-      public.mel_norm_key(a.data_collector) = public.mel_norm_key(c.nm)
-      OR (length(public.mel_norm_key(c.nm)) >= 8
-          AND public.mel_norm_key(a.data_collector) LIKE public.mel_norm_key(c.nm) || '%')
-      OR (length(public.mel_norm_key(a.data_collector)) >= 8
-          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(a.data_collector) || '%')
+      a.k = public.mel_norm_key(c.nm)
+      OR (length(public.mel_norm_key(c.nm)) >= 8 AND a.k LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(a.k) >= 8 AND public.mel_norm_key(c.nm) LIKE a.k || '%')
     )
-    WHERE a.data_collector IS NOT NULL
-      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
-      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
     GROUP BY c.nm
   ),
   -- ---- YOUTH INTO PRODUCTION = horticulture youth + bird recipients ----

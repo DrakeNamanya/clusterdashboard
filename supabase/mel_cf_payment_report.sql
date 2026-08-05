@@ -24,25 +24,18 @@ BEGIN
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
-  -- Universe of CFs (same discovery rules as mel_cf_report_staff / premier league).
+  -- Universe of CFs — read from the pre-computed cache (public.mel_cf_universe,
+  -- rebuilt by public.mel_refresh_cf_universe()). Replaces a ~20s inline scan of
+  -- 6 source tables (which tripped the edge/Hyperdrive ceiling → 503) with a
+  -- sub-second lookup. `district` is the alphabetical-max of the CF's districts
+  -- within the selected filter (mirrors the old max(d) behaviour).
   cfs AS (
-    SELECT nm, d AS district,
-           (SELECT string_agg(w, ' ' ORDER BY w)
-              FROM unnest(regexp_split_to_array(nm,' ')) w WHERE w <> '') AS sortkey
-    FROM (
-      SELECT nm, max(d) AS d FROM (
-        SELECT public.mel_norm_name(profiler_name)  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
-        UNION ALL SELECT public.mel_norm_name(submitter_name), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
-      ) allnames
-      WHERE nm <> '' AND nm ~ '[a-z]' AND nm ~ ' '
-        AND nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
-        AND (v_dl IS NULL OR d = ANY(v_dl))
-      GROUP BY nm
-    ) u
+    SELECT nm,
+           (SELECT max(x) FROM unnest(districts) x
+             WHERE v_dl IS NULL OR x = ANY(v_dl)) AS district,
+           sortkey
+    FROM public.mel_cf_universe
+    WHERE (v_dl IS NULL OR districts && v_dl)
   ),
   -- ---- A1 PROFILING: SHGs, youth, female/male, mobilized (for ratio & YiW) ----
   prof AS (
@@ -76,27 +69,32 @@ BEGIN
     GROUP BY 1
   ),
   -- ---- A9 TRAININGS: sourced from the Frontliners dashboard (at_rows), the
-  -- attendance-grain training data — NOT from profiling. Matched to the CF
-  -- universe on the normalised name key (data_collector is a lowercase, no-space
-  -- rendering of the collector's name; we prefix-match it to the CF key so
-  -- suffixes like "flep"/"teffe" on the data_collector still line up).
+  -- attendance-grain training data — NOT from profiling.
   -- youth_trained = attendance count (has_date); groups_trained = distinct groups.
+  -- PERF: at_rows has ~820k rows, so we FIRST collapse to one row per
+  -- data_collector via the indexed district/day columns, THEN fuzzy-match names
+  -- on that tiny set (matching raw rows caused 503 timeouts).
+  at_dc AS (
+    SELECT public.mel_norm_key(data_collector) AS k,
+           COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int AS groups_trained,
+           SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END)::int                AS youth_trained
+    FROM at_rows
+    WHERE data_collector IS NOT NULL
+      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR day >= p_date_from::text)
+      AND (p_date_to   IS NULL OR day <= p_date_to::text)
+    GROUP BY 1
+  ),
   trained AS (
     SELECT c.nm,
-           COUNT(DISTINCT a.group_id) FILTER (WHERE a.group_id IS NOT NULL)::int AS groups_trained,
-           SUM(CASE WHEN a.has_date = 1 THEN 1 ELSE 0 END)::int                  AS youth_trained
-    FROM at_rows a
+           SUM(a.groups_trained)::int AS groups_trained,
+           SUM(a.youth_trained)::int  AS youth_trained
+    FROM at_dc a
     JOIN cfs c ON (
-      public.mel_norm_key(a.data_collector) = public.mel_norm_key(c.nm)
-      OR (length(public.mel_norm_key(c.nm)) >= 8
-          AND public.mel_norm_key(a.data_collector) LIKE public.mel_norm_key(c.nm) || '%')
-      OR (length(public.mel_norm_key(a.data_collector)) >= 8
-          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(a.data_collector) || '%')
+      a.k = public.mel_norm_key(c.nm)
+      OR (length(public.mel_norm_key(c.nm)) >= 8 AND a.k LIKE public.mel_norm_key(c.nm) || '%')
+      OR (length(a.k) >= 8 AND public.mel_norm_key(c.nm) LIKE a.k || '%')
     )
-    WHERE a.data_collector IS NOT NULL
-      AND (v_dl IS NULL OR upper(a.district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR a.day >= p_date_from::text)
-      AND (p_date_to   IS NULL OR a.day <= p_date_to::text)
     GROUP BY c.nm
   ),
   -- NOTE: trainings are now sourced ONLY from at_rows (the `trained` CTE above),
