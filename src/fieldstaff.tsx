@@ -157,9 +157,12 @@ export function renderFieldStaff(base: string): string {
       try{
         if(TAB==='people'){
           const rows = await jget(API+'/api/field-staff/people?q='+q+'&district='+qd);
-          PEOPLE = rows;
+          PEOPLE = rows;                       // people tab: cache = the filtered view
           renderPeople(rows);
         }else{
+          // orphans tab: make sure we hold the FULL people list for the fold picker
+          // (independent of the search box), then load orphans.
+          if(!PEOPLE.length){ try{ PEOPLE = await jget(API+'/api/field-staff/people?q='); }catch(e){} }
           const rows = await jget(API+'/api/field-staff/orphans?q='+q);
           renderOrphans(rows);
         }
@@ -185,17 +188,21 @@ export function renderFieldStaff(base: string): string {
       el('tableWrap').innerHTML=h;
     }
 
+    let ORPHAN_TOTAL = 0;
     function renderOrphans(rows){
-      el('count').textContent = rows.length + ' unmatched names';
-      if(!rows.length){ el('tableWrap').innerHTML='<div class="empty">No unmatched profiler names — everything resolves to a person. 🎉</div>'; return; }
-      let h='<table><thead><tr><th>Profiler name (key)</th><th>Sources</th><th>Districts</th><th>Rows</th><th>Fold into…</th></tr></thead><tbody>';
+      const capped = rows.length >= 400;
+      el('count').textContent = rows.length + (capped ? '+ ' : ' ') + 'unmatched names';
+      if(!rows.length){ el('tableWrap').innerHTML='<div class="empty">No unmatched profiler names match — everything resolves to a person. 🎉</div>'; return; }
+      let h='';
+      if(capped){ h+='<div class="msg ok" style="display:block">Showing the first 400 (most active). Use the search box to narrow down a specific name.</div>'; }
+      h+='<table><thead><tr><th>Profiler name (key)</th><th>Sources</th><th>Districts</th><th>Rows</th><th style="width:320px">Fold into a CF…</th></tr></thead><tbody>';
       for(const o of rows){
         const srcs=(o.sources||[]).map(s=>'<span class="chip">'+esc(s)+'</span>').join('');
         const dists=(o.districts||[]).map(d=>'<span class="chip">'+esc(d)+'</span>').join('')||'<span class="muted">—</span>';
         const key=esc(o.name_key);
-        h+='<tr><td><strong class="num">'+key+'</strong></td>'
+        h+='<tr id="orow_'+key+'"><td><strong class="num">'+key+'</strong></td>'
           +'<td>'+srcs+'</td><td>'+dists+'</td><td class="num">'+o.act_rows+'</td>'
-          +'<td><div class="row"><input list="peoplelist" placeholder="type a name…" id="fold_'+key+'" />'
+          +'<td><div class="row"><input list="peoplelist" placeholder="type a CF name…" id="fold_'+key+'" style="flex:1" />'
           +'<button class="btn sm" onclick="foldOrphan(\\''+key+'\\')">Fold</button></div></td></tr>';
       }
       h+='</tbody></table>';
@@ -209,27 +216,40 @@ export function renderFieldStaff(base: string): string {
       return '<datalist id="peoplelist">'+opts+'</datalist>';
     }
     function pickPersonId(val){
-      // accepts "Name — FSS-xxxx" or a bare FSS id
+      // accepts "Name — FSS-xxxx", a bare FSS id, an exact name, or a unique substring
       if(!val) return null;
-      const m = String(val).match(/(FSS-\\d+)\\s*$/i);
-      if(m) return m[1];
-      const p=(PEOPLE||[]).find(x=>titlecase(x.display_name).toLowerCase()===String(val).trim().toLowerCase());
-      return p ? p.person_id : null;
+      const s = String(val).trim();
+      const m = s.match(/(FSS-\\d+)\\s*$/i);
+      if(m) return m[1].toUpperCase();
+      if(/^FSS-\\d+$/i.test(s)) return s.toUpperCase();
+      const low = s.toLowerCase();
+      // exact display-name match first
+      let p=(PEOPLE||[]).find(x=>titlecase(x.display_name).toLowerCase()===low);
+      if(p) return p.person_id;
+      // otherwise a UNIQUE substring match (so "titus" resolves if only one Titus)
+      const hits=(PEOPLE||[]).filter(x=>String(x.display_name||'').toLowerCase().includes(low));
+      if(hits.length===1) return hits[0].person_id;
+      return null;
     }
     function titlecase(s){ return String(s||'').replace(/\\b\\w/g,c=>c.toUpperCase()); }
 
     async function foldOrphan(key){
-      // ensure we have the people cache for the picker
-      if(!PEOPLE.length){ try{ PEOPLE=await jget(API+'/api/field-staff/people?q='); }catch(e){} }
-      const val = el('fold_'+key).value;
+      // always ensure we have the FULL people cache for the picker/resolver
+      try{ if(!PEOPLE.length) PEOPLE=await jget(API+'/api/field-staff/people?q='); }catch(e){}
+      const inp = el('fold_'+key);
+      const val = inp ? inp.value : '';
       const pid = pickPersonId(val);
-      if(!pid){ flash('err','Pick a person from the list (or paste their FSS id).'); return; }
+      if(!pid){ flash('err','Type a CF name that matches exactly one person (or pick from the dropdown / paste their FSS-id).'); return; }
       try{
-        flash('ok','Folding '+key+' → '+pid+' …');
+        const btnRow = el('orow_'+key);
+        flash('ok','Folding "'+key+'" → '+pid+' … (rebuilding identities)');
         const j=await jpost(API+'/api/field-staff/add-alias', { person_id: pid, alias_key: key, note: 'admin fold from orphans' });
-        flash('ok','Done. '+key+' now resolves to '+pid+'. Universe = '+j.universe+' CFs.');
-        load();
-      }catch(e){ flash('err', e.message); }
+        // optimistic: drop the row from the table immediately so the change is visible
+        if(btnRow){ btnRow.style.transition='opacity .3s'; btnRow.style.opacity='0'; setTimeout(()=>{ if(btnRow.parentNode) btnRow.parentNode.removeChild(btnRow); }, 320); }
+        flash('ok','✓ Folded "'+key+'" into '+pid+'. That name now rolls up to the CF. Universe = '+j.universe+' CFs.');
+        // refresh from server after the rebuild has settled (avoids showing the just-folded name again)
+        setTimeout(load, 1200);
+      }catch(e){ flash('err','Fold failed: '+e.message); }
     }
 
     async function openPerson(pid){
@@ -252,29 +272,29 @@ export function renderFieldStaff(base: string): string {
       // rename
       h+='<div class="sect"><h3>Display name</h3><div class="row">'
         +'<input id="rn" value="'+esc(p.display_name||'')+'" />'
-        +'<button class="btn sm" onclick="doRename(\\''+esc(pid)+'\\')">Rename</button></div></div>';
+        +'<button class="btn sm" onclick="doRename(event,\\''+esc(pid)+'\\')">Rename</button></div></div>';
       // accounts
       h+='<div class="sect"><h3>Accounts ('+accts.length+')</h3>';
       if(accts.length<=1){ h+='<div class="muted" style="font-size:12px">Single account — no duplicates.</div>'; }
       for(const a of accts){
-        const badge = a.is_primary ? '<span class="chip">primary</span>' : '<button class="btn sm danger" onclick="unmerge(\\''+esc(a.ref_id)+'\\')">unlink</button>';
+        const badge = a.is_primary ? '<span class="chip">primary</span>' : '<button class="btn sm danger" onclick="unmerge(event,\\''+esc(a.ref_id)+'\\')">unlink</button>';
         h+='<div class="acct"><div><strong class="num">'+esc(a.ref_id)+'</strong> — '+esc(a.first_name||'')+' '+esc(a.last_name||'')
           +'<div class="muted" style="font-size:11px">@'+esc(a.username||'')+' · '+esc(a.district||'')+(a.enabled?'':' · disabled')+'</div></div>'+badge+'</div>';
       }
       // merge another account into this one
       h+='<div class="row" style="margin-top:8px"><input list="peoplelist" id="mergeSel" placeholder="merge another CF into this one…" />'
-        +'<button class="btn sm" onclick="mergeInto(\\''+esc(pid)+'\\')">Merge in</button></div>';
+        +'<button class="btn sm" onclick="mergeInto(event,\\''+esc(pid)+'\\')">Merge in</button></div>';
       h+=peopleDatalist();
       h+='</div>';
       // aliases
       h+='<div class="sect"><h3>Name keys ('+aliases.length+')</h3><div>';
       for(const al of aliases){
-        const man = al.is_manual ? ' <button class="btn sm danger" onclick="delAlias(\\''+esc(pid)+'\\',\\''+esc(al.alias_key)+'\\')">×</button>' : '';
+        const man = al.is_manual ? ' <button class="btn sm danger" onclick="delAlias(event,\\''+esc(pid)+'\\',\\''+esc(al.alias_key)+'\\')">×</button>' : '';
         const cls = al.is_manual ? 'chip warn' : 'chip';
         h+='<span class="'+cls+'">'+esc(al.alias_key)+' ('+esc(al.kind)+')'+man+'</span>';
       }
       h+='</div><div class="row" style="margin-top:8px"><input id="aliasIn" placeholder="add a name / variant this CF uses…" />'
-        +'<button class="btn sm" onclick="addAliasManual(\\''+esc(pid)+'\\')">Add key</button></div></div>';
+        +'<button class="btn sm" onclick="addAliasManual(event,\\''+esc(pid)+'\\')">Add key</button></div></div>';
       // activity
       h+='<div class="sect"><h3>Activity resolved to this person</h3>';
       if(!acts.length){ h+='<div class="muted" style="font-size:12px">No activity yet.</div>'; }
@@ -283,18 +303,82 @@ export function renderFieldStaff(base: string): string {
       // transfer SHG owner
       h+='<div class="sect"><h3>Transfer an SHG to this person</h3>'
         +'<div class="row"><input id="shgName" placeholder="SHG / group name…" />'
-        +'<button class="btn sm" onclick="transferShg(\\''+esc(pid)+'\\')">Transfer</button></div>'
+        +'<button class="btn sm" onclick="transferShg(event,\\''+esc(pid)+'\\')">Transfer</button></div>'
         +'<div class="muted" style="font-size:11px">Records an ownership override for that group.</div></div>';
       return h;
     }
 
     // ---- drawer actions ----
-    async function doRename(pid){ try{ const nm=el('rn').value.trim(); const j=await jpost(API+'/api/field-staff/rename',{person_id:pid,display_name:nm}); flash('ok','Renamed. Universe='+j.universe); openPerson(pid); load(); }catch(e){ flash('err',e.message);} }
-    async function mergeInto(keepPid){ const val=el('mergeSel').value; const loserPid=pickPersonId(val); if(!loserPid){ flash('err','Pick the CF to merge in.'); return; } if(loserPid===keepPid){ flash('err','Cannot merge a person into themselves.'); return; } try{ flash('ok','Merging…'); const j=await jpost(API+'/api/field-staff/merge',{loser_ref:loserPid,keep_ref:keepPid,note:'admin merge'}); flash('ok','Merged '+loserPid+' → '+keepPid+'. Universe='+j.universe); openPerson(keepPid); load(); }catch(e){ flash('err',e.message);} }
-    async function unmerge(ref){ try{ const j=await jpost(API+'/api/field-staff/unmerge',{loser_ref:ref}); flash('ok','Unlinked '+ref+'. Universe='+j.universe); load(); el('drawerBg').classList.remove('show'); el('drawer').classList.remove('show'); }catch(e){ flash('err',e.message);} }
-    async function addAliasManual(pid){ const k=el('aliasIn').value.trim(); if(!k){ return; } try{ const j=await jpost(API+'/api/field-staff/add-alias',{person_id:pid,alias_key:k,note:'admin manual'}); flash('ok','Added. Universe='+j.universe); openPerson(pid); }catch(e){ flash('err',e.message);} }
-    async function delAlias(pid,k){ try{ const j=await jpost(API+'/api/field-staff/del-alias',{person_id:pid,alias_key:k}); flash('ok','Removed. Universe='+j.universe); openPerson(pid); }catch(e){ flash('err',e.message);} }
-    async function transferShg(pid){ const g=el('shgName').value.trim(); if(!g){ return; } try{ const j=await jpost(API+'/api/field-staff/transfer-shg',{group_name:g,person_id:pid,note:'admin transfer'}); flash('ok','SHG "'+g+'" ownership set. key='+j.group_key); }catch(e){ flash('err',e.message);} }
+    // Small helper: run a drawer write, disable the button while it works,
+    // then re-open the drawer (fresh data) and refresh the underlying list so
+    // the change is always visible.
+    async function drawerAction(ev, workingLabel, fn){
+      const btn = ev && ev.target ? ev.target : null;
+      let old;
+      if(btn){ old=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spin"></span> '+workingLabel; }
+      try{ await fn(); }
+      catch(e){ flash('err', (e && e.message) ? e.message : String(e)); }
+      finally{ if(btn){ btn.disabled=false; btn.innerHTML=old; } }
+    }
+
+    async function doRename(ev,pid){
+      const nm=el('rn').value.trim();
+      if(!nm){ flash('err','Type a display name first.'); return; }
+      await drawerAction(ev,'Renaming…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/rename',{person_id:pid,display_name:nm});
+        flash('ok','✓ Renamed to "'+nm+'". Universe = '+j.universe+' CFs.');
+        el('dName').textContent = titlecase(nm);
+        await openPerson(pid); load();
+      });
+    }
+    async function mergeInto(ev,keepPid){
+      const val=el('mergeSel').value;
+      const loserPid=pickPersonId(val);
+      if(!loserPid){ flash('err','Pick the CF to merge in (name that matches one person, or paste their FSS-id).'); return; }
+      if(loserPid===keepPid){ flash('err','Cannot merge a person into themselves.'); return; }
+      await drawerAction(ev,'Merging…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/merge',{loser_ref:loserPid,keep_ref:keepPid,note:'admin merge'});
+        flash('ok','✓ Merged '+loserPid+' into this CF. Both now report as one. Universe = '+j.universe+' CFs.');
+        PEOPLE=[]; // invalidate cache so merged-away CF disappears from pickers
+        await openPerson(keepPid); load();
+      });
+    }
+    async function unmerge(ev,ref){
+      if(!confirm('Unlink account '+ref+' from this person? It becomes a separate CF again.')) return;
+      await drawerAction(ev,'Unlinking…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/unmerge',{loser_ref:ref});
+        flash('ok','✓ Unlinked '+ref+'. It is a separate CF again. Universe = '+j.universe+' CFs.');
+        PEOPLE=[];
+        closeDrawer(); load();
+      });
+    }
+    async function addAliasManual(ev,pid){
+      const k=el('aliasIn').value.trim();
+      if(!k){ flash('err','Type a name / variant first.'); return; }
+      await drawerAction(ev,'Adding…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/add-alias',{person_id:pid,alias_key:k,note:'admin manual'});
+        flash('ok','✓ Added name key "'+k+'". Activity under that name now rolls up here. Universe = '+j.universe+' CFs.');
+        await openPerson(pid); load();
+      });
+    }
+    async function delAlias(ev,pid,k){
+      if(!confirm('Remove the manual name key "'+k+'" from this person?')) return;
+      await drawerAction(ev,'Removing…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/del-alias',{person_id:pid,alias_key:k});
+        flash('ok','✓ Removed name key "'+k+'". Universe = '+j.universe+' CFs.');
+        await openPerson(pid); load();
+      });
+    }
+    async function transferShg(ev,pid){
+      const g=el('shgName').value.trim();
+      if(!g){ flash('err','Type an SHG / group name first.'); return; }
+      await drawerAction(ev,'Transferring…', async ()=>{
+        const j=await jpost(API+'/api/field-staff/transfer-shg',{group_name:g,person_id:pid,note:'admin transfer'});
+        flash('ok','✓ SHG "'+g+'" now owned by this CF (key '+j.group_key+').');
+        el('shgName').value='';
+        await openPerson(pid); load();
+      });
+    }
 
     async function doRefresh(){ const b=el('refresh'); b.disabled=true; const old=b.innerHTML; b.innerHTML='<span class="spin"></span> Refreshing…'; try{ const j=await jpost(API+'/api/cf-universe/refresh',{}); flash('ok','Identity refresh done. '+ (j.cfs||0) +' CFs in universe.'); load(); }catch(e){ flash('err',e.message);} finally{ b.disabled=false; b.innerHTML=old; } }
 

@@ -60,28 +60,31 @@ CREATE OR REPLACE FUNCTION public.mel_cf_report_staff(
 LANGUAGE plpgsql STABLE AS $$
 DECLARE v jsonb; v_dl text[];
 BEGIN
+  -- Task E: the CF picker now reads from the CANONICAL universe (mel_cf_universe),
+  -- NOT from a fresh scan of raw activity names. This fixes two bugs:
+  --   * single-word profiler names (e.g. "Abubakar") were dropped by the old
+  --     `nm ~ ' '` (2-word) rule, so those CFs never appeared in the picker;
+  --   * a CF appeared under a garbled raw variant ("Titus Hillary Sebaiga")
+  --     instead of their official name ("Titus Sebayiga").
+  -- The universe row's `nm` (normalised full name) is what mel_cf_report()
+  -- resolves via akeys, so `key = nm` keeps the report join correct while
+  -- `name` shows the clean initcap version.
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
-  WITH allnames AS (
-    SELECT public.mel_norm_name(profiler_name)  AS nm, upper(district)      AS d FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM production_rows      WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM poultry_sales_rows   WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_name) FROM sales_rows           WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(profilers_name), upper(district_shg)  FROM isla_final_rows       WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT public.mel_norm_name(submitter_name), upper(district)      FROM local_leverage_rows   WHERE submitter_name IS NOT NULL
-  ),
-  filtered AS (
-    SELECT nm, count(*) c FROM allnames
-    WHERE nm <> '' AND nm ~ '[a-z]'          -- must contain a letter (drop phone-only)
-      AND nm ~ ' '                           -- must have at least 2 words (drop single-word junk like "a","aman")
-      -- drop obvious non-person / group entries
-      AND nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
-      AND (v_dl IS NULL OR d = ANY(v_dl))
-    GROUP BY nm
-  )
-  SELECT coalesce(jsonb_agg(jsonb_build_object('key', nm, 'name', initcap(nm), 'activities', c) ORDER BY initcap(nm)), '[]'::jsonb)
-  INTO v FROM filtered;
+  SELECT coalesce(jsonb_agg(
+           jsonb_build_object('key', nm, 'name', initcap(nm), 'activities', acts)
+           ORDER BY initcap(nm)), '[]'::jsonb)
+  INTO v
+  FROM (
+    SELECT u.nm,
+           -- count of activity keys as a cheap "how active" hint
+           COALESCE(array_length(u.akeys,1),0) AS acts
+    FROM public.mel_cf_universe u
+    WHERE (v_dl IS NULL OR u.districts && v_dl)
+      AND u.nm <> '' AND u.nm ~ '[a-z]'
+      AND u.nm !~ '(group|association|farmers|youth farmers|provision of|self help|shg|village|cluster|community)'
+  ) q;
   RETURN v;
 END;
 $$;
