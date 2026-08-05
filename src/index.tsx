@@ -10,6 +10,7 @@ import {
   frontlinerDash, refreshFrontliners,
   distributionDash, distributionDetail, distributionOptions, refreshDistribution,
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
+  refreshCfUniverse,
   shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
   islaDash, islaOptions, refreshIsla, valueChainSales,
   productionDash, productionOptions, productionDetail, refreshProduction,
@@ -1388,6 +1389,17 @@ app.get('/api/cf-premier-league', async (c) => {
   return c.json(data);
 });
 
+// Manually rebuild the CF universe cache (the "Refresh CF list" button). Also
+// runs automatically every 15 min via the VM cron (?only=cfuniverse).
+app.post('/api/cf-universe/refresh', async (c) => {
+  try {
+    const n = await refreshCfUniverse(storeEnv(c));
+    return c.json({ ok: true, cfs: n });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
 // ---- CF Payment Report (all CFs in one month-end report, grade instead of status) ----
 app.get('/cf-payment-report', (c) => c.html(renderCfPaymentReport(baseUrl(c.req.url))));
 app.get('/api/cf-payment-report', async (c) => {
@@ -1567,6 +1579,8 @@ app.all('/api/refresh-all', async (c) => {
   if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
+  // CF universe cache — cheap; keeps the CF Report/League/Payment CF list current.
+  if (want('cfuniverse'))   jobs.push({ key: 'cfuniverse',   fn: () => refreshCfUniverse(env) });
 
   const results: Record<string, { ok: boolean; rows?: number; error?: string }> = {};
   for (const j of jobs) {
@@ -1677,6 +1691,11 @@ sync_call "run" "$BASE/api/mis-sync/run"
 for c in cluster newyouth; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
+
+# 2b) Rebuild the CF universe cache every tick (cheap ~1s). Keeps the CF list on
+#     the CF Report / Premier League / Payment Report current within 15 min as
+#     new Community Facilitators are ingested — no manual refresh needed.
+echo -n "refresh cfuniverse: "; curl -s --max-time 60 -X POST "$BASE/api/refresh-all?only=cfuniverse"; echo
 
 # 3) Warm ONLY the two heaviest caches every tick (these are the ones whose cold
 #    compute over ~765k rows caused the CPU-limit outages). The rest are warmed

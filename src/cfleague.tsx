@@ -169,7 +169,8 @@ export function renderCfPremierLeague(base: string): string {
     <button class="btn" id="apply"><i class="fas fa-rotate"></i> Update</button>
     <button class="btn ghost" id="clearDates">Clear dates</button>
     <button class="btn" id="print"><i class="fas fa-print"></i> Print league table</button>
-    <span class="toolnote">A4 · print-ready · royal blue / white</span>
+    <button class="btn ghost" id="refreshCf" title="Rebuild the CF list from the latest MIS data. Runs automatically every 15 minutes."><i class="fas fa-users-rays"></i> Refresh CF list</button>
+    <span class="toolnote">A4 · print-ready · royal blue / white · CF list auto-refreshes every 15 min</span>
   </div>
 
   <div id="sheets">
@@ -374,6 +375,23 @@ export function renderCfPremierLeague(base: string): string {
       document.getElementById('from').value=''; document.getElementById('to').value=''; load();
     });
     document.getElementById('print').addEventListener('click', function(){ window.print(); });
+
+    // Manual "Refresh CF list" — rebuild the CF universe cache, then reload.
+    document.getElementById('refreshCf').addEventListener('click', async function(){
+      var b=this, old=b.innerHTML;
+      b.disabled=true; b.innerHTML='<i class="fas fa-spinner fa-spin"></i> Refreshing…';
+      try{
+        var r=await fetch('/api/cf-universe/refresh',{method:'POST'});
+        var j=await r.json();
+        if(!j.ok) throw new Error(j.error||'refresh failed');
+        b.innerHTML='<i class="fas fa-check"></i> '+j.cfs+' CFs';
+        await load();
+        setTimeout(function(){ b.innerHTML=old; b.disabled=false; }, 2500);
+      }catch(e){
+        b.innerHTML='<i class="fas fa-triangle-exclamation"></i> Failed';
+        setTimeout(function(){ b.innerHTML=old; b.disabled=false; }, 3000);
+      }
+    });
 
     load();
   </script>

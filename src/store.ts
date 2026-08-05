@@ -2146,6 +2146,14 @@ export async function refreshShgDistribution(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_shg_distribution_rows');
 }
 
+// ---- CF universe cache (mel_cf_universe) -----------------------------------
+// Rebuilds the pre-computed list of Community Facilitators that the CF Report /
+// Premier League / Payment Report read (instead of a ~20s inline scan). Cheap
+// (~1s); safe to run on every refresh cycle so newly-added CFs appear promptly.
+export async function refreshCfUniverse(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'mel_refresh_cf_universe');
+}
+
 // ---- SHG Profiling (shg_groups_view ⋈ Dim_SHG[shg_profiling_form]) ----------
 
 export interface ProfilingFilters {
