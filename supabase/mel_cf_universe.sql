@@ -21,9 +21,15 @@ CREATE TABLE IF NOT EXISTS public.mel_cf_universe (
   nm        text,
   ck        text,
   sortkey   text,
-  districts text[]
+  districts text[],
+  person_id text,      -- canonical person (NULL for unresolved orphan names)
+  akeys     text[]     -- ALL activity keys that resolve to this person (exact-match set)
 );
-CREATE INDEX IF NOT EXISTS mel_cf_universe_nm_idx ON public.mel_cf_universe(nm);
+CREATE INDEX IF NOT EXISTS mel_cf_universe_nm_idx  ON public.mel_cf_universe(nm);
+CREATE INDEX IF NOT EXISTS mel_cf_universe_pid_idx ON public.mel_cf_universe(person_id);
+-- Add columns if the table pre-existed without them (idempotent).
+ALTER TABLE public.mel_cf_universe ADD COLUMN IF NOT EXISTS person_id text;
+ALTER TABLE public.mel_cf_universe ADD COLUMN IF NOT EXISTS akeys text[];
 
 CREATE OR REPLACE FUNCTION public.mel_refresh_cf_universe()
  RETURNS integer
@@ -42,39 +48,68 @@ BEGIN
   --
   -- Prereq: mel_refresh_person_registry() and mel_refresh_activity_person()
   -- must have run first (the wrapper mel_refresh_cf_all() does all three).
-  CREATE TEMP TABLE _u ON COMMIT DROP AS
-  WITH person_rows AS (
-    SELECT public.mel_norm_name(p.display_name) AS nm,
-           upper(pd.district) AS d
-    FROM public.mel_person p
-    JOIN public.mel_person_district pd ON pd.person_id = p.person_id
-    WHERE coalesce(p.display_name,'') <> ''
-  ),
-  -- unresolved activity names (person_id IS NULL) that still carry a real name
-  orphan_rows AS (
-    SELECT ap.name_key AS nm, ap.district AS d
-    FROM public.mel_activity_person ap
-    WHERE ap.person_id IS NULL
-      AND ap.district <> ''
-      AND ap.name_key ~ '[a-z]'
-      AND ap.name_key !~ '(group|association|farmers|provision|selfhelp|shg|village|cluster|community)'
-  ),
-  allnames AS (
-    SELECT nm, d FROM person_rows
+  -- Person rows: one per canonical human. akeys = every alias key + every
+  -- activity name_key that resolved to them (so reports can exact-match ANY of
+  -- them, handling reversed names / short names / merged accounts uniformly).
+  CREATE TEMP TABLE _person_u ON COMMIT DROP AS
+  SELECT p.person_id,
+         public.mel_norm_name(p.display_name) AS nm,
+         (SELECT array_agg(DISTINCT pd.district)
+            FROM public.mel_person_district pd WHERE pd.person_id = p.person_id) AS districts,
+         (SELECT array_agg(DISTINCT k) FROM (
+             SELECT alias_key AS k FROM public.mel_person_alias a
+               WHERE a.person_id = p.person_id AND a.kind <> 'refid'
+             UNION
+             SELECT ap.name_key FROM public.mel_activity_person ap
+               WHERE ap.person_id = p.person_id
+          ) allk WHERE coalesce(k,'') <> '') AS akeys
+  FROM public.mel_person p
+  WHERE coalesce(p.display_name,'') <> '';
+
+  -- Orphan rows: unresolved activity names (kept visible so no work disappears).
+  CREATE TEMP TABLE _orphan_u ON COMMIT DROP AS
+  SELECT NULL::text AS person_id,
+         ap.name_key AS nm,
+         array_agg(DISTINCT ap.district) AS districts,
+         ARRAY[ap.name_key] AS akeys
+  FROM public.mel_activity_person ap
+  WHERE ap.person_id IS NULL
+    AND ap.district <> ''
+    AND ap.name_key ~ '[a-z]'
+    AND ap.name_key !~ '(group|association|farmers|provision|selfhelp|shg|village|cluster|community)'
+  GROUP BY ap.name_key;
+
+  -- Combine person + orphan rows into a flat (nm, person_id, district, akey) set
+  -- so we can dedupe by nm (the table PK) with plain array_agg(DISTINCT ...).
+  -- Two distinct persons can share a normalised display name; we merge their
+  -- districts/akeys and keep the min person_id => one row per name.
+  CREATE TEMP TABLE _flat ON COMMIT DROP AS
+  SELECT r.nm, r.person_id, d.district, k.akey
+  FROM (
+    SELECT person_id, nm, districts, akeys FROM _person_u
     UNION ALL
-    SELECT nm, d FROM orphan_rows
-  )
+    SELECT person_id, nm, districts, akeys FROM _orphan_u
+  ) r
+  LEFT JOIN LATERAL unnest(r.districts) AS d(district) ON true
+  LEFT JOIN LATERAL unnest(r.akeys)     AS k(akey)     ON true
+  WHERE coalesce(r.nm,'') <> '';
+
+  CREATE TEMP TABLE _u ON COMMIT DROP AS
   SELECT nm,
          public.mel_norm_key(nm) AS ck,
          (SELECT string_agg(w, ' ' ORDER BY w)
             FROM unnest(regexp_split_to_array(nm,' ')) w WHERE w <> '') AS sortkey,
-         array_agg(DISTINCT d) AS districts
-  FROM allnames
-  WHERE coalesce(nm,'') <> ''
+         COALESCE(array_agg(DISTINCT district) FILTER (WHERE coalesce(district,'')<>''),
+                  ARRAY[]::text[]) AS districts,
+         min(person_id) AS person_id,
+         COALESCE(array_agg(DISTINCT akey) FILTER (WHERE coalesce(akey,'')<>''),
+                  ARRAY[]::text[]) AS akeys
+  FROM _flat
   GROUP BY nm;
 
   TRUNCATE public.mel_cf_universe;
-  INSERT INTO public.mel_cf_universe SELECT * FROM _u;
+  INSERT INTO public.mel_cf_universe(nm, ck, sortkey, districts, person_id, akeys)
+  SELECT nm, ck, sortkey, districts, person_id, akeys FROM _u;
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n;
 END;

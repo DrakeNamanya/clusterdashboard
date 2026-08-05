@@ -35,31 +35,43 @@ BEGIN
   -- and returned 503) with a sub-second lookup. District filter is applied
   -- against the cached districts[] array so cluster/district slicing is intact.
   cfs AS (
-    SELECT nm, sortkey
+    SELECT nm, sortkey, akeys
     FROM public.mel_cf_universe
     WHERE (v_dl IS NULL OR districts && v_dl)
   ),
+  -- Task E: exact key -> canonical nm map, expanded from the universe akeys.
+  -- Every activity CTE resolves its normalised key against THIS (exact match on
+  -- ANY of the person's activity keys), so reversed names ("kisira abubakar" vs
+  -- "abubakarkisira"), short profiler names ("titus"/"abubakar") and merged
+  -- duplicate accounts all roll up to ONE canonical CF row.
+  keymap AS (
+    SELECT DISTINCT ak AS k, c.nm
+    FROM cfs c, unnest(c.akeys) AS ak
+    WHERE coalesce(ak,'') <> ''
+  ),
   -- ---- PROFILING: SHGs profiled + youth mobilized (for ratio & YiW target) ----
   prof AS (
-    SELECT public.mel_norm_name(profiler_name) AS nm,
+    SELECT km.nm,
            COUNT(*)::int AS shgs_profiled,
            COALESCE(SUM(total),0)::int AS youth_mobilized
-    FROM shg_profiling_rows
-    WHERE profiler_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR created_date >= p_date_from)
-      AND (p_date_to   IS NULL OR created_date <= p_date_to)
+    FROM shg_profiling_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.profiler_name)
+    WHERE r.profiler_name IS NOT NULL
+      AND (v_dl IS NULL OR upper(r.district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.created_date >= p_date_from)
+      AND (p_date_to   IS NULL OR r.created_date <= p_date_to)
     GROUP BY 1
   ),
   -- ---- SHGs SAVING (ISLA distinct SHGs) ----
   isla AS (
-    SELECT public.mel_norm_name(profilers_name) AS nm,
-           COUNT(DISTINCT shg_id)::int AS shgs_saving
-    FROM isla_final_rows
-    WHERE profilers_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district_shg)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    SELECT km.nm,
+           COUNT(DISTINCT r.shg_id)::int AS shgs_saving
+    FROM isla_final_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
+    WHERE r.profilers_name IS NOT NULL
+      AND (v_dl IS NULL OR upper(r.district_shg)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
+      AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
   ),
   -- ---- GROUPS TRAINED (from the Frontliners attendance master, at_rows) ----
@@ -82,37 +94,28 @@ BEGIN
     GROUP BY 1
   ),
   trained AS (
-    SELECT c.nm,
+    SELECT km.nm,
            SUM(a.groups_trained)::int AS groups_trained,
            SUM(a.youth_trained)::int  AS youth_trained
     FROM at_dc a
-    JOIN cfs c ON (
-      a.k = public.mel_norm_key(c.nm)
-      OR (length(public.mel_norm_key(c.nm)) >= 8 AND a.k LIKE public.mel_norm_key(c.nm) || '%')
-      OR (length(a.k) >= 8 AND public.mel_norm_key(c.nm) LIKE a.k || '%')
-    )
-    GROUP BY c.nm
+    JOIN keymap km ON km.k = a.k
+    GROUP BY km.nm
   ),
   -- ---- YOUTH INTO PRODUCTION = horticulture youth + bird recipients ----
   prod_hort_pairs AS (
-    SELECT DISTINCT public.mel_norm_name(profilers_name) AS nm, shg_participant_id AS pid
-    FROM production_rows
-    WHERE profilers_name IS NOT NULL AND lower(pdn_level)='production'
-      AND shg_participant_id IS NOT NULL
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    SELECT DISTINCT km.nm, r.shg_participant_id AS pid
+    FROM production_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
+    WHERE r.profilers_name IS NOT NULL AND lower(r.pdn_level)='production'
+      AND r.shg_participant_id IS NOT NULL
+      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
+      AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
   ),
   dist_matched AS (
-    SELECT c.nm, d.participant_id
+    SELECT km.nm, d.participant_id
     FROM distribution_rows d
-    JOIN cfs c ON (
-      public.mel_norm_key(d.submitted_by) = public.mel_norm_key(c.nm)
-      OR (length(public.mel_norm_key(c.nm)) >= 8
-          AND public.mel_norm_key(d.submitted_by) LIKE public.mel_norm_key(c.nm) || '%')
-      OR (length(public.mel_norm_key(d.submitted_by)) >= 8
-          AND public.mel_norm_key(c.nm) LIKE public.mel_norm_key(d.submitted_by) || '%')
-    )
+    JOIN keymap km ON km.k = public.mel_norm_key(d.submitted_by)
     WHERE lower(coalesce(d.material_type,'')) = 'livestock'
       AND d.livestock_type ILIKE '%poultry%'
       AND lower(coalesce(d.unit,'')) = 'number'
@@ -132,36 +135,39 @@ BEGIN
   ),
   -- ---- SALES (POULTRY): pass/fail — any birds sold ----
   poultry AS (
-    SELECT public.mel_norm_name(profilers_name) AS nm,
-           COALESCE(SUM(poultry_sold),0)::numeric AS birds_sold
-    FROM poultry_sales_rows
-    WHERE profilers_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    SELECT km.nm,
+           COALESCE(SUM(r.poultry_sold),0)::numeric AS birds_sold
+    FROM poultry_sales_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
+    WHERE r.profilers_name IS NOT NULL
+      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
+      AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
   ),
   -- ---- SALES (HORTICULTURE / OILSEEDS): pass/fail — any planting value ----
   hsales AS (
-    SELECT public.mel_norm_name(profilers_name) AS nm,
-           COALESCE(SUM(total_planting_value),0)::numeric AS hs_value
-    FROM sales_rows
-    WHERE profilers_name IS NOT NULL
-      AND lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    SELECT km.nm,
+           COALESCE(SUM(r.total_planting_value),0)::numeric AS hs_value
+    FROM sales_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
+    WHERE r.profilers_name IS NOT NULL
+      AND lower(coalesce(r.value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
+      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
+      AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
   ),
   -- ---- LOCAL LEVERAGE: pass/fail — any contribution ----
   lev AS (
-    SELECT public.mel_norm_name(submitter_name) AS nm,
+    SELECT km.nm,
            COUNT(*)::int AS lev_count
-    FROM local_leverage_rows
-    WHERE submitter_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR date_created >= p_date_from)
-      AND (p_date_to   IS NULL OR date_created <= p_date_to)
+    FROM local_leverage_rows r
+    JOIN keymap km ON km.k = public.mel_norm_key(r.submitter_name)
+    WHERE r.submitter_name IS NOT NULL
+      AND (v_dl IS NULL OR upper(r.district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR r.date_created >= p_date_from)
+      AND (p_date_to   IS NULL OR r.date_created <= p_date_to)
     GROUP BY 1
   ),
   -- ---- YOUTH IN WORK: employed youth, matched by interviewer sorted-token ----
