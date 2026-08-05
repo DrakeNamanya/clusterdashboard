@@ -188,23 +188,25 @@ export function renderFieldStaff(base: string): string {
       el('tableWrap').innerHTML=h;
     }
 
-    let ORPHAN_TOTAL = 0;
+    let ORPHANS = [];  // current orphan rows, referenced by index (keys may contain spaces/quotes)
     function renderOrphans(rows){
+      ORPHANS = rows || [];
       const capped = rows.length >= 400;
       el('count').textContent = rows.length + (capped ? '+ ' : ' ') + 'unmatched names';
       if(!rows.length){ el('tableWrap').innerHTML='<div class="empty">No unmatched profiler names match — everything resolves to a person. 🎉</div>'; return; }
       let h='';
       if(capped){ h+='<div class="msg ok" style="display:block">Showing the first 400 (most active). Use the search box to narrow down a specific name.</div>'; }
       h+='<table><thead><tr><th>Profiler name (key)</th><th>Sources</th><th>Districts</th><th>Rows</th><th style="width:320px">Fold into a CF…</th></tr></thead><tbody>';
-      for(const o of rows){
+      rows.forEach((o,i)=>{
         const srcs=(o.sources||[]).map(s=>'<span class="chip">'+esc(s)+'</span>').join('');
         const dists=(o.districts||[]).map(d=>'<span class="chip">'+esc(d)+'</span>').join('')||'<span class="muted">—</span>';
         const key=esc(o.name_key);
-        h+='<tr id="orow_'+key+'"><td><strong class="num">'+key+'</strong></td>'
+        // ids are index-based so orphan keys with spaces/quotes cannot break getElementById
+        h+='<tr id="orow_'+i+'"><td><strong class="num">'+key+'</strong></td>'
           +'<td>'+srcs+'</td><td>'+dists+'</td><td class="num">'+o.act_rows+'</td>'
-          +'<td><div class="row"><input list="peoplelist" placeholder="type a CF name…" id="fold_'+key+'" style="flex:1" />'
-          +'<button class="btn sm" onclick="foldOrphan(\\''+key+'\\')">Fold</button></div></td></tr>';
-      }
+          +'<td><div class="row"><input list="peoplelist" placeholder="type a CF name…" id="fold_'+i+'" style="flex:1" />'
+          +'<button class="btn sm" onclick="foldOrphan('+i+')">Fold</button></div></td></tr>';
+      });
       h+='</tbody></table>';
       h+=peopleDatalist();
       el('tableWrap').innerHTML=h;
@@ -216,12 +218,14 @@ export function renderFieldStaff(base: string): string {
       return '<datalist id="peoplelist">'+opts+'</datalist>';
     }
     function pickPersonId(val){
-      // accepts "Name — FSS-xxxx", a bare FSS id, an exact name, or a unique substring
+      // accepts "Name — FSS-xxxx", a bare FSS id, an exact name, or a unique substring.
+      // NOTE: person_ids are FSS- followed by alphanumerics (e.g. FSS-00000982 OR
+      // manually-created ones like FSS-7W5T5E), so match [A-Z0-9], not just digits.
       if(!val) return null;
       const s = String(val).trim();
-      const m = s.match(/(FSS-\\d+)\\s*$/i);
+      const m = s.match(/(FSS-[A-Za-z0-9]+)\\s*$/);
       if(m) return m[1].toUpperCase();
-      if(/^FSS-\\d+$/i.test(s)) return s.toUpperCase();
+      if(/^FSS-[A-Za-z0-9]+$/.test(s)) return s.toUpperCase();
       const low = s.toLowerCase();
       // exact display-name match first
       let p=(PEOPLE||[]).find(x=>titlecase(x.display_name).toLowerCase()===low);
@@ -233,23 +237,27 @@ export function renderFieldStaff(base: string): string {
     }
     function titlecase(s){ return String(s||'').replace(/\\b\\w/g,c=>c.toUpperCase()); }
 
-    async function foldOrphan(key){
+    async function foldOrphan(i){
       // always ensure we have the FULL people cache for the picker/resolver
       try{ if(!PEOPLE.length) PEOPLE=await jget(API+'/api/field-staff/people?q='); }catch(e){}
-      const inp = el('fold_'+key);
+      const o = ORPHANS[i]; if(!o){ flash('err','Row expired — reload the list.'); return; }
+      const key = o.name_key;
+      const inp = el('fold_'+i);
       const val = inp ? inp.value : '';
       const pid = pickPersonId(val);
       if(!pid){ flash('err','Type a CF name that matches exactly one person (or pick from the dropdown / paste their FSS-id).'); return; }
+      const btn = event && event.target ? event.target : null;
+      let old; if(btn){ old=btn.innerHTML; btn.disabled=true; btn.innerHTML='<span class="spin"></span> Folding…'; }
       try{
-        const btnRow = el('orow_'+key);
-        flash('ok','Folding "'+key+'" → '+pid+' … (rebuilding identities)');
+        const btnRow = el('orow_'+i);
         const j=await jpost(API+'/api/field-staff/add-alias', { person_id: pid, alias_key: key, note: 'admin fold from orphans' });
         // optimistic: drop the row from the table immediately so the change is visible
         if(btnRow){ btnRow.style.transition='opacity .3s'; btnRow.style.opacity='0'; setTimeout(()=>{ if(btnRow.parentNode) btnRow.parentNode.removeChild(btnRow); }, 320); }
         flash('ok','✓ Folded "'+key+'" into '+pid+'. That name now rolls up to the CF. Universe = '+j.universe+' CFs.');
         // refresh from server after the rebuild has settled (avoids showing the just-folded name again)
         setTimeout(load, 1200);
-      }catch(e){ flash('err','Fold failed: '+e.message); }
+      }catch(e){ flash('err','Fold failed: '+((e&&e.message)||e)); }
+      finally{ if(btn){ btn.disabled=false; btn.innerHTML=old; } }
     }
 
     async function openPerson(pid){

@@ -291,7 +291,22 @@ ${navSidebar('home')}
     // Always bypass HTTP cache so a filter change re-fetches fresh data (a repeated
     // querystring must not be served from the browser/CDN cache — that was making the
     // dashboard look like it "didn't respond" to the cluster/date filters).
-    async function j(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+    async function j(url){
+      // Retry transient failures (503/500/network) with a short backoff. A single
+      // hiccup on the shared DB connection must NOT collapse a whole card to 0.
+      let lastErr;
+      for(let attempt=0; attempt<3; attempt++){
+        try{
+          const r=await fetch(url,{cache:'no-store'});
+          if(r.ok) return r.json();
+          // 5xx = transient → retry; 4xx = permanent → stop
+          if(r.status<500) throw new Error('HTTP '+r.status);
+          lastErr=new Error('HTTP '+r.status);
+        }catch(e){ lastErr=e; }
+        await new Promise(res=>setTimeout(res, 400*(attempt+1)));
+      }
+      throw lastErr||new Error('request failed');
+    }
 
     // ---------------- filters ----------------
     // Cluster → district list (single source of truth, matches clusters.ts).
@@ -714,7 +729,13 @@ ${navSidebar('home')}
     }
 
     // ---------------- orchestration ----------------
+    // Monotonic run token: if the user changes a filter again (or freshness poll
+    // fires) while a load is in flight, the older run is abandoned so its late
+    // responses cannot overwrite / zero the newer selection's cells.
+    let RUN_SEQ = 0;
     function loadAll(){
+      const myRun = ++RUN_SEQ;
+      const isCurrent = ()=> myRun===RUN_SEQ;
       // Reset EVERY value element (by data-f) back to the loading state on each
       // refilter. NB: loaders remove the .skel class after first load, so a plain
       // '.skel' selector would match nothing on the 2nd+ load and the cards would
@@ -737,6 +758,7 @@ ${navSidebar('home')}
       // Worker's per-request CPU budget and produced the 1,032 "Exceeded CPU
       // Time Limits" errors. Throttling to 3-at-a-time keeps each request cheap
       // while still loading the whole page quickly.
+      const failed=[];   // loader keys that errored after all retries
       const runThrottled=(entries, limit)=>{
         const list=entries.slice(); let active=0;
         return new Promise((resolve)=>{
@@ -744,7 +766,9 @@ ${navSidebar('home')}
             if(list.length===0 && active===0){ resolve(); return; }
             while(active<limit && list.length){
               const [k,fn]=list.shift(); active++;
-              Promise.resolve().then(fn).catch(err=>{ console.error(k,err); }).finally(()=>{ active--; next(); });
+              Promise.resolve().then(fn)
+                .catch(err=>{ console.error(k,err); failed.push(k); })
+                .finally(()=>{ active--; next(); });
             }
           };
           next();
@@ -752,15 +776,23 @@ ${navSidebar('home')}
       };
       const jobs=runThrottled(Object.entries(loaders), 3);
       Promise.resolve(jobs).then(()=>{
-        // Failsafe: any value cell still showing the loading skeleton means its
-        // loader errored (or the API returned nothing) for this selection.
-        // Show a real "0" instead of leaving a blank/… card, so a filter that
-        // legitimately has no data (or an endpoint that hiccuped) never looks
-        // like the dashboard "brought empty cards".
+        // A newer load started while this one was running — abandon this result so
+        // stale numbers/zeros can't flash over the current selection.
+        if(!isCurrent()) return;
+        // Failsafe: any cell STILL showing the skeleton belongs to a loader that
+        // either (a) genuinely returned no data for this selection → show 0, or
+        // (b) errored after retries → show a dash + let auto-refresh retry, rather
+        // than a misleading 0. We can only distinguish the two when NO loader
+        // failed: if every loader succeeded, a leftover skel = real zero.
+        const anyFailed = failed.length>0;
         document.querySelectorAll('[data-f].skel').forEach(el=>{
           el.classList.remove('skel');
-          el.textContent = el.hasAttribute('data-money') ? 'UGX 0' : '0';
+          if(anyFailed){ el.textContent='—'; el.title='Could not load — refreshing…'; }
+          else { el.textContent = el.hasAttribute('data-money') ? 'UGX 0' : '0'; }
         });
+        // If something failed, quietly retry the whole load once after a short
+        // pause (the shared DB connection may have been momentarily busy).
+        if(anyFailed){ setTimeout(()=>{ if(isCurrent()) loadAll(); }, 2500); }
         const cl=(document.getElementById('fCluster')||{}).value||'all';
         const clLbl={all:'All clusters',iganga:'Iganga Cluster',kamuli:'Kamuli Cluster',bugiri:'Bugiri Cluster',central:'Central Cluster'}[cl]||'All clusters';
         const from=(document.getElementById('fFrom')||{}).value, to=(document.getElementById('fTo')||{}).value;
