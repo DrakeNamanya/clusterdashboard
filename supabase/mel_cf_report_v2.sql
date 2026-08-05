@@ -14,6 +14,7 @@ DECLARE
   v_dl   text[];
   v_keys text[];
   v_nokeys text[];
+  v_akeys  text[];
   v_label text;
 BEGIN
   SELECT array_agg(DISTINCT public.mel_norm_name(x))
@@ -31,13 +32,31 @@ BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
   ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
+  -- Task E: resolve the selected CF to its canonical person via the CF universe
+  -- and pull that person's FULL activity key-set (akeys). This lets reversed
+  -- names, short profiler names and merged duplicate accounts all roll up to the
+  -- one CF card. We match the universe row(s) by the normalised no-space key of
+  -- the selected name(s), then union all their akeys. Falls back to v_nokeys when
+  -- nothing resolves (keeps old behaviour for names not yet in the universe).
+  SELECT array_agg(DISTINCT ak)
+    INTO v_akeys
+    FROM public.mel_cf_universe u, unnest(u.akeys) ak
+   WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) nk
+                 WHERE nk = ANY(u.akeys) OR public.mel_norm_key(u.nm) = nk)
+     AND coalesce(ak,'') <> '';
+  -- Always include the raw input keys so a bare name still matches its own rows.
+  v_akeys := (SELECT array_agg(DISTINCT k)
+                FROM unnest(coalesce(v_akeys, ARRAY[]::text[]) || v_nokeys) k
+               WHERE coalesce(k,'') <> '');
+  IF v_akeys IS NULL OR array_length(v_akeys,1) IS NULL THEN v_akeys := v_nokeys; END IF;
+
   WITH
   sexmap AS (
     SELECT DISTINCT participant_id, sex FROM at_rows WHERE participant_id IS NOT NULL
   ),
   prof AS (
     SELECT * FROM shg_profiling_rows
-    WHERE public.mel_norm_name(profiler_name) = ANY(v_keys)
+    WHERE public.mel_norm_key(profiler_name) = ANY(v_akeys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR created_date >= p_date_from)
       AND (p_date_to   IS NULL OR created_date <= p_date_to)
@@ -80,17 +99,12 @@ BEGIN
       COALESCE(SUM(a.training_areas),0)::int                      AS training_areas,
       COALESCE(SUM(a.groups_trained),0)::int                      AS groups_trained
     FROM at_dc a
-    WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) k
-                  WHERE a.k = k
-                     OR (length(k) >= 8 AND a.k LIKE k || '%')
-                     OR (length(a.k) >= 8 AND k LIKE a.k || '%'))
+    WHERE a.k = ANY(v_akeys)
   ),
   -- ---------- DISTRIBUTION (all lines, for the "items handed out" text) ----------
   dist AS (
     SELECT * FROM distribution_rows
-    WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) k
-                  WHERE public.mel_norm_key(submitted_by) = k
-                     OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))
+    WHERE public.mel_norm_key(submitted_by) = ANY(v_akeys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
@@ -121,7 +135,7 @@ BEGIN
   -- Youth into Production(horticulture) = youth in the horticulture production form.
   prod AS (
     SELECT * FROM production_rows
-    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys) AND lower(pdn_level)='production'
+    WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys) AND lower(pdn_level)='production'
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -157,7 +171,7 @@ BEGIN
   ),
   hs AS (
     SELECT * FROM sales_rows
-    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
+    WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys)
       AND lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
@@ -171,7 +185,7 @@ BEGIN
     FROM hs s LEFT JOIN sexmap sm ON sm.participant_id = s.shg_participant_id ),
   ps AS (
     SELECT * FROM poultry_sales_rows
-    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
+    WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys)
       AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -185,7 +199,7 @@ BEGIN
     FROM ps p LEFT JOIN sexmap sm ON sm.participant_id = p.shg_participant_id ),
   isla AS (
     SELECT * FROM isla_final_rows
-    WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
+    WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys)
       AND (v_dl IS NULL OR upper(district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
@@ -197,7 +211,7 @@ BEGIN
                      COALESCE(SUM(CASE WHEN loans > 35 THEN 30 ELSE loans END),0)::int AS youth_loans FROM isla ),
   lev AS (
     SELECT * FROM local_leverage_rows
-    WHERE public.mel_norm_name(submitter_name) = ANY(v_keys)
+    WHERE public.mel_norm_key(submitter_name) = ANY(v_akeys)
       AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR date_created >= p_date_from)
       AND (p_date_to   IS NULL OR date_created <= p_date_to)
