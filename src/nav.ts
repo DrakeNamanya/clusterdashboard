@@ -20,6 +20,9 @@ export interface NavItem {
   // collapsible category header (see NAV_GROUPS). Ungrouped items render
   // stand-alone in their position in the list.
   group?: string;
+  // When true, the item is padlocked: a small lock icon is shown and the link
+  // only navigates after the correct passcode is entered (a soft admin gate).
+  locked?: boolean;
 }
 
 // Category headers for grouped items. `key` matches NavItem.group.
@@ -64,8 +67,8 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'poultrysales', href: '/poultry-sales', label: 'Poultry Sales', icon: 'fa-kiwi-bird', group: 'grp-sales' },
   { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation', group: 'grp-sales' },
   { key: 'localleverage', href: '/local-leverage', label: 'Local Leverage', icon: 'fa-hand-holding-dollar' },
-  { key: 'fieldstaff', href: '/field-staff', label: 'Field Staff (CF Registry)', icon: 'fa-users-gear' },
-  { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom' },
+  { key: 'fieldstaff', href: '/field-staff', label: 'Field Staff (CF Registry)', icon: 'fa-users-gear', locked: true },
+  { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom', locked: true },
 ];
 
 // CSS + toggle script for the sidebar. Include ONCE per page (navSidebar puts
@@ -74,9 +77,13 @@ export const NAV_ITEMS: NavItem[] = [
 export function navSidebar(activeKey: string): string {
   const itemLink = (it: NavItem, inGroup: boolean): string => {
     const active = it.key === activeKey;
-    return `<a href="${it.href}" class="shg-nav-item${inGroup ? ' shg-nav-sub' : ''}${active ? ' active' : ''}"${active ? ' aria-current="page"' : ''}>
+    const lock = it.locked
+      ? `<span class="shg-nav-lock" title="Locked — admin only"><i class="fas fa-lock"></i></span>`
+      : '';
+    return `<a href="${it.href}" class="shg-nav-item${inGroup ? ' shg-nav-sub' : ''}${active ? ' active' : ''}${it.locked ? ' shg-nav-locked' : ''}"${active ? ' aria-current="page"' : ''}${it.locked ? ' data-locked="1"' : ''}>
         <span class="shg-nav-ico"><i class="fas ${it.icon}"></i></span>
         <span class="shg-nav-label">${it.label}</span>
+        ${lock}
       </a>`;
   };
 
@@ -154,6 +161,10 @@ export function navSidebar(activeKey: string): string {
     }
     .shg-nav-item.active .shg-nav-ico{ background:#dbe7f1; color:var(--shg-navy); }
     .shg-nav-label{ line-height:1.15; }
+    /* Padlocked (admin-only) items: dim the lock badge on the right edge. */
+    .shg-nav-lock{ margin-left:auto; color:#b6120f; font-size:13px; flex:none; }
+    .shg-nav-item.shg-nav-unlocked .shg-nav-lock{ color:#1a9c4b; }
+    .shg-nav-item.shg-nav-unlocked .shg-nav-lock i:before{ content:"\\f09c"; } /* fa-lock-open */
     /* ---- Collapsible category groups (Distribution, Sales) ---- */
     .shg-nav-group{ border-bottom:1px solid #eef1f4; }
     .shg-nav-grouphead{
@@ -230,6 +241,36 @@ export function navSidebar(activeKey: string): string {
       close.addEventListener('click', function(){ setCollapsed(true); });
       open.addEventListener('click',  function(){ setCollapsed(false); });
 
+      // ---- Padlocked (admin-only) items -----------------------------------
+      // "Field Staff" and "Data Tools & OData" are gated behind a passcode so
+      // only the admin can open them. The unlock is remembered for the browser
+      // session (sessionStorage) so the admin isn't re-prompted on every click.
+      // NB: this is a soft UI gate (deters casual users), not cryptographic
+      // security — anyone technical can read the page source.
+      var ADMIN_PASS = 'mnbvcxz';
+      function isUnlocked(){ try{ return sessionStorage.getItem('shgAdminUnlock') === '1'; }catch(e){ return false; } }
+      function markUnlockedUI(){
+        var locks = nav.querySelectorAll('.shg-nav-locked');
+        Array.prototype.forEach.call(locks, function(a){ a.classList.add('shg-nav-unlocked'); });
+      }
+      if(isUnlocked()) markUnlockedUI();
+      var lockedLinks = nav.querySelectorAll('a[data-locked="1"]');
+      Array.prototype.forEach.call(lockedLinks, function(a){
+        a.addEventListener('click', function(ev){
+          if(isUnlocked()) return; // already unlocked this session → allow
+          ev.preventDefault();
+          var pass = window.prompt('This section is locked. Enter the admin passcode:');
+          if(pass === null) return;            // cancelled
+          if(pass === ADMIN_PASS){
+            try{ sessionStorage.setItem('shgAdminUnlock','1'); }catch(e){}
+            markUnlockedUI();
+            window.location.href = a.getAttribute('href');
+          } else {
+            alert('Wrong passcode.');
+          }
+        });
+      });
+
       // Collapsible category groups (Distribution, Sales). A group is open by
       // default when it holds the active page; the user can toggle any group,
       // and the open/closed state per group is remembered.
@@ -250,6 +291,88 @@ export function navSidebar(activeKey: string): string {
           try{ localStorage.setItem('shgNavGrp:'+gid, isOpen ? '1':'0'); }catch(e){}
         });
       });
+    })();
+  </script>`;
+}
+
+// ---------------------------------------------------------------------------
+// Page-level padlock gate for the admin-only pages (/field-staff, /tools).
+// Blocks the whole page behind a full-screen passcode overlay UNTIL the correct
+// passcode is entered — this protects direct URL / bookmark access, not just
+// the nav link. Shares the same sessionStorage unlock flag as the nav gate, so
+// unlocking once (from either place) opens both pages for the session.
+// Soft UI gate only (not cryptographic security).
+// Append the returned markup to the end of the page <body>.
+// ---------------------------------------------------------------------------
+export function navGate(): string {
+  return `
+  <style>
+    #shgGate{
+      position:fixed; inset:0; z-index:99999; background:#0B3C5D;
+      display:flex; align-items:center; justify-content:center;
+      font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    }
+    #shgGate .gate-card{
+      background:#fff; border-radius:16px; padding:34px 30px; width:min(92vw,380px);
+      box-shadow:0 18px 50px rgba(0,0,0,.35); text-align:center;
+    }
+    #shgGate .gate-lock{
+      width:64px; height:64px; border-radius:50%; margin:0 auto 16px;
+      background:#eaf1f7; color:#0B3C5D; display:flex; align-items:center;
+      justify-content:center; font-size:26px;
+    }
+    #shgGate h2{ margin:0 0 6px; font-size:19px; color:#12304a; }
+    #shgGate p{ margin:0 0 18px; font-size:13px; color:#5e6981; }
+    #shgGate input{
+      width:100%; box-sizing:border-box; padding:12px 14px; font-size:15px;
+      border:1.5px solid #cfd8e3; border-radius:10px; text-align:center; letter-spacing:.15em;
+    }
+    #shgGate input:focus{ outline:none; border-color:#0B3C5D; }
+    #shgGate button{
+      margin-top:14px; width:100%; padding:12px; font-size:15px; font-weight:700;
+      background:#0B3C5D; color:#fff; border:0; border-radius:10px; cursor:pointer;
+    }
+    #shgGate button:hover{ background:#0e4a72; }
+    #shgGate .gate-err{ color:#b6120f; font-size:13px; min-height:18px; margin-top:10px; }
+    #shgGate .gate-back{ display:inline-block; margin-top:14px; color:#5e6981; font-size:12px; text-decoration:none; }
+    #shgGate .gate-back:hover{ text-decoration:underline; }
+  </style>
+  <div id="shgGate" role="dialog" aria-modal="true" aria-label="Locked section">
+    <div class="gate-card">
+      <div class="gate-lock"><i class="fas fa-lock"></i></div>
+      <h2>Admin access only</h2>
+      <p>This section is locked. Enter the passcode to continue.</p>
+      <input id="shgGateInput" type="password" inputmode="text" autocomplete="off"
+             placeholder="Passcode" aria-label="Passcode" />
+      <button id="shgGateBtn" type="button"><i class="fas fa-unlock" style="margin-right:6px"></i>Unlock</button>
+      <div class="gate-err" id="shgGateErr"></div>
+      <a class="gate-back" href="/">&larr; Back to Home</a>
+    </div>
+  </div>
+  <script>
+    (function(){
+      var ADMIN_PASS='mnbvcxz';
+      var gate=document.getElementById('shgGate');
+      function unlocked(){ try{ return sessionStorage.getItem('shgAdminUnlock')==='1'; }catch(e){ return false; } }
+      function open(){ if(gate&&gate.parentNode){ gate.parentNode.removeChild(gate); document.body.style.overflow=''; } }
+      if(unlocked()){ open(); return; }
+      // lock scroll behind the overlay
+      document.body.style.overflow='hidden';
+      var inp=document.getElementById('shgGateInput');
+      var btn=document.getElementById('shgGateBtn');
+      var err=document.getElementById('shgGateErr');
+      function tryUnlock(){
+        if((inp.value||'')===ADMIN_PASS){
+          try{ sessionStorage.setItem('shgAdminUnlock','1'); }catch(e){}
+          open();
+        } else {
+          err.textContent='Wrong passcode. Try again.';
+          inp.value=''; inp.focus();
+        }
+      }
+      btn.addEventListener('click', tryUnlock);
+      inp.addEventListener('keydown', function(e){ if(e.key==='Enter') tryUnlock(); });
+      setTimeout(function(){ try{ inp.focus(); }catch(e){} }, 50);
     })();
   </script>`;
 }

@@ -36,6 +36,7 @@ import {
 } from './odata';
 import { ODATA_SOURCES, fetchOdataPage, resolveSource } from './odataimport';
 import { renderPage } from './ui';
+import { navGate } from './nav';
 import { renderHome } from './home';
 import { renderClusterTrainings } from './cluster';
 import { renderTraineesV2 } from './trainees_v2';
@@ -684,7 +685,9 @@ app.get('/odata/:set', async (c) => {
 // Home is now the KPI overview dashboard. The upload / OData tools page moved
 // to /tools (with /upload kept as a friendly alias).
 app.get('/', (c) => c.html(renderHome(baseUrl(c.req.url))));
-app.get('/tools', (c) => c.html(renderPage(baseUrl(c.req.url))));
+// /tools is padlocked (admin only): inject the passcode gate before </body> so
+// direct URL access is also protected. /upload stays open (shares renderPage).
+app.get('/tools', (c) => c.html(renderPage(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
 app.get('/upload', (c) => c.html(renderPage(baseUrl(c.req.url))));
 
 // ---- AI features (Cloudflare Workers AI) ----------------------------------
@@ -1409,7 +1412,9 @@ app.post('/api/cf-universe/refresh', async (c) => {
 app.get('/cf-payment-report', (c) => c.html(renderCfPaymentReport(baseUrl(c.req.url))));
 
 // ---- Field Staff (CF Registry) admin tab + JSON API (Task E) ----
-app.get('/field-staff', (c) => c.html(renderFieldStaff(baseUrl(c.req.url))));
+// /field-staff is padlocked (admin only): inject the passcode gate before
+// </body> so direct URL access is also protected.
+app.get('/field-staff', (c) => c.html(renderFieldStaff(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
 
 // read: canonical people (search + district filter)
 app.get('/api/field-staff/people', async (c) => {
