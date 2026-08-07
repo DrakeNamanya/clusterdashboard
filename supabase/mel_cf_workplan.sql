@@ -111,16 +111,33 @@ BEGIN
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
-  -- Groups with youth IN PRODUCTION (horticulture form) within the period.
+  -- Groups with youth IN PRODUCTION, WITH the value chains they received
+  -- (Horticulture / Poultry / Oil seeds / Beef-livestock/goats). We normalise
+  -- value_chain to a canonical tag so the workplan can name which chain(s) a
+  -- group is still MISSING.
   produced AS MATERIALIZED (
-    SELECT DISTINCT shg_id::text AS sid,
-                    public.mel_norm_key(shg_name) AS gk
-    FROM public.production_rows
-    WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys)
-      AND lower(coalesce(pdn_level,''))='production'
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    SELECT shg_id::text AS sid,
+           public.mel_norm_key(shg_name) AS gk,
+           array_agg(DISTINCT vc) FILTER (WHERE vc <> '') AS vchains
+    FROM (
+      SELECT shg_id, shg_name,
+             CASE
+               WHEN lower(coalesce(value_chain,'')) LIKE 'hort%' THEN 'horticulture'
+               WHEN lower(coalesce(value_chain,'')) LIKE 'poult%' THEN 'poultry'
+               WHEN lower(coalesce(value_chain,'')) LIKE 'oil%' THEN 'oil seeds'
+               WHEN lower(coalesce(value_chain,'')) LIKE 'beef%'
+                 OR lower(coalesce(value_chain,'')) LIKE '%goat%'
+                 OR lower(coalesce(value_chain,'')) LIKE '%livestock%' THEN 'livestock'
+               ELSE lower(btrim(coalesce(value_chain,'')))
+             END AS vc
+      FROM public.production_rows
+      WHERE public.mel_norm_key(profilers_name) = ANY(v_akeys)
+        AND lower(coalesce(pdn_level,''))='production'
+        AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+        AND (p_date_from IS NULL OR activity_date >= p_date_from)
+        AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+    ) s
+    GROUP BY shg_id::text, public.mel_norm_key(shg_name)
   ),
   merged AS (
     SELECT p.sid, p.gname, p.members, p.district, p.subcounty,
@@ -130,17 +147,26 @@ BEGIN
   ),
   flagged AS (
     SELECT m.sid, m.gname, m.members, m.district, m.subcounty, m.below_25,
-           EXISTS (SELECT 1 FROM trained  t  WHERE t.gid = m.sid OR t.gk  = m.gk) AS trained,
-           EXISTS (SELECT 1 FROM saving   s  WHERE s.sid = m.sid OR s.gk  = m.gk) AS saving,
-           EXISTS (SELECT 1 FROM produced pr WHERE pr.sid = m.sid OR pr.gk = m.gk) AS in_production
+           EXISTS (SELECT 1 FROM trained t WHERE t.gid = m.sid OR t.gk = m.gk) AS trained,
+           EXISTS (SELECT 1 FROM saving  s WHERE s.sid = m.sid OR s.gk = m.gk) AS saving,
+           COALESCE((SELECT array_agg(DISTINCT c) FROM (
+                       SELECT unnest(pr.vchains) AS c FROM produced pr
+                        WHERE pr.sid = m.sid OR pr.gk = m.gk) z
+                     WHERE c IS NOT NULL), ARRAY[]::text[]) AS vchains
     FROM merged m
+  ),
+  flagged2 AS (
+    SELECT f.*,
+           (array_length(f.vchains,1) IS NOT NULL) AS in_production
+    FROM flagged f
   )
   SELECT jsonb_build_object(
     'groups', COALESCE(jsonb_agg(jsonb_build_object(
                  'shg_id', sid, 'name', gname, 'members', members,
                  'district', district, 'subcounty', subcounty,
                  'below_25', below_25, 'trained', trained,
-                 'saving', saving, 'in_production', in_production
+                 'saving', saving, 'in_production', in_production,
+                 'vchains', to_jsonb(vchains)
                ) ORDER BY gname), '[]'::jsonb),
     'summary', jsonb_build_object(
                  'groups_profiled', COUNT(*),
@@ -150,9 +176,13 @@ BEGIN
                  'groups_saving',   COUNT(*) FILTER (WHERE saving),
                  'groups_not_saving',COUNT(*) FILTER (WHERE NOT saving),
                  'groups_in_production', COUNT(*) FILTER (WHERE in_production),
-                 'groups_not_in_production', COUNT(*) FILTER (WHERE NOT in_production)
+                 'groups_not_in_production', COUNT(*) FILTER (WHERE NOT in_production),
+                 'groups_no_horticulture', COUNT(*) FILTER (WHERE NOT ('horticulture' = ANY(vchains))),
+                 'groups_no_poultry',      COUNT(*) FILTER (WHERE NOT ('poultry' = ANY(vchains))),
+                 'groups_no_oilseeds',     COUNT(*) FILTER (WHERE NOT ('oil seeds' = ANY(vchains))),
+                 'groups_no_livestock',    COUNT(*) FILTER (WHERE NOT ('livestock' = ANY(vchains)))
                )
-  ) INTO v FROM flagged;
+  ) INTO v FROM flagged2;
 
   RETURN COALESCE(v, jsonb_build_object('groups','[]'::jsonb,'summary','{}'::jsonb));
 END;

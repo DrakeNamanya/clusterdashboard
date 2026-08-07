@@ -13,7 +13,7 @@ import { navSidebar } from './nav';
 //      * forming 16 groups within 6 months; leverage data every month.
 //   The improvement list SHRINKS as months move on (fewer lagging groups).
 //
-//   Padlocked (admin only) — gated by navGate() at the route level.
+//   Open to all users (no padlock).
 //   Live data: /api/cf-workplan/{groups,save,list,get}, /api/cf-report/staff.
 // ---------------------------------------------------------------------------
 
@@ -27,6 +27,28 @@ const CLUSTER_DISTRICTS = {
   central:['MUKONO','BUIKWE','KAYUNGA']
 };
 const CLUSTER_LABEL = { iganga:'Iganga Cluster', kamuli:'Kamuli Cluster', bugiri:'Bugiri Cluster', central:'Central Cluster' };
+
+// ---- Sign-off officers ----
+// Approver = Cluster Coordinator. Reviewer = Business Facilitator for the CF's
+// district (some are Acting BFs). Keys are UPPERCASE district names.
+const CLUSTER_COORDINATOR = { iganga:'Francis Arinaitwe' };
+const DISTRICT_BF = {
+  iganga: {
+    'MAYUGE':      { name:'Martin Bugembe',      title:'Business Facilitator' },
+    'LUUKA':       { name:'Francis Arinaitwe',   title:'Acting Business Facilitator' },
+    'IGANGA':      { name:'Joan Lunkuse',        title:'Acting Business Facilitator' },
+    'JINJA':       { name:'Judith Tukamushaba',  title:'Acting Business Facilitator' },
+    'JINJA CITY':  { name:'Judith Tukamushaba',  title:'Acting Business Facilitator' }
+  }
+};
+function reviewerFor(cluster, district){
+  const m=(DISTRICT_BF[cluster]||{})[String(district||'').toUpperCase()];
+  return m || { name:'', title:'District Business Facilitator' };
+}
+function approverFor(cluster){
+  return CLUSTER_COORDINATOR[cluster] ? { name:CLUSTER_COORDINATOR[cluster], title:'Cluster Coordinator' }
+                                       : { name:'', title:'Coordinator' };
+}
 
 // Programme targets / pace rules (from the SAYE brief):
 //   16 groups formed within 6 months; all groups trained within 8 months;
@@ -112,13 +134,20 @@ async function generate(){
 }
 
 // ---- Build the list of NAMED groups behind on each target ----
+function hasVc(x, vc){ return Array.isArray(x.vchains) && x.vchains.indexOf(vc)>=0; }
 function laggingGroups(){
   const g=GROUPS||[];
   const untrained = g.filter(x=>!x.trained).map(x=>x.name).filter(Boolean);
-  const below25  = g.filter(x=>x.below_25).map(x=>x.name+' ('+fmt(x.members)+')').filter(Boolean);
+  const below25  = g.filter(x=>x.below_25).map(x=>x.name+' ('+fmt(x.members)+' members)').filter(Boolean);
   const notSaving= g.filter(x=>!x.saving).map(x=>x.name).filter(Boolean);
   const notProd  = g.filter(x=>!x.in_production).map(x=>x.name).filter(Boolean);
-  return { untrained, below25, notSaving, notProd };
+  // value-chain gaps (only relevant for groups already IN production — those
+  // not in production at all are covered by notProd)
+  const noHort  = g.filter(x=>x.in_production && !hasVc(x,'horticulture')).map(x=>x.name).filter(Boolean);
+  const noPoul  = g.filter(x=>x.in_production && !hasVc(x,'poultry')).map(x=>x.name).filter(Boolean);
+  const noOil   = g.filter(x=>x.in_production && !hasVc(x,'oil seeds')).map(x=>x.name).filter(Boolean);
+  const noStock = g.filter(x=>x.in_production && !hasVc(x,'livestock')).map(x=>x.name).filter(Boolean);
+  return { untrained, below25, notSaving, notProd, noHort, noPoul, noOil, noStock };
 }
 // English list joiner ("A, B and C")
 function nameList(arr, max){
@@ -129,64 +158,89 @@ function nameList(arr, max){
 }
 
 // ---- Compute the auto "areas of improvement" activities (named groups) ----
+// PRIORITY activities (pri:true) are the ones the CF must act on this month and
+// are highlighted red in the workplan:
+//   1) Profiling / filling groups to reach the standard (16 groups, min 25)
+//   2) Production — groups not yet in production + value-chain gaps
+//      (horticulture / poultry / oil seeds / livestock-goats)
+//   3) ISLA — groups not saving
+//   4) Training — groups not trained
 // Rows SHRINK over time because the source lists shrink as groups catch up.
 function improvementRows(){
   const L=laggingGroups();
   const rows=[]; const profiled=(GROUPS||[]).length;
   const start=DOCMETA.start, plan=DOCMETA.planMonth;
   const monthNo=Math.max(1, monthDiff(start, plan)+1); // 1-based programme month being planned
-  // 1) Group formation — below the 16-group target and still inside the 6-month window
+
+  // ===== PRIORITY 1 — PROFILING / FILLING GROUPS TO THE STANDARD =====
   if(profiled < TARGET_GROUPS){
     const need=TARGET_GROUPS-profiled;
     rows.push({
-      area:'Form '+need+' more SHG(s) to reach the 16-group target',
+      area:'PROFILING — form & profile '+need+' more SHG(s) to reach the 16-group standard',
       target:String(need), needs:'Mobilisation tools, registration & profiling forms',
-      out:'Currently '+profiled+' of 16 groups formed'+(monthNo<=MONTHS_FORM?(' (month '+monthNo+' of '+MONTHS_FORM+')'):' (past the 6-month window — urgent)'),
-      imp:true
+      out:'Currently '+profiled+' of 16 groups formed'+(monthNo<=MONTHS_FORM?(' (month '+monthNo+' of '+MONTHS_FORM+')'):' (past the 6-month window — URGENT)'),
+      imp:true, pri:true
     });
   }
-  // 2) < 25 members — NAME the groups
   if(L.below25.length){
     rows.push({
-      area:'Recruit members into under-strength groups (min 25): '+nameList(L.below25),
+      area:'FILL GROUPS TO STANDARD — recruit members into under-strength groups (min 25): '+nameList(L.below25),
       target:String(L.below25.length), needs:'Community mobilisation, membership drive, registration forms',
       out:'Bring '+L.below25.length+' group(s) up to the 25-member minimum',
-      imp:true
+      imp:true, pri:true
     });
   }
-  // 3) Untrained — NAME the groups (all trained within 8 months)
-  if(L.untrained.length){
-    rows.push({
-      area:'Train the following groups: '+nameList(L.untrained),
-      target:String(L.untrained.length), needs:'Flip charts, markers, pens, masking tape, attendance forms',
-      out:L.untrained.length+' group(s) trained'+(monthNo<=MONTHS_TRAIN?(' toward the 8-month training target (month '+monthNo+')'):' (past the 8-month window — urgent)'),
-      imp:true
-    });
-  }
-  // 4) Not saving/ISLA this period — NAME the groups (every group saves monthly)
-  if(L.notSaving.length){
-    rows.push({
-      area:'Start / resume monthly ISLA savings in: '+nameList(L.notSaving),
-      target:String(L.notSaving.length), needs:'ISLA kits, passbooks, ISLA reporting forms',
-      out:'All '+((GROUPS||[]).length)+' groups saving every month; '+L.notSaving.length+' still to activate',
-      imp:true
-    });
-  }
-  // 5) Not in production — NAME the groups (400 youth into production /12 months)
+
+  // ===== PRIORITY 2 — PRODUCTION (not in production + value-chain gaps) =====
   if(L.notProd.length){
     rows.push({
-      area:'Take the following groups into production: '+nameList(L.notProd),
+      area:'PRODUCTION — take the following groups into production: '+nameList(L.notProd),
       target:String(L.notProd.length), needs:'Inputs, demo materials, production forms',
-      out:'Move '+L.notProd.length+' group(s) into production'+(monthNo<=MONTHS_PROD?(' toward the 12-month / 400-youth target (month '+monthNo+')'):' (past the 12-month window — urgent)'),
-      imp:true
+      out:'Move '+L.notProd.length+' group(s) into production'+(monthNo<=MONTHS_PROD?(' toward the 12-month / 400-youth target (month '+monthNo+')'):' (past the 12-month window — URGENT)'),
+      imp:true, pri:true
     });
   }
-  // 6) Leverage — always collect monthly
+  // value-chain gaps for groups already in production
+  const vcGap=(label, list, needs)=>{
+    if(!list.length) return;
+    rows.push({
+      area:'PRODUCTION ('+label+') — groups yet to receive '+label+': '+nameList(list),
+      target:String(list.length), needs:needs,
+      out:list.length+' group(s) to be enrolled into '+label,
+      imp:true, pri:true
+    });
+  };
+  vcGap('horticulture', L.noHort, 'Horticulture inputs/seed, demo materials, production forms');
+  vcGap('poultry',      L.noPoul, 'Poultry inputs (birds/feed), production forms');
+  vcGap('oil seeds',    L.noOil,  'Oil-seed inputs, production forms');
+  vcGap('goats/livestock', L.noStock, 'Livestock inputs, production forms');
+
+  // ===== PRIORITY 3 — ISLA (groups not saving) =====
+  if(L.notSaving.length){
+    rows.push({
+      area:'ISLA — start / resume monthly savings in: '+nameList(L.notSaving),
+      target:String(L.notSaving.length), needs:'ISLA kits, passbooks, ISLA reporting forms',
+      out:'All '+profiled+' groups saving every month; '+L.notSaving.length+' still to activate',
+      imp:true, pri:true
+    });
+  }
+
+  // ===== PRIORITY 4 — TRAINING (groups not trained) =====
+  if(L.untrained.length){
+    rows.push({
+      area:'TRAINING — train the following groups: '+nameList(L.untrained),
+      target:String(L.untrained.length), needs:'Flip charts, markers, pens, masking tape, attendance forms',
+      out:L.untrained.length+' group(s) trained'+(monthNo<=MONTHS_TRAIN?(' toward the 8-month training target (month '+monthNo+')'):' (past the 8-month window — URGENT)'),
+      imp:true, pri:true
+    });
+  }
+
+  // ===== ROUTINE — leverage data every month (not highlighted) =====
   rows.push({
-    area:'Collect local leverage data from all '+((GROUPS||[]).length)+' groups',
-    target:String((GROUPS||[]).length), needs:'Leverage data forms',
+    area:'Collect local leverage data from all '+profiled+' groups',
+    target:String(profiled), needs:'Leverage data forms',
     out:'Leverage contributions recorded for every group this month',
-    imp:true
+    imp:true, pri:false
   });
   return rows;
 }
@@ -226,7 +280,10 @@ function buildDocument(){
   const today=new Date();
   const dateStr=ordinal(today.getDate())+' '+monthName(today.getMonth())+' '+today.getFullYear();
 
-  DOCMETA={ cf:SEL.name, key:SEL.key, cluster:cl, clusterLabel, planMonth, start, district, subcounty, amount, mm, planMonthName, planYear };
+  const reviewer=reviewerFor(cl, district);
+  const approver=approverFor(cl);
+
+  DOCMETA={ cf:SEL.name, key:SEL.key, cluster:cl, clusterLabel, planMonth, start, district, subcounty, amount, mm, planMonthName, planYear, reviewer, approver };
 
   const improvements=improvementRows();
   const standards=standardRows();
@@ -286,8 +343,8 @@ function buildDocument(){
     '<div class="addrow no-print"><button class="btn ghost" onclick="addRow()"><i class="fas fa-plus"></i> Add activity row</button></div>'+
     '<div class="wpfoot">'+
       '<div class="b"><div class="ln"></div><div><span class="k">Prepared by:</span> <span contenteditable="true">'+esc(SEL.name)+'</span><br/>Designation: Community Facilitator</div></div>'+
-      '<div class="b"><div class="ln"></div><div><span class="k">Reviewed by:</span> <span contenteditable="true">Arinaitwe Francis</span><br/>District Business Facilitator</div></div>'+
-      '<div class="b"><div class="ln"></div><div><span class="k">Approved by:</span> <span contenteditable="true">Charles Ochom</span><br/>Coordinator</div></div>'+
+      '<div class="b"><div class="ln"></div><div><span class="k">Reviewed by:</span> <span contenteditable="true">'+esc(reviewer.name||'')+'</span><br/>'+esc(reviewer.title)+'</div></div>'+
+      '<div class="b"><div class="ln"></div><div><span class="k">Approved by:</span> <span contenteditable="true">'+esc(approver.name||'')+'</span><br/>'+esc(approver.title)+'</div></div>'+
     '</div>'+
   '</section>';
 
@@ -315,12 +372,15 @@ function letterActivitiesParagraph(improvements){
 function rowHtml(r,i){
   const wk=(r.weeks||[false,false,false,false]);
   const wkTd=wk.map((on,w)=>'<td class="wk'+(on?' on':'')+'" data-row="'+i+'" data-wk="'+w+'"></td>').join('');
-  return '<tr class="'+(r.imp?'improw':'')+'" data-row="'+i+'">'+
-    '<td class="area'+(r.imp?' imp':'')+'" contenteditable="true">'+esc(r.area)+'</td>'+
+  const cls=(r.pri?'prirow':(r.imp?'improw':''));
+  const cellImp=(r.pri?' class="pri"':(r.imp?' class="imp"':''));
+  const flag=r.pri?'<span class="prflag">PRIORITY</span> ':'';
+  return '<tr class="'+cls+'" data-row="'+i+'">'+
+    '<td class="area'+(r.pri?' pri':(r.imp?' imp':''))+'" contenteditable="true">'+flag+esc(r.area)+'</td>'+
     '<td class="tg" contenteditable="true">'+esc(r.target||'')+'</td>'+
     wkTd+
-    '<td'+(r.imp?' class="imp"':'')+' contenteditable="true">'+esc(r.needs||'')+'</td>'+
-    '<td'+(r.imp?' class="imp"':'')+' contenteditable="true">'+esc(r.out||'')+'</td>'+
+    '<td'+cellImp+' contenteditable="true">'+esc(r.needs||'')+'</td>'+
+    '<td'+cellImp+' contenteditable="true">'+esc(r.out||'')+'</td>'+
     '<td contenteditable="true">'+esc((DOCMETA&&titleCase(DOCMETA.district))||'')+'</td>'+
   '</tr>';
 }
@@ -341,18 +401,24 @@ function addRow(){
 function renderImpSummary(){
   const s=SUMMARY||{}; const box=document.getElementById('impsum');
   box.className='impsum show';
-  box.innerHTML='<h4>Areas of improvement for '+esc(DOCMETA.planMonthName)+' — '+esc(DOCMETA.cf)+' ('+fmt((GROUPS||[]).length)+' groups)</h4>'+
+  box.innerHTML='<h4>Priority areas of improvement for '+esc(DOCMETA.planMonthName)+' — '+esc(DOCMETA.cf)+' ('+fmt((GROUPS||[]).length)+' groups)</h4>'+
     '<div class="grid">'+
+      cell('bad', s.groups_profiled!=null?Math.max(0,16-Number(s.groups_profiled)):0, 'Groups to form (to 16)')+
+      cell('bad', s.groups_below_25, 'Groups &lt; 25 members')+
+      cell('bad', s.groups_not_in_production, 'Not in production')+
+      cell('bad', s.groups_not_saving, 'Not saving (ISLA)')+
+    '</div>'+
+    '<div class="grid" style="margin-top:1px">'+
       cell('bad', s.groups_untrained, 'Groups to train')+
-      cell('bad', s.groups_below_25, 'Groups < 25 members')+
-      cell('bad', s.groups_not_saving, 'Groups not saving')+
-      cell('bad', s.groups_not_in_production, 'Groups not in production')+
+      cell('bad', s.groups_no_horticulture, 'No horticulture')+
+      cell('bad', s.groups_no_poultry, 'No poultry')+
+      cell('bad', s.groups_no_oilseeds, 'No oil seeds')+
     '</div>'+
     '<div class="grid" style="margin-top:1px">'+
       cell('good', s.groups_trained, 'Trained')+
       cell('good', s.groups_saving, 'Saving (ISLA)')+
       cell('good', s.groups_in_production, 'In production')+
-      cell('', (GROUPS||[]).length, 'Groups profiled')+
+      cell('', s.groups_profiled, 'Groups profiled')+
     '</div>';
   function cell(cls,v,l){ return '<div class="c '+cls+'"><div class="v">'+fmt(v)+'</div><div class="l">'+l+'</div></div>'; }
 }
@@ -485,7 +551,12 @@ export function renderCfWorkplan(base: string): string {
     table.wp td.wk.on{ background:var(--primary); }
     table.wp td.area{ font-weight:600; width:150px; }
     table.wp td.imp{ background:#fff7e6; }
-    table.wp tr.improw td.area{ color:var(--bad); }
+    table.wp tr.improw td.area{ color:#8a5a00; }
+    /* PRIORITY improvement activities — strong red highlight */
+    table.wp tr.prirow td{ background:#fdecec; }
+    table.wp tr.prirow td.area{ color:#b3261e; font-weight:700; border-left:4px solid #b3261e; }
+    table.wp td.pri{ background:#fdecec; }
+    .prflag{ display:inline-block; background:#b3261e; color:#fff; font-family:var(--sans); font-size:7pt; font-weight:700; letter-spacing:.08em; padding:1px 5px; border-radius:2px; margin-right:4px; vertical-align:middle; }
     .wpfoot{ display:flex; justify-content:space-between; margin-top:26pt; font-size:10pt; font-family:var(--sans); gap:16px; }
     .wpfoot .b{ flex:1; }
     .wpfoot .b .ln{ border-top:1px solid #444; margin-bottom:4px; height:34px; }

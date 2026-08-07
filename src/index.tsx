@@ -1382,13 +1382,12 @@ app.get('/api/cf-report', async (c) => {
   return c.json(data);
 });
 
-// ---- CF Workplan & Advance-Payment Request (padlocked, admin only) --------
+// ---- CF Workplan & Advance-Payment Request (open to all users) ------------
 // Every CF submits, each end of month, an advance-payment request + a workplan
 // for the NEXT month. The workplan auto-injects "areas of improvement" that
 // NAME the specific groups behind on each target (untrained / <25 members /
 // not saving / not in production) using mel_cf_groups.
-app.get('/cf-workplan', (c) =>
-  c.html(renderCfWorkplan(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
+app.get('/cf-workplan', (c) => c.html(renderCfWorkplan(baseUrl(c.req.url))));
 
 // Per-group named status for a CF (powers the auto workplan improvement rows).
 app.get('/api/cf-workplan/groups', async (c) => {
