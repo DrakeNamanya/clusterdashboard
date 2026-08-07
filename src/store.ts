@@ -2508,6 +2508,61 @@ export async function cfReport(env: Env, opts: CfReportFilters = {}): Promise<an
 }
 
 // --------------------------------------------------------------------------
+// CF Workplan & Request
+//   cfGroups          -> mel_cf_groups(staff, districts, from, to)
+//                        per-group named status (below_25 / trained / saving /
+//                        in_production) + summary. Powers the auto
+//                        "areas of improvement" activities in the workplan.
+//   cfWorkplanSave    -> mel_cf_workplan_save(payload jsonb)  (upsert)
+//   cfWorkplanList    -> mel_cf_workplan_list(month, search, limit)
+//   cfWorkplanGet     -> mel_cf_workplan_get(id, cf, month)
+// [Oracle VM]
+// --------------------------------------------------------------------------
+export async function cfGroups(env: Env, opts: CfReportFilters = {}): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_groups',
+    '$1::text, $2::text[], $3::date, $4::date',
+    [
+      opts.staff || '',
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.from || null,
+      opts.to || null,
+    ]
+  );
+}
+
+export async function cfWorkplanSave(env: Env, payload: any): Promise<any> {
+  return neonRpcJson(env, 'mel_cf_workplan_save', '$1::jsonb', [
+    JSON.stringify(payload || {}),
+  ]);
+}
+
+export async function cfWorkplanList(
+  env: Env,
+  opts: { month?: string; search?: string; limit?: number } = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_workplan_list',
+    '$1::text, $2::text, $3::int',
+    [opts.month || null, opts.search || null, opts.limit || 500]
+  );
+}
+
+export async function cfWorkplanGet(
+  env: Env,
+  opts: { id?: number; cf?: string; month?: string } = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'mel_cf_workplan_get',
+    '$1::bigint, $2::text, $3::text',
+    [opts.id || null, opts.cf || null, opts.month || null]
+  );
+}
+
+// --------------------------------------------------------------------------
 // CF Premier League — ranks every CF in a cluster by overall CF-report grade.
 // mel_cf_premier_league(districts text[], from date, to date) -> jsonb[]
 // (rows already sorted best → worst). [Oracle VM]

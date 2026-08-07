@@ -21,6 +21,7 @@ import {
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague, cfPaymentReport,
+  cfGroups, cfWorkplanSave, cfWorkplanList, cfWorkplanGet,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
   ingestTraineeRows,
   ingestTraineesV2,
@@ -55,6 +56,7 @@ import { renderLocalLeverage } from './local_leverage';
 import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
+import { renderCfWorkplan } from './cfworkplan';
 import { renderCfPremierLeague } from './cfleague';
 import { renderCfPaymentReport } from './cfpayment';
 import { renderFieldStaff } from './fieldstaff';
@@ -1376,6 +1378,60 @@ app.get('/api/cf-report', async (c) => {
     staff: q.staff || undefined,
     from: q.from || undefined,
     to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// ---- CF Workplan & Advance-Payment Request (padlocked, admin only) --------
+// Every CF submits, each end of month, an advance-payment request + a workplan
+// for the NEXT month. The workplan auto-injects "areas of improvement" that
+// NAME the specific groups behind on each target (untrained / <25 members /
+// not saving / not in production) using mel_cf_groups.
+app.get('/cf-workplan', (c) =>
+  c.html(renderCfWorkplan(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
+
+// Per-group named status for a CF (powers the auto workplan improvement rows).
+app.get('/api/cf-workplan/groups', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const data = await cfGroups(storeEnv(c), {
+    districts: split(q.districts),
+    staff: q.staff || undefined,
+    from: q.from || undefined,
+    to: q.to || undefined,
+  });
+  return c.json(data);
+});
+
+// Save / upsert a workplan submission.
+app.post('/api/cf-workplan/save', async (c) => {
+  try {
+    const body = await c.req.json();
+    const res = await cfWorkplanSave(storeEnv(c), body);
+    return c.json(res);
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// List saved submissions (optional month / search).
+app.get('/api/cf-workplan/list', async (c) => {
+  const q = c.req.query();
+  const data = await cfWorkplanList(storeEnv(c), {
+    month: q.month || undefined,
+    search: q.search || undefined,
+    limit: q.limit ? Number(q.limit) : undefined,
+  });
+  return c.json(data);
+});
+
+// Fetch one saved submission (full payload) by id, or cf + month.
+app.get('/api/cf-workplan/get', async (c) => {
+  const q = c.req.query();
+  const data = await cfWorkplanGet(storeEnv(c), {
+    id: q.id ? Number(q.id) : undefined,
+    cf: q.cf || undefined,
+    month: q.month || undefined,
   });
   return c.json(data);
 });
