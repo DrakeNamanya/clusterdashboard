@@ -87,25 +87,26 @@ begin
     nullif(trim(g.data->>'SHG Name'),'')                  as shg_name,
     nullif(trim(g.data->>'district'),'')                  as district,
     nullif(trim(g.data->>'subcounty'),'')                 as subcounty,
-    -- Prefer the actual roster count; fall back to the view figure when the
-    -- roster is empty. GREATEST ensures we never regress below the view value.
-    greatest(
-      coalesce(rm.r_male,0),
-      coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
-    )   as male,
-    greatest(
-      coalesce(rm.r_female,0),
-      coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
-    ) as female,
-    greatest(
-      coalesce(rm.r_pwd,0),
-      coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
-    )    as pwd,
+    -- The shg_groups_view Total/Female/Male columns are the AUTHORITATIVE
+    -- figures (they are what the Heifer portal shows). Use them verbatim.
+    -- ONLY when the view figure is 0/blank for a group (the lag case where a
+    -- freshly-profiled group has members captured in youth_profiling but the
+    -- aggregated view has not caught up) do we substitute the roster count.
+    -- This keeps every populated group exactly matching the portal, while
+    -- still surfacing members for the "0 members" groups the user reported.
+    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+         then coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
+         else coalesce(rm.r_male,0) end   as male,
+    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+         then coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
+         else coalesce(rm.r_female,0) end as female,
+    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+         then coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
+         else coalesce(rm.r_pwd,0) end    as pwd,
     coalesce(nullif(regexp_replace(g.data->>'Participants Trained','[^0-9\-]','','g'),'')::int, 0) as participants_trained,
-    greatest(
-      coalesce(rm.r_total,0),
-      coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
-    )  as total,
+    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+         then coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
+         else coalesce(rm.r_total,0) end  as total,
     nullif(trim(g.data->>'trainings'),'')                 as trainings,
     nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
     nullif(trim(g.data->>'group_status'),'')              as group_status,
