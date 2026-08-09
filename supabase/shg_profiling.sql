@@ -63,6 +63,23 @@ begin
     where p.template='shg_profiling_form'
       and nullif(trim(p.data->>'refID'),'') is not null
     group by nullif(trim(p.data->>'refID'),'')
+  ),
+  -- Actual member roster from youth_profiling (one row per profiled member),
+  -- keyed by shg_id. This is the authoritative headcount source: the pre-
+  -- aggregated shg_groups_view Male/Female/Total lags for freshly-profiled
+  -- groups (shows 0 while the members are already captured here).
+  -- Materialized so the 117k-row scan runs ONCE, not per outer row.
+  roster as materialized (
+    select
+      nullif(trim(y.data->>'shg_id'),'')                                   as sid,
+      count(*)                                                             as r_total,
+      count(*) filter (where lower(y.data->>'Sex') like 'm%')              as r_male,
+      count(*) filter (where lower(y.data->>'Sex') like 'f%')              as r_female,
+      count(*) filter (where lower(trim(y.data->>'Disability_status'))='yes') as r_pwd
+    from public.records y
+    where y.template='youth_profiling'
+      and nullif(trim(y.data->>'shg_id'),'') is not null
+    group by nullif(trim(y.data->>'shg_id'),'')
   )
   insert into public.shg_profiling_rows
   select
@@ -70,11 +87,25 @@ begin
     nullif(trim(g.data->>'SHG Name'),'')                  as shg_name,
     nullif(trim(g.data->>'district'),'')                  as district,
     nullif(trim(g.data->>'subcounty'),'')                 as subcounty,
-    coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)   as male,
-    coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0) as female,
-    coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)    as pwd,
+    -- Prefer the actual roster count; fall back to the view figure when the
+    -- roster is empty. GREATEST ensures we never regress below the view value.
+    greatest(
+      coalesce(rm.r_male,0),
+      coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
+    )   as male,
+    greatest(
+      coalesce(rm.r_female,0),
+      coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
+    ) as female,
+    greatest(
+      coalesce(rm.r_pwd,0),
+      coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
+    )    as pwd,
     coalesce(nullif(regexp_replace(g.data->>'Participants Trained','[^0-9\-]','','g'),'')::int, 0) as participants_trained,
-    coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)  as total,
+    greatest(
+      coalesce(rm.r_total,0),
+      coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
+    )  as total,
     nullif(trim(g.data->>'trainings'),'')                 as trainings,
     nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
     nullif(trim(g.data->>'group_status'),'')              as group_status,
@@ -85,6 +116,8 @@ begin
   from public.records g
   left join dim_shg d
     on d.ref_id = nullif(trim(g.data->>'SHG ID'),'')
+  left join roster rm
+    on rm.sid = nullif(trim(g.data->>'SHG ID'),'')
   where g.template='shg_groups_view';
 
   get diagnostics rows_out = row_count;
