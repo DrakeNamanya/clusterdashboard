@@ -58,6 +58,7 @@ import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
 import { renderCfWorkplan } from './cfworkplan';
 import { renderCfPremierLeague } from './cfleague';
+import { renderCfProductionLeague } from './cfprodleague';
 import { renderCfPaymentReport } from './cfpayment';
 import { renderFieldStaff } from './fieldstaff';
 import { clusterDistricts } from './clusters';
@@ -1437,6 +1438,11 @@ app.get('/api/cf-workplan/get', async (c) => {
 
 // ---- CF Premier League (ranks all CFs in a cluster by overall grade) -------
 app.get('/cf-premier-league', (c) => c.html(renderCfPremierLeague(baseUrl(c.req.url))));
+
+// ---- CF Production Premier League (padlocked; ranks CFs by youth production only) ----
+// Admin-only: inject the passcode gate so direct URL access is also protected.
+// Reuses the /api/cf-premier-league feed (re-sorted by youth_production in the page).
+app.get('/cf-production-league', (c) => c.html(renderCfProductionLeague(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
 app.get('/api/cf-premier-league', async (c) => {
   const q = c.req.query();
   const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
