@@ -72,9 +72,21 @@ ${navSidebar('youthinwork')}
         <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
         <button data-preset="clear" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] ml-1">All time</button>
       </div>
-      <button id="notTrackedBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--amber)] bg-white hover:bg-[#fff6ea] text-[var(--amber)] font-semibold" title="Youth who were trained (trainees) but have NO job-tracking record yet — download for follow-up. Respects the district filter.">
-        <i class="fas fa-user-clock mr-1"></i> Youth not job-tracked
-      </button>
+      <div class="flex items-center gap-1 card px-2 py-1.5" title="Youth who were trained (trainees) but have NO job-tracking record yet — download for follow-up.">
+        <i class="fas fa-user-clock text-[var(--amber)]"></i>
+        <span class="text-[10px] text-[var(--muted)] uppercase font-bold">Not job-tracked</span>
+        <select id="notTrackedScope" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[11px]">
+          <option value="selection">Current district filter</option>
+          <option value="all">All clusters</option>
+          <option value="iganga">Iganga Cluster</option>
+          <option value="kamuli">Kamuli Cluster</option>
+          <option value="bugiri">Bugiri Cluster</option>
+          <option value="central">Central Cluster</option>
+        </select>
+        <button id="notTrackedBtn" class="text-xs px-3 py-1 rounded-lg border border-[var(--amber)] bg-white hover:bg-[#fff6ea] text-[var(--amber)] font-semibold">
+          <i class="fas fa-download mr-1"></i> Download
+        </button>
+      </div>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]" title="Rebuild the job-tracking fact table from the latest MIS sync">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
@@ -319,28 +331,47 @@ ${navSidebar('youthinwork')}
     });
 
     // ---- Youth not job-tracked: trained (trainees_v2) minus job-tracked ------
-    // Downloads the follow-up list as an .xlsx (CSV fallback). Respects the
-    // current district selection so you can pull one cluster/district at a time.
+    // Downloads the follow-up list as an .xlsx (CSV fallback). Scope can be the
+    // current district filter, a whole cluster, or all clusters.
+    const CLUSTERS={
+      iganga:['IGANGA','JINJA','JINJA CITY','MAYUGE','LUUKA'],
+      kamuli:['KAMULI','KALIRO','BUYENDE'],
+      bugiri:['BUGIRI','NAMUTUMBA','NAMAYINGO','BUGWERI'],
+      central:['MUKONO','BUIKWE','KAYUNGA'],
+    };
     document.getElementById('notTrackedBtn').addEventListener('click', async (e)=>{
       const btn=e.currentTarget, old=btn.innerHTML;
-      btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i> Building list…';
+      const scope=document.getElementById('notTrackedScope').value;
+      // Resolve the district list + a label for the filename.
+      let districts=[]; let scopeLabel='';
+      if(scope==='selection'){
+        if(!dist.all && dist.sel.size){ districts=[...dist.sel]; scopeLabel=districts.join('-'); }
+        else { scopeLabel='all-districts'; }
+      } else if(scope==='all'){
+        scopeLabel='all-clusters';
+      } else {
+        districts=CLUSTERS[scope]||[]; scopeLabel=scope+'-cluster';
+      }
+      btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i> Building…';
       try{
         const p=new URLSearchParams();
-        if(!dist.all && dist.sel.size) p.set('districts',[...dist.sel].join(','));
+        if(districts.length) p.set('districts',districts.join(','));
         const res=await fetch('/api/youth-not-job-tracked?'+p.toString());
         if(!res.ok) throw new Error('HTTP '+res.status);
         const d=await res.json();
         const rows=d.rows||[];
-        if(!rows.length){ alert('No trained youth without a job-tracking record for this selection. Everyone trained has been job-tracked.'); return; }
-        const scope = (dist.all||!dist.sel.size) ? 'all-districts' : [...dist.sel].join('-').replace(/[^A-Za-z0-9_-]+/g,'_');
+        if(!rows.length){ alert('No trained youth without a job-tracking record for this selection. Everyone trained here has been job-tracked.'); return; }
+        const safe=scopeLabel.replace(/[^A-Za-z0-9_-]+/g,'_');
         const stamp = new Date().toISOString().slice(0,10);
-        const fname = 'youth_not_job_tracked_'+scope+'_'+stamp;
-        // Column order + friendly headers for the export.
+        const fname = 'youth_not_job_tracked_'+safe+'_'+stamp;
+        // Column order + friendly headers for the export (SHG columns included).
         const COLS=[
           ['participant_id','Participant ID'],
           ['participant_name','Participant Name'],
           ['sex','Sex'],
           ['pwd','PWD'],
+          ['shg_name','SHG Group Name'],
+          ['shg_id','SHG ID'],
           ['district','District'],
           ['subcounty','Subcounty'],
           ['village','Village'],

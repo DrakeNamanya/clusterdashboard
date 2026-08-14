@@ -4,7 +4,8 @@
 --   participant_id never appears in job_tracking_rows (job-tracked).
 --   One row per distinct trained participant, enriched with the best non-empty
 --   name / sex / district / subcounty / village found across all their training
---   rows, plus attendance count and last-training date.
+--   rows, plus SHG group name + SHG ID (from youth_profiling.refID), attendance
+--   count and last-training date.
 --
 --   Optional filter: p_districts text[] (UPPERCASE district names). NULL/empty
 --   = all districts. Matches the Youth-in-Work district slicer.
@@ -48,6 +49,18 @@ AS $function$
     FROM public.trainees_v2 t
     WHERE t.participant_id IS NOT NULL AND t.participant_id <> ''
     GROUP BY t.participant_id
+  ),
+  -- SHG membership from the profiling roster. youth_profiling.refID matches the
+  -- trainees_v2/job_tracking participant_id (e.g. HEI-jin-00211091). Case-folded
+  -- join key. Covers ~99% of the not-tracked youth.
+  prof AS MATERIALIZED (
+    SELECT lower(nullif(trim(r.data->>'refID'),'')) AS rid,
+           max(nullif(trim(r.data->>'shg_id'),''))   AS shg_id,
+           max(nullif(trim(r.data->>'shg_name'),'')) AS shg_name
+    FROM public.records r
+    WHERE r.template = 'youth_profiling'
+      AND nullif(trim(r.data->>'refID'),'') IS NOT NULL
+    GROUP BY 1
   )
   SELECT COALESCE(jsonb_agg(row ORDER BY row->>'district', row->>'participant_name'), '[]'::jsonb)
   FROM (
@@ -56,6 +69,8 @@ AS $function$
              'participant_name',      tr.participant_name,
              'sex',                   tr.sex,
              'pwd',                   CASE WHEN tr.is_pwd = 1 THEN 'Yes' ELSE 'No' END,
+             'shg_name',              p.shg_name,
+             'shg_id',                p.shg_id,
              'district',              tr.district,
              'subcounty',             tr.subcounty,
              'village',               tr.village,
@@ -63,7 +78,9 @@ AS $function$
              'training_types',        tr.training_types,
              'last_training_date',    to_char(tr.last_training_date, 'YYYY-MM-DD')
            ) AS row
-    FROM tr, v_dl
+    FROM tr
+    CROSS JOIN v_dl
+    LEFT JOIN prof p ON p.rid = lower(tr.participant_id)
     WHERE NOT EXISTS (SELECT 1 FROM jt WHERE jt.pid = tr.participant_id)
       AND (v_dl.dl IS NULL OR tr.district = ANY(v_dl.dl))
   ) s;
