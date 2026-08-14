@@ -2800,6 +2800,27 @@ export async function refreshJobTracking(env: Env): Promise<number> {
 }
 
 /**
+ * Youth trained (trainees_v2) but NEVER job-tracked (job_tracking_rows) — the
+ * follow-up list. Set difference on participant_id. Optionally scoped to a set
+ * of UPPERCASE districts. Returns { count, rows[] } where each row is one youth
+ * enriched with the best non-empty name/sex/district/subcounty/village, plus
+ * training attendance count and last-training date. [Oracle VM]
+ */
+export async function youthNotJobTracked(
+  env: Env,
+  districts?: string[]
+): Promise<{ count: number; rows: any[] }> {
+  const clean = (districts || [])
+    .map((d) => (d || '').trim().toUpperCase())
+    .filter(Boolean);
+  const argSql = clean.length ? '$1::text[]' : 'NULL::text[]';
+  const params = clean.length ? [clean] : [];
+  const rows = await neonRpcJson(env, 'youth_not_job_tracked', argSql, params);
+  const arr = Array.isArray(rows) ? rows : [];
+  return { count: arr.length, rows: arr };
+}
+
+/**
  * Youth in Work dashboard aggregate. Returns:
  *  - kpis: job-tracked (rows), distinct youth job-tracked, employed youth
  *          (distinct, status_after=Employed), total income, employ-youth jobs.

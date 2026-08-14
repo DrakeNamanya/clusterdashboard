@@ -27,7 +27,7 @@ import {
   ingestTraineesV2,
   traineesV2Summary,
   traineesV2DetailBreakdown,
-  youthInWorkDash, youthInWorkSummary, refreshJobTracking,
+  youthInWorkDash, youthInWorkSummary, refreshJobTracking, youthNotJobTracked,
   syncDistributionOData, neonQuery,
 } from './store';
 import { askData, narrate, anomalies } from './ai';
@@ -1694,6 +1694,20 @@ app.all('/api/youth-in-work/refresh', async (c) => {
     return c.json({ ok: true, rows });
   } catch (e: any) {
     return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+// Youth trained but NOT job-tracked — follow-up list for download.
+// Compares participant_id in trainees_v2 (trained) vs job_tracking_rows
+// (job-tracked); returns trained youth with no job-tracking record.
+// Respects the same ?districts= filter as the Youth in Work dashboard.
+app.get('/api/youth-not-job-tracked', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  try {
+    const data = await youthNotJobTracked(storeEnv(c), split(q.districts));
+    return c.json(data);
+  } catch (e: any) {
+    return c.json({ error: e?.message || String(e) }, 500);
   }
 });
 

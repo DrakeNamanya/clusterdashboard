@@ -19,6 +19,7 @@ export function renderYouthInWork(base: string): string {
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
     :root{
@@ -71,6 +72,9 @@ ${navSidebar('youthinwork')}
         <input id="toDate" type="date" class="bg-white border border-[var(--line)] rounded px-1.5 py-1 text-[12px]" />
         <button data-preset="clear" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)] ml-1">All time</button>
       </div>
+      <button id="notTrackedBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--amber)] bg-white hover:bg-[#fff6ea] text-[var(--amber)] font-semibold" title="Youth who were trained (trainees) but have NO job-tracking record yet — download for follow-up. Respects the district filter.">
+        <i class="fas fa-user-clock mr-1"></i> Youth not job-tracked
+      </button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]" title="Rebuild the job-tracking fact table from the latest MIS sync">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
@@ -313,6 +317,66 @@ ${navSidebar('youthinwork')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    // ---- Youth not job-tracked: trained (trainees_v2) minus job-tracked ------
+    // Downloads the follow-up list as an .xlsx (CSV fallback). Respects the
+    // current district selection so you can pull one cluster/district at a time.
+    document.getElementById('notTrackedBtn').addEventListener('click', async (e)=>{
+      const btn=e.currentTarget, old=btn.innerHTML;
+      btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin mr-1"></i> Building list…';
+      try{
+        const p=new URLSearchParams();
+        if(!dist.all && dist.sel.size) p.set('districts',[...dist.sel].join(','));
+        const res=await fetch('/api/youth-not-job-tracked?'+p.toString());
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        const d=await res.json();
+        const rows=d.rows||[];
+        if(!rows.length){ alert('No trained youth without a job-tracking record for this selection. Everyone trained has been job-tracked.'); return; }
+        const scope = (dist.all||!dist.sel.size) ? 'all-districts' : [...dist.sel].join('-').replace(/[^A-Za-z0-9_-]+/g,'_');
+        const stamp = new Date().toISOString().slice(0,10);
+        const fname = 'youth_not_job_tracked_'+scope+'_'+stamp;
+        // Column order + friendly headers for the export.
+        const COLS=[
+          ['participant_id','Participant ID'],
+          ['participant_name','Participant Name'],
+          ['sex','Sex'],
+          ['pwd','PWD'],
+          ['district','District'],
+          ['subcounty','Subcounty'],
+          ['village','Village'],
+          ['training_attendances','Training Attendances'],
+          ['training_types','Distinct Training Types'],
+          ['last_training_date','Last Training Date'],
+        ];
+        exportRows(rows, COLS, fname, 'Not job-tracked');
+      }catch(err){ alert('Could not build the list: '+err.message); }
+      finally{ btn.disabled=false; btn.innerHTML=old; }
+    });
+
+    // Shared export helper — true .xlsx via SheetJS, CSV fallback.
+    function exportRows(rows, cols, fname, sheetName){
+      const header = cols.map(c=>c[1]);
+      const aoa = [header].concat(rows.map(r=>cols.map(c=>{
+        const v=r[c[0]]; return (v==null)?'':v;
+      })));
+      if(window.XLSX){
+        const ws=XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols']=cols.map(c=>({wch: Math.max(12, c[1].length+2)}));
+        const wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, (sheetName||'Sheet1').slice(0,31));
+        XLSX.writeFile(wb, fname+'.xlsx');
+      } else {
+        // CSV fallback with UTF-8 BOM so Excel opens it cleanly.
+        const esc=(v)=>{ const s=String(v==null?'':v); return /[",\\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+        const csv='\\uFEFF'+aoa.map(r=>r.map(esc).join(',')).join('\\n');
+        const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download=fname+'.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    }
+
     load();
   </script>
 </body>

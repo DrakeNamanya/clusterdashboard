@@ -22,6 +22,7 @@ export function renderItemsNotSold(base: string, opts: any = {}): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Items Not Sold</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet" />
   <style>
     :root{
@@ -77,6 +78,9 @@ ${navSidebar('itemsnotsold')}
 
       <div class="ttl px-5 py-1.5 flex-1 text-center"><h1 class="text-lg md:text-2xl font-extrabold tracking-tight">ITEMS NOT SOLD</h1></div>
 
+      <button id="exportBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[#1a7a3d] bg-white hover:bg-[#eef8f0] text-[#1a7a3d] font-semibold" title="Download the current (filtered) table as an Excel file">
+        <i class="fas fa-file-excel mr-1"></i> Export to Excel
+      </button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
@@ -339,6 +343,36 @@ ${navSidebar('itemsnotsold')}
       try{ await fetch('/api/items-not-sold/refresh', {method:'POST'}); await load(); }
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
+    });
+
+    // ---- Export to Excel: the current (filtered + sorted) table -------------
+    document.getElementById('exportBtn').addEventListener('click', ()=>{
+      const rows = (lastData && lastData.rows) ? lastData.rows : [];
+      if(!rows.length){ alert('Nothing to export — the table is empty for this selection.'); return; }
+      const sorted = [...rows].sort((a,b)=> (Number(b[sortKey])||0) - (Number(a[sortKey])||0));
+      const header = COLS.map(c=>c[1]);
+      const aoa = [header].concat(sorted.map(r=>COLS.map(([key,label,type])=>{
+        const v=r[key];
+        if(v==null || v==='') return '';
+        return type==='num' ? (Number(v)||0) : String(v);
+      })));
+      const stamp = new Date().toISOString().slice(0,10);
+      const fname = 'items_not_sold_'+stamp;
+      if(window.XLSX){
+        const ws=XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols']=COLS.map(c=>({wch: Math.max(12, c[1].length+2)}));
+        const wb=XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Items Not Sold');
+        XLSX.writeFile(wb, fname+'.xlsx');
+      } else {
+        const esc=(v)=>{ const s=String(v==null?'':v); return /[",\\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+        const csv='\\uFEFF'+aoa.map(r=>r.map(esc).join(',')).join('\\n');
+        const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a'); a.href=url; a.download=fname+'.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
     });
 
     loadOptions();
