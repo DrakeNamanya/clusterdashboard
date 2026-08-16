@@ -54,15 +54,27 @@ begin
   truncate public.shg_profiling_rows;
 
   with dim_shg as (
-    -- SUMMARIZE(shg_profiling_form, refID, shg_name, MAX(Profilers_name))
-    select
-      nullif(trim(p.data->>'refID'),'')            as ref_id,
-      max(nullif(trim(p.data->>'shg_name'),''))    as shg_name,
-      max(nullif(trim(p.data->>'Profilers_name'),'')) as profilers_name
+    -- Dim_SHG from the SHG PROFILING FORM (shg_profiling_form_odata_view).
+    -- The profiler (CF) who profiled a group is looked up by matching the group
+    -- statistics record to its profiling form:
+    --     shg_groups_view[_id]  ==  shg_profiling_form[refID]
+    -- In this data shg_groups_view[_id] == shg_groups_view[SHG ID] for every
+    -- row, so keying on SHG ID below is equivalent to keying on _id.
+    -- We take the FIRST profiler (earliest profiling submission by dateCreated,
+    -- tie-broken by _id) per refID — mirroring the MIS FIRST(Profilers_name).
+    select distinct on (nullif(trim(p.data->>'refID'),''))
+      nullif(trim(p.data->>'refID'),'')               as ref_id,
+      nullif(trim(p.data->>'shg_name'),'')            as shg_name,
+      nullif(trim(p.data->>'Profilers_name'),'')      as profilers_name
     from public.records p
     where p.template='shg_profiling_form'
       and nullif(trim(p.data->>'refID'),'') is not null
-    group by nullif(trim(p.data->>'refID'),'')
+    order by
+      nullif(trim(p.data->>'refID'),''),
+      case when (p.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
+           then (left(p.data->>'dateCreated',10))::date else null end
+           asc nulls last,
+      nullif(trim(p.data->>'_id'),'') asc
   ),
   -- Actual member roster from youth_profiling (one row per profiled member),
   -- keyed by shg_id. This is the authoritative headcount source: the pre-

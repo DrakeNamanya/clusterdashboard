@@ -1100,8 +1100,16 @@ app.get('/api/shg-profiling/options', async (c) => {
 
 // Rebuild the shg_profiling_rows table (run after uploads / imports change data).
 app.post('/api/shg-profiling/refresh', async (c) => {
-  const n = await refreshShgProfiling(storeEnv(c));
-  return c.json({ ok: true, rows: n });
+  const env = storeEnv(c);
+  // 1) Rebuild the SHG profiling fact table (profiler attribution via
+  //    shg_groups_view[_id] == shg_profiling_form[refID]).
+  const n = await refreshShgProfiling(env);
+  // 2) Also refresh the CF identity pipeline so the CF-name-based reports
+  //    (CF Payment, CF Report card) pick up the updated profiler attribution.
+  //    Non-fatal: a CF-pipeline hiccup must not fail the profiling refresh.
+  let cf: any = null;
+  try { cf = await refreshCfAll(env); } catch (e: any) { cf = { error: e?.message || String(e) }; }
+  return c.json({ ok: true, rows: n, cf });
 });
 
 // ---- ISLA (SHGs SAVING IN A CLUSTER) --------------------------------------
