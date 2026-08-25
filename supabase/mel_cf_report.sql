@@ -26,12 +26,44 @@
 --   It deliberately does NOT do fuzzy/typo merging (that is handled by the
 --   user-driven multi-select merge in the UI).
 -- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- JUNK-TOKEN CLEANER (Level-2 cleaning) — mel_clean_name
+--   MIS test/import artifacts pollute CF names in two ways:
+--     (a) per-token system suffixes appended to every word:
+--           "meddyflep dhakabaflep" / "mirembeaegy shaitaaegy"
+--     (b) standalone junk/test tokens:
+--           "nabongho entrant", "mukisa samuel whcu", "namukoyo hope cae space"
+--   This function strips (a) globally, then drops (b) token-by-token, and
+--   collapses whitespace. It is conservative: it never splits or reorders real
+--   name words, so it can only shorten a name, never fabricate one.
+--   NOTE: input is expected already lowercased/space-normalised (mel_norm_name
+--   calls this last), but it is safe to call on raw text too.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.mel_clean_name(txt text)
+RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT coalesce(
+    (SELECT string_agg(w, ' ')
+       FROM unnest(regexp_split_to_array(
+              trim(regexp_replace(
+                regexp_replace(lower(coalesce(txt,'')), '(flep|aegy)', '', 'g'),
+                '\s+', ' ', 'g')),
+              ' ')) AS w
+      WHERE length(w) > 0
+        AND w NOT IN ('entrant','cae','space','whcu')),
+    '');
+$$;
+
+-- Level-1 + Level-2: lowercase, strip non-alpha, collapse spaces, THEN strip
+-- the MIS junk tokens/suffixes. Display and matching both flow through here so
+-- the whole pipeline (universe, reports, workplan) sees the cleaned name.
 CREATE OR REPLACE FUNCTION public.mel_norm_name(txt text)
 RETURNS text
 LANGUAGE sql IMMUTABLE AS $$
-  SELECT trim(regexp_replace(
-           regexp_replace(lower(coalesce(txt,'')), '[^a-z ]', ' ', 'g'),
-           '\s+', ' ', 'g'));
+  SELECT public.mel_clean_name(
+           trim(regexp_replace(
+             regexp_replace(lower(coalesce(txt,'')), '[^a-z ]', ' ', 'g'),
+             '\s+', ' ', 'g')));
 $$;
 GRANT EXECUTE ON FUNCTION public.mel_norm_name(text) TO anon, service_role;
 
