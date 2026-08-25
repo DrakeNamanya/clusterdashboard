@@ -4066,7 +4066,7 @@ async function ensureViewSyncState(client: Client): Promise<void> {
 export async function misSyncView(
   env: Env,
   schemaKey: string,
-  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean; fresh?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean; fresh?: boolean; tail?: boolean } = {}
 ): Promise<MisViewSyncResult> {
   const view = MIS_VIEW_MAP[schemaKey];
   if (!view) throw new Error(`No MIS view mapped for schema '${schemaKey}'`);
@@ -4080,9 +4080,17 @@ export async function misSyncView(
   // this just makes a bare/defaulted call safe too.
   const pageSize = Math.max(1, Math.min(opts.pageSize ?? 1000, 5000));
   const maxPages = Math.max(1, Math.min(opts.maxPages ?? 2, 50));
-  // Freshness mode: always sweep page 1 forward (new rows land on page 1),
-  // independent of the deep-backfill cursor. Safe because appendRecords dedups.
+  // Freshness mode: always sweep page 1 forward, independent of the deep-backfill
+  // cursor. Safe because appendRecords dedups.
   const fresh = opts.fresh === true;
+  // TAIL freshness mode: the MIS views are ordered OLDEST-first, so a brand-new
+  // submission lands on the LAST page, never page 1. A page-1 freshness pass
+  // therefore keeps re-reading the oldest rows and inserts 0 while the newest
+  // records silently pile up out of reach of the slow backfill cursor (this is
+  // exactly how production / youth_profiling / distribution drifted days behind).
+  // In tail mode we first read the live total, compute the last page, and sweep
+  // the final `maxPages` pages so every new record is captured each cron tick.
+  const tail = opts.tail === true;
 
   const token = await misLogin(env);
   const client = await connectClusterWithRetry(env);
@@ -4101,7 +4109,19 @@ export async function misSyncView(
     );
 
     let page: number;
-    if (fresh) {
+    if (tail) {
+      // Read the live total once to find the last page, then start the sweep
+      // `maxPages` pages back from the end so we always cover the newest rows.
+      let liveTotal = 0;
+      try {
+        const probe = await misFetchViewPage(env, token, view, 1, 1);
+        liveTotal = probe.total || 0;
+      } catch (e) {
+        console.error(`misSyncView(${schemaKey}) tail: total probe failed:`, e);
+      }
+      const lastPage = liveTotal > 0 ? Math.max(1, Math.ceil(liveTotal / pageSize)) : 1;
+      page = Math.max(1, lastPage - maxPages + 1);
+    } else if (fresh) {
       page = 1; // freshness pass ignores the backfill cursor
     } else if (opts.startPage && opts.startPage > 0) {
       page = opts.startPage;
@@ -4137,7 +4157,7 @@ export async function misSyncView(
         total = r.total;
       } catch (e) {
         console.error(`misSyncView(${schemaKey}): page ${page} fetch failed, skipping:`, e);
-        if (fresh) break; // freshness pass: retry next cron tick
+        if (fresh || tail) break; // freshness/tail pass: retry next cron tick
         page += 1;
         continue;
       }
@@ -4180,8 +4200,9 @@ export async function misSyncView(
       page += 1;
     }
 
-    if (fresh) {
-      // Freshness pass: record observability only, never move the backfill cursor.
+    if (fresh || tail) {
+      // Freshness / tail pass: record observability only, never move the
+      // backfill cursor (the deep cursor keeps converging history separately).
       await client.query(
         `UPDATE public.mis_view_sync_state
            SET total_records=$2, last_run=now(), last_inserted=$3
@@ -4218,7 +4239,7 @@ export async function misSyncView(
 /** Sync ALL mapped MIS views one slice each (used by cron + manual "refresh all"). */
 export async function misSyncAllViews(
   env: Env,
-  opts: { pageSize?: number; maxPages?: number; replace?: boolean; fresh?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; replace?: boolean; fresh?: boolean; tail?: boolean } = {}
 ): Promise<{ ok: boolean; results: MisViewSyncResult[] }> {
   const results: MisViewSyncResult[] = [];
   for (const key of Object.keys(MIS_VIEW_MAP)) {

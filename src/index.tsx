@@ -2121,7 +2121,8 @@ app.all('/api/mis-sync/view', async (c) => {
     const startPage = q.startPage ? parseInt(q.startPage, 10) : undefined;
     const replace = q.replace === 'true' || q.replace === '1';
     const fresh = q.fresh === 'true' || q.fresh === '1';
-    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace, fresh });
+    const tail = q.tail === 'true' || q.tail === '1';
+    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace, fresh, tail });
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -2163,6 +2164,21 @@ async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext
         await misSyncAllViews(env, { pageSize: 2000, maxPages: 2, fresh: true });
       } catch (e) {
         console.error('MIS multi-view freshness pass failed:', e);
+      }
+      // 1.5) TAIL FRESHNESS PASS — the MIS views are ordered OLDEST-first, so a
+      //      brand-new submission lands on the LAST page, not page 1. The page-1
+      //      freshness pass above therefore never sees new rows in the big feeds
+      //      (production / youth_profiling / distribution), which is how they
+      //      drifted days behind while small feeds stayed current. Here we sweep
+      //      the TAIL (last pages) of exactly those large views every tick so new
+      //      records are captured immediately. tail:true keeps observability-only
+      //      state and never disturbs the deep-backfill cursor.
+      for (const key of ['production_and_marketing_tool', 'youth_profiling', 'distribution_form_v2']) {
+        try {
+          await misSyncView(env, key, { pageSize: 2000, maxPages: 3, tail: true });
+        } catch (e) {
+          console.error(`MIS tail freshness pass failed for ${key}:`, e);
+        }
       }
       // 2) BACKFILL PASS — advance the historical cursor by one slice to keep
       //    converging the full dataset. Page-level HTTP 500s are now skipped
