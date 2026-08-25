@@ -2122,7 +2122,8 @@ app.all('/api/mis-sync/view', async (c) => {
     const replace = q.replace === 'true' || q.replace === '1';
     const fresh = q.fresh === 'true' || q.fresh === '1';
     const tail = q.tail === 'true' || q.tail === '1';
-    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace, fresh, tail });
+    const reconcile = q.reconcile === 'true' || q.reconcile === '1';
+    const res = await misSyncView(storeEnv(c), key, { pageSize, maxPages, startPage, replace, fresh, tail, reconcile });
     return c.json(res);
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
@@ -2180,6 +2181,33 @@ async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext
           console.error(`MIS tail freshness pass failed for ${key}:`, e);
         }
       }
+      // 1.7) DELETE-RECONCILE PASS — an insert-only sync never notices records
+      //      DELETED upstream in the MIS, so groups removed there linger in our
+      //      `records` table forever and keep showing in every dashboard/report
+      //      (the "Praise Joan: 26 in dashboard vs 17 in MIS" bug). Reconcile
+      //      sweeps a feed's whole live set and deletes any local row whose _id
+      //      is gone upstream (heavily guarded: aborts on any skipped page or if
+      //      live coverage < 80% of the upstream total).
+      //
+      //      The two GROUP-level feeds (shg_groups_view, shg_profiling_form) are
+      //      tiny (~3 pages) and drive the group counts, so we reconcile them
+      //      EVERY tick. The big member-grain feeds are reconciled on a rotation
+      //      (one per tick) so no single invocation exceeds the CPU budget.
+      for (const key of ['shg_groups_view', 'shg_profiling_form']) {
+        try {
+          await misSyncView(env, key, { pageSize: 2000, maxPages: 3, reconcile: true });
+        } catch (e) {
+          console.error(`MIS delete-reconcile pass failed for ${key}:`, e);
+        }
+      }
+      const bigFeeds = ['production_and_marketing_tool', 'distribution_form_v2', 'youth_profiling'];
+      const rotKey = bigFeeds[Math.floor(Date.now() / 3600000) % bigFeeds.length];
+      try {
+        await misSyncView(env, rotKey, { pageSize: 2000, maxPages: 3, reconcile: true });
+      } catch (e) {
+        console.error(`MIS delete-reconcile pass failed for ${rotKey}:`, e);
+      }
+
       // 2) BACKFILL PASS — advance the historical cursor by one slice to keep
       //    converging the full dataset. Page-level HTTP 500s are now skipped
       //    instead of aborting, so a deep bad page can't stall the sync.

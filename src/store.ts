@@ -4041,6 +4041,8 @@ export interface MisViewSyncResult {
   cycles: number;
   wrapped: boolean;
   cleared?: boolean;
+  deleted?: number;
+  reconcileAborted?: boolean;
 }
 
 /** Per-view cursor table (separate from the all_trainees at_rows cursor). */
@@ -4066,7 +4068,7 @@ async function ensureViewSyncState(client: Client): Promise<void> {
 export async function misSyncView(
   env: Env,
   schemaKey: string,
-  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean; fresh?: boolean; tail?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; startPage?: number; replace?: boolean; fresh?: boolean; tail?: boolean; reconcile?: boolean } = {}
 ): Promise<MisViewSyncResult> {
   const view = MIS_VIEW_MAP[schemaKey];
   if (!view) throw new Error(`No MIS view mapped for schema '${schemaKey}'`);
@@ -4091,6 +4093,19 @@ export async function misSyncView(
   // In tail mode we first read the live total, compute the last page, and sweep
   // the final `maxPages` pages so every new record is captured each cron tick.
   const tail = opts.tail === true;
+  // RECONCILE mode: the MIS view is the authoritative full set of CURRENT
+  // records. Insert-only syncs never notice UPSTREAM DELETIONS, so groups that
+  // were deleted in the MIS linger in our `records` table forever and keep
+  // showing in every dashboard (this is the "Praise Joan: 26 in dashboard vs 17
+  // in MIS" bug, and 35 stale shg_groups_view rows overall). In reconcile mode
+  // we sweep EVERY page from page 1, collect every live `_id`, then delete any
+  // `records` row for this template whose `_id` is no longer upstream. It forces
+  // a full sweep (ignores startPage/cursor) and is guarded so a bad/empty feed
+  // can never wipe the table.
+  const reconcile = opts.reconcile === true;
+  const liveIds = new Set<string>();
+  let reconcileAborted = false;
+  let reconcileDeleted = 0;
 
   const token = await misLogin(env);
   const client = await connectClusterWithRetry(env);
@@ -4109,7 +4124,21 @@ export async function misSyncView(
     );
 
     let page: number;
-    if (tail) {
+    // In reconcile mode we always sweep the whole feed from page 1; the caller's
+    // maxPages is overridden below to cover every live page.
+    let effMaxPages = maxPages;
+    if (reconcile) {
+      page = 1;
+      let liveTotal = 0;
+      try {
+        const probe = await misFetchViewPage(env, token, view, 1, 1);
+        liveTotal = probe.total || 0;
+      } catch (e) {
+        console.error(`misSyncView(${schemaKey}) reconcile: total probe failed:`, e);
+      }
+      // +2 pages of headroom for records added while we sweep.
+      effMaxPages = liveTotal > 0 ? Math.ceil(liveTotal / pageSize) + 2 : maxPages;
+    } else if (tail) {
       // Read the live total once to find the last page, then start the sweep
       // `maxPages` pages back from the end so we always cover the newest rows.
       let liveTotal = 0;
@@ -4146,7 +4175,7 @@ export async function misSyncView(
       cleared = true;
     }
 
-    for (let i = 0; i < maxPages; i++) {
+    for (let i = 0; i < effMaxPages; i++) {
       // Tolerate a transient/deep-page HTTP 500 from the MIS: skip instead of
       // aborting, so one bad page can't stall the whole view's cursor.
       let rawRows: Record<string, any>[] = [];
@@ -4158,6 +4187,10 @@ export async function misSyncView(
       } catch (e) {
         console.error(`misSyncView(${schemaKey}): page ${page} fetch failed, skipping:`, e);
         if (fresh || tail) break; // freshness/tail pass: retry next cron tick
+        // In reconcile mode a skipped page means we did NOT see its live ids, so
+        // we must abort the delete (marked via reconcileAborted) to avoid wiping
+        // records that are actually still upstream.
+        if (reconcile) reconcileAborted = true;
         page += 1;
         continue;
       }
@@ -4174,6 +4207,7 @@ export async function misSyncView(
       for (const raw of rawRows) {
         const rec = misMapRowToSchema(schema, raw);
         const id = rec._id || '';
+        if (id && reconcile) liveIds.add(id); // remember every live upstream id
         if (id && seen.has(id)) continue;
         if (id) seen.add(id);
         recs.push(rec);
@@ -4200,9 +4234,40 @@ export async function misSyncView(
       page += 1;
     }
 
-    if (fresh || tail) {
-      // Freshness / tail pass: record observability only, never move the
-      // backfill cursor (the deep cursor keeps converging history separately).
+    // RECONCILE deletes: after a full sweep, drop any local record whose `_id`
+    // is no longer present upstream (i.e. deleted in the MIS). Heavily guarded:
+    //   - never runs if any page fetch was skipped (reconcileAborted)
+    //   - never runs on an empty/degenerate live set
+    //   - requires the live set to cover >=80% of the upstream-reported total,
+    //     so a partial/broken feed can never mass-delete good rows.
+    if (reconcile) {
+      const liveCount = liveIds.size;
+      const enoughCoverage = totalRecords > 0 && liveCount >= Math.floor(totalRecords * 0.8);
+      if (reconcileAborted) {
+        console.error(`misSyncView(${schemaKey}) reconcile: aborted (a page fetch was skipped); no deletes performed.`);
+      } else if (!enoughCoverage) {
+        console.error(`misSyncView(${schemaKey}) reconcile: coverage too low (live=${liveCount}, total=${totalRecords}); no deletes performed.`);
+      } else {
+        // Delete local rows whose _id is not in the live upstream set. Pass the
+        // live ids as a text[] and anti-join for a single efficient statement.
+        const idArr = Array.from(liveIds);
+        const del = await client.query(
+          `DELETE FROM public.records
+             WHERE template = $1
+               AND coalesce(data->>'_id','') <> ''
+               AND NOT (data->>'_id' = ANY($2::text[]))`,
+          [schemaKey, idArr]
+        );
+        reconcileDeleted = del.rowCount || 0;
+        if (reconcileDeleted > 0) {
+          console.log(`misSyncView(${schemaKey}) reconcile: deleted ${reconcileDeleted} upstream-removed rows (live=${liveCount}, total=${totalRecords}).`);
+        }
+      }
+    }
+
+    if (fresh || tail || reconcile) {
+      // Freshness / tail / reconcile pass: record observability only, never move
+      // the backfill cursor (the deep cursor keeps converging history separately).
       await client.query(
         `UPDATE public.mis_view_sync_state
            SET total_records=$2, last_run=now(), last_inserted=$3
@@ -4230,6 +4295,8 @@ export async function misSyncView(
       cycles,
       wrapped,
       cleared,
+      deleted: reconcile ? reconcileDeleted : undefined,
+      reconcileAborted: reconcile ? reconcileAborted : undefined,
     };
   } finally {
     try { await client.end(); } catch { /* ignore */ }
@@ -4239,7 +4306,7 @@ export async function misSyncView(
 /** Sync ALL mapped MIS views one slice each (used by cron + manual "refresh all"). */
 export async function misSyncAllViews(
   env: Env,
-  opts: { pageSize?: number; maxPages?: number; replace?: boolean; fresh?: boolean; tail?: boolean } = {}
+  opts: { pageSize?: number; maxPages?: number; replace?: boolean; fresh?: boolean; tail?: boolean; reconcile?: boolean } = {}
 ): Promise<{ ok: boolean; results: MisViewSyncResult[] }> {
   const results: MisViewSyncResult[] = [];
   for (const key of Object.keys(MIS_VIEW_MAP)) {
