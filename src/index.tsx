@@ -223,7 +223,12 @@ app.use('/odata/*', cors());
 // POSTs, admin, lightweight /api/stats etc.) is untouched. Cache-busting:
 // append ?nocache=1 (or use a non-GET method) to skip the cache.
 // ---------------------------------------------------------------------------
-const EDGE_CACHE_TTL = 300; // seconds (5 min) — reports are minute-fresh, fine
+// 90 s: long enough to absorb a 200-user concurrent read burst off the single
+// 2-OCPU VM (the whole reason for edge caching), short enough that a data
+// change (sync / snapshot refresh) surfaces within ~1.5 min. Users who click a
+// page's Refresh button bypass the cache entirely (the frontend appends
+// ?nocache=1), so a manual refresh is ALWAYS live.
+const EDGE_CACHE_TTL = 90; // seconds
 const CACHEABLE_API_PATHS = new Set<string>([
   '/api/cf-premier-league',
   '/api/cf-payment-report',
@@ -250,9 +255,18 @@ const CACHEABLE_API_PATHS = new Set<string>([
 
 app.use('/api/*', async (c, next) => {
   const url = new URL(c.req.url);
+  // A browser page-reload (or hard-refresh) sends `Cache-Control: no-cache`
+  // (and often `Pragma: no-cache`). Treat that as an explicit "give me live
+  // data" so a user who reloads the dashboard ALWAYS bypasses the edge cache
+  // and sees the latest numbers immediately — this is the escape hatch for the
+  // 90 s TTL, so reports never look "stuck".
+  const reqCC = (c.req.header('cache-control') || '').toLowerCase();
+  const reqPragma = (c.req.header('pragma') || '').toLowerCase();
+  const clientWantsFresh = reqCC.includes('no-cache') || reqCC.includes('no-store') || reqPragma.includes('no-cache');
   const cacheable =
     c.req.method === 'GET' &&
     !url.searchParams.has('nocache') &&
+    !clientWantsFresh &&
     CACHEABLE_API_PATHS.has(url.pathname);
   if (!cacheable) return next();
 
