@@ -1,141 +1,135 @@
 -- ============================================================================
--- SHG PROFILING AND GROUP STATISTICS dashboard
---   Fact  : shg_groups_view (Shg_group review)  — one row per SHG group
---   Lookup: Dim_SHG  = SUMMARIZE(shg_profiling_form, refID, shg_name,
---                                 "profilers_name", MAX(Profilers_name))
---   Join  : shg_groups_view[SHG ID] = Dim_SHG[refID]   (a.k.a. _shg_id)
---   profiler in the table = RELATED(Dim_SHG[profilers_name])
+-- SHG PROFILING AND GROUP STATISTICS dashboard   [LIVE VIEW EDITION]
 --
--- Table columns (per image):
---   SHG Name, First district, Sum of Male, Sum of Female, Sum of PWD,
---   Sum of Participants Trained, Sum of Total, First profiler (profilers_name),
---   First trainings
--- KPI cards (VS comparison, both honour the same slicers + date range):
---   NewSHGs_Profiles = # profiling records (Dim_SHG) profiled in the window
---   Monthly_SHGs     = # SHG groups (shg_groups_view) created in the window
--- Slicers: District (list), profiler_name (list), Date range (dateCreated),
---   numeric range on Sum of Total (1..N).
+--   Fact  : shg_groups_view (Shg_group statistics) — one row per SHG group
+--   Lookup: Dim_SHG = FIRST profiler per group, from the SHG PROFILING FORM
+--           (shg_profiling_form). The profiler (CF) who profiled a group is
+--           matched by:
+--                shg_groups_view[_id] == shg_profiling_form[refID]
+--           In this data shg_groups_view[_id] == shg_groups_view[SHG ID] for
+--           every row, so keying on SHG ID is equivalent to keying on _id.
+--   Roster: youth_profiling members (name_ip = 'HEIFER') — authoritative
+--           headcount used only where the aggregated view figure lags (=0).
+--
+-- WHY A VIEW (not a refreshed table):
+--   shg_profiling_rows used to be a materialized snapshot rebuilt by a manual
+--   "Refresh" click (refresh_shg_profiling_rows). That snapshot kept drifting
+--   out of date and dragged every dependent report (weekly report, CF report /
+--   payment / premier league, workplan, report dash, programme pace) with it.
+--
+--   The source tables (shg_groups_view, shg_profiling_form, youth_profiling)
+--   are already synced daily into public.records and are always current. The
+--   full derivation runs in <1s, so we expose shg_profiling_rows as a LIVE
+--   VIEW over those sources. Every dependent report now always reflects the
+--   latest synced data with ZERO manual refresh and ZERO drift.
+--
+--   The view exposes the EXACT same 15 columns the old table had, so every
+--   consumer (shg_profiling_dash, shg_profiling_options, mel_weekly_report,
+--   mel_cf_report[_v2], mel_cf_premier_league, mel_cf_payment_report,
+--   mel_cf_workplan, mel_person_resolve, mel_report_dash, programme.ts, ai.ts)
+--   keeps working unchanged.
 -- ============================================================================
 
--- ---- Denormalized fact: one row per SHG group, enriched with profiler -------
-drop table if exists public.shg_profiling_rows cascade;
-create table public.shg_profiling_rows (
-  shg_id              text,   -- shg_groups_view[SHG ID]  (= Dim_SHG.refID)
-  shg_name            text,   -- shg_groups_view[SHG Name]
-  district            text,   -- First district
-  subcounty           text,
-  male                int,
-  female              int,
-  pwd                 int,
-  participants_trained int,
-  total               int,
-  trainings           text,   -- First trainings
-  no_trainings        int,
-  group_status        text,
-  profiler_name       text,   -- RELATED(Dim_SHG[profilers_name])
-  profile_shg_name    text,   -- Dim_SHG[shg_name] (profiling side name)
-  created_date        date    -- shg_groups_view[dateCreated]
-);
-create index shg_profiling_rows_district_idx on public.shg_profiling_rows (district);
-create index shg_profiling_rows_prof_idx     on public.shg_profiling_rows (profiler_name);
-create index shg_profiling_rows_date_idx     on public.shg_profiling_rows (created_date);
-create index shg_profiling_rows_total_idx    on public.shg_profiling_rows (total);
+-- Drop the old snapshot table OR a prior version of the view (and anything
+-- depending on it) then recreate as a view with identical column names/types.
+-- Use a DO block so it works whether shg_profiling_rows is currently a table
+-- (first migration) or already a view (re-apply) — a plain DROP TABLE on a
+-- view (or DROP VIEW on a table) errors with "is not a table/view".
+do $$
+begin
+  if exists (select 1 from information_schema.views
+             where table_schema='public' and table_name='shg_profiling_rows') then
+    execute 'drop view if exists public.shg_profiling_rows cascade';
+  else
+    execute 'drop table if exists public.shg_profiling_rows cascade';
+  end if;
+end $$;
+
+create or replace view public.shg_profiling_rows as
+with dim_shg as (
+  -- Dim_SHG from the SHG PROFILING FORM (shg_profiling_form_odata_view).
+  -- FIRST profiler per refID (earliest submission by dateCreated, tie-broken
+  -- by _id) — mirrors the MIS FIRST(Profilers_name).
+  select distinct on (nullif(trim(p.data->>'refID'),''))
+    nullif(trim(p.data->>'refID'),'')               as ref_id,
+    nullif(trim(p.data->>'shg_name'),'')            as shg_name,
+    nullif(trim(p.data->>'Profilers_name'),'')      as profilers_name
+  from public.records p
+  where p.template='shg_profiling_form'
+    and nullif(trim(p.data->>'refID'),'') is not null
+  order by
+    nullif(trim(p.data->>'refID'),''),
+    case when (p.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
+         then (left(p.data->>'dateCreated',10))::date else null end
+         asc nulls last,
+    nullif(trim(p.data->>'_id'),'') asc
+),
+-- Actual member roster from youth_profiling (one row per profiled member),
+-- keyed by shg_id, filtered to Implementing Partner = HEIFER (name_ip).
+-- This is the authoritative headcount source: the pre-aggregated
+-- shg_groups_view Male/Female/Total lags for freshly-profiled groups
+-- (shows 0 while the members are already captured here).
+roster as (
+  select
+    nullif(trim(y.data->>'shg_id'),'')                                       as sid,
+    count(*)                                                                 as r_total,
+    count(*) filter (where lower(y.data->>'Sex') like 'm%')                  as r_male,
+    count(*) filter (where lower(y.data->>'Sex') like 'f%')                  as r_female,
+    count(*) filter (where lower(trim(y.data->>'Disability_status'))='yes')  as r_pwd
+  from public.records y
+  where y.template='youth_profiling'
+    and upper(trim(y.data->>'name_ip')) = 'HEIFER'   -- IP filter = HEIFER
+    and nullif(trim(y.data->>'shg_id'),'') is not null
+  group by nullif(trim(y.data->>'shg_id'),'')
+)
+select
+  nullif(trim(g.data->>'SHG ID'),'')                    as shg_id,
+  nullif(trim(g.data->>'SHG Name'),'')                  as shg_name,
+  nullif(trim(g.data->>'district'),'')                  as district,
+  nullif(trim(g.data->>'subcounty'),'')                 as subcounty,
+  -- shg_groups_view Total/Female/Male are AUTHORITATIVE (what the Heifer
+  -- portal shows). Use them verbatim; only when the view figure is 0/blank
+  -- (freshly-profiled group whose members exist in youth_profiling but the
+  -- aggregated view hasn't caught up) do we substitute the roster count.
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_male,0) end   as male,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_female,0) end as female,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_pwd,0) end    as pwd,
+  coalesce(nullif(regexp_replace(g.data->>'Participants Trained','[^0-9\-]','','g'),'')::int, 0) as participants_trained,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_total,0) end  as total,
+  nullif(trim(g.data->>'trainings'),'')                 as trainings,
+  nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
+  nullif(trim(g.data->>'group_status'),'')              as group_status,
+  d.profilers_name                                      as profiler_name,
+  d.shg_name                                            as profile_shg_name,
+  case when (g.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
+       then (left(g.data->>'dateCreated',10))::date else null end as created_date
+from public.records g
+left join dim_shg d
+  on d.ref_id = nullif(trim(g.data->>'SHG ID'),'')
+left join roster rm
+  on rm.sid = nullif(trim(g.data->>'SHG ID'),'')
+where g.template='shg_groups_view';
+
 grant select on public.shg_profiling_rows to anon, service_role;
 
--- ---- Rebuild ---------------------------------------------------------------
--- Dim_SHG is materialized inline via a grouped CTE over shg_profiling_form.
+-- ---- Refresh function kept as a NO-OP stub --------------------------------
+-- shg_profiling_rows is now a live view, so there is nothing to refresh.
+-- The existing "Refresh" button and store.ts still call this; we keep it so
+-- those callers do not error, and return the current live row count.
 create or replace function public.refresh_shg_profiling_rows()
 returns bigint
-language plpgsql
+language sql
 security definer
 as $$
-declare rows_out bigint;
-begin
-  truncate public.shg_profiling_rows;
-
-  with dim_shg as (
-    -- Dim_SHG from the SHG PROFILING FORM (shg_profiling_form_odata_view).
-    -- The profiler (CF) who profiled a group is looked up by matching the group
-    -- statistics record to its profiling form:
-    --     shg_groups_view[_id]  ==  shg_profiling_form[refID]
-    -- In this data shg_groups_view[_id] == shg_groups_view[SHG ID] for every
-    -- row, so keying on SHG ID below is equivalent to keying on _id.
-    -- We take the FIRST profiler (earliest profiling submission by dateCreated,
-    -- tie-broken by _id) per refID — mirroring the MIS FIRST(Profilers_name).
-    select distinct on (nullif(trim(p.data->>'refID'),''))
-      nullif(trim(p.data->>'refID'),'')               as ref_id,
-      nullif(trim(p.data->>'shg_name'),'')            as shg_name,
-      nullif(trim(p.data->>'Profilers_name'),'')      as profilers_name
-    from public.records p
-    where p.template='shg_profiling_form'
-      and nullif(trim(p.data->>'refID'),'') is not null
-    order by
-      nullif(trim(p.data->>'refID'),''),
-      case when (p.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
-           then (left(p.data->>'dateCreated',10))::date else null end
-           asc nulls last,
-      nullif(trim(p.data->>'_id'),'') asc
-  ),
-  -- Actual member roster from youth_profiling (one row per profiled member),
-  -- keyed by shg_id. This is the authoritative headcount source: the pre-
-  -- aggregated shg_groups_view Male/Female/Total lags for freshly-profiled
-  -- groups (shows 0 while the members are already captured here).
-  -- Materialized so the 117k-row scan runs ONCE, not per outer row.
-  roster as materialized (
-    select
-      nullif(trim(y.data->>'shg_id'),'')                                   as sid,
-      count(*)                                                             as r_total,
-      count(*) filter (where lower(y.data->>'Sex') like 'm%')              as r_male,
-      count(*) filter (where lower(y.data->>'Sex') like 'f%')              as r_female,
-      count(*) filter (where lower(trim(y.data->>'Disability_status'))='yes') as r_pwd
-    from public.records y
-    where y.template='youth_profiling'
-      and nullif(trim(y.data->>'shg_id'),'') is not null
-    group by nullif(trim(y.data->>'shg_id'),'')
-  )
-  insert into public.shg_profiling_rows
-  select
-    nullif(trim(g.data->>'SHG ID'),'')                    as shg_id,
-    nullif(trim(g.data->>'SHG Name'),'')                  as shg_name,
-    nullif(trim(g.data->>'district'),'')                  as district,
-    nullif(trim(g.data->>'subcounty'),'')                 as subcounty,
-    -- The shg_groups_view Total/Female/Male columns are the AUTHORITATIVE
-    -- figures (they are what the Heifer portal shows). Use them verbatim.
-    -- ONLY when the view figure is 0/blank for a group (the lag case where a
-    -- freshly-profiled group has members captured in youth_profiling but the
-    -- aggregated view has not caught up) do we substitute the roster count.
-    -- This keeps every populated group exactly matching the portal, while
-    -- still surfacing members for the "0 members" groups the user reported.
-    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
-         then coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
-         else coalesce(rm.r_male,0) end   as male,
-    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
-         then coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
-         else coalesce(rm.r_female,0) end as female,
-    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
-         then coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
-         else coalesce(rm.r_pwd,0) end    as pwd,
-    coalesce(nullif(regexp_replace(g.data->>'Participants Trained','[^0-9\-]','','g'),'')::int, 0) as participants_trained,
-    case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
-         then coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
-         else coalesce(rm.r_total,0) end  as total,
-    nullif(trim(g.data->>'trainings'),'')                 as trainings,
-    nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
-    nullif(trim(g.data->>'group_status'),'')              as group_status,
-    d.profilers_name                                      as profiler_name,
-    d.shg_name                                            as profile_shg_name,
-    case when (g.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
-         then (left(g.data->>'dateCreated',10))::date else null end as created_date
-  from public.records g
-  left join dim_shg d
-    on d.ref_id = nullif(trim(g.data->>'SHG ID'),'')
-  left join roster rm
-    on rm.sid = nullif(trim(g.data->>'SHG ID'),'')
-  where g.template='shg_groups_view';
-
-  get diagnostics rows_out = row_count;
-  return rows_out;
-end;
+  select count(*)::bigint from public.shg_profiling_rows;
 $$;
 alter function public.refresh_shg_profiling_rows() set statement_timeout='120000';
 grant execute on function public.refresh_shg_profiling_rows() to service_role;
@@ -162,8 +156,13 @@ as $$
       case when p_profilers is null or array_length(p_profilers,1) is null then null
            else p_profilers end as pl
   ),
+  -- Snapshot the live view ONCE per call (materialized) so the underlying
+  -- derivation over records is not recomputed for every sub-select below.
+  base as materialized (
+    select * from public.shg_profiling_rows
+  ),
   f as (
-    select r.* from public.shg_profiling_rows r, sel
+    select r.* from base r, sel
     where (sel.dl is null or upper(trim(r.district)) = any(select upper(trim(x)) from unnest(sel.dl) x))
       and (sel.pl is null or r.profiler_name = any(sel.pl))
       and (p_from is null or r.created_date >= p_from)
@@ -172,15 +171,8 @@ as $$
       and (p_total_max is null or r.total <= p_total_max)
   )
   select jsonb_build_object(
-    -- KPI cards (VS)
-    --   NewSHGs_Profiles = DISTINCTCOUNT('shg_groups_statistics'[SHG ID]) over the
-    --     filtered rows (distinct SHG IDs actually present in the selection).
-    --   Monthly_SHGs = MAX(Targets[Monthly_SHGs]) — a target/goal value that is
-    --     NOT affected by the row filters (there is no Targets table in the data,
-    --     so it is supplied via p_monthly_target; default 29 as per the report).
     'new_shgs_profiles',(select count(distinct shg_id) from f where shg_id is not null),
     'monthly_shgs',     coalesce(p_monthly_target, 29),
-    -- Table rows (one per SHG group)
     'rows', (select coalesce(jsonb_agg(jsonb_build_object(
         'shg_name', shg_name,
         'shg_id', shg_id,
@@ -197,7 +189,6 @@ as $$
         'created_date', created_date
       ) order by shg_name), '[]'::jsonb)
       from (select * from f where shg_name is not null order by shg_name limit p_limit) t),
-    -- Grand-total row (all filtered rows)
     'total', (select jsonb_build_object(
         'count', count(*),
         'male', coalesce(sum(male),0),
@@ -206,13 +197,12 @@ as $$
         'participants_trained', coalesce(sum(participants_trained),0),
         'total', coalesce(sum(total),0)
       ) from f),
-    -- Slicer lists (global) + numeric range bounds
     'districts', (select coalesce(jsonb_agg(distinct district order by district), '[]'::jsonb)
-                  from public.shg_profiling_rows where district is not null),
+                  from base where district is not null),
     'profilers', (select coalesce(jsonb_agg(distinct profiler_name order by profiler_name), '[]'::jsonb)
-                  from public.shg_profiling_rows where profiler_name is not null),
-    'total_min', (select coalesce(min(total),0) from public.shg_profiling_rows),
-    'total_max', (select coalesce(max(total),0) from public.shg_profiling_rows)
+                  from base where profiler_name is not null),
+    'total_min', (select coalesce(min(total),0) from base),
+    'total_max', (select coalesce(max(total),0) from base)
   );
 $$;
 alter function public.shg_profiling_dash(text[],text[],date,date,int,int,int,int) set statement_timeout='40000';
