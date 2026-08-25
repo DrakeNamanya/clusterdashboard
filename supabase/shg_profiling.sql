@@ -141,7 +141,17 @@ select
   --   3. FALLBACK: the SHG PROFILING FORM's own "Profilers_name" field
   --      (d.form_profilers_name) — recovers groups with no youth-form submitter
   --      by relating SHG ID across both forms, as requested.
-  coalesce(pfg.profilers_name, d.profilers_name, d.form_profilers_name) as profiler_name,
+  --   4. LAST RESORT: 'Not recorded' — for the handful of groups that have NO
+  --      profiler in ANY source (admin bulk-imported: no youth rows, and the
+  --      shg-form Profilers_name is blank with createdBy='admin'). Investigated
+  --      and confirmed genuinely unattributable, so we label rather than leave
+  --      blank, so the dashboard/reports never show an empty profiler cell.
+  coalesce(
+    nullif(trim(pfg.profilers_name),''),
+    nullif(trim(d.profilers_name),''),
+    nullif(trim(d.form_profilers_name),''),
+    'Not recorded'
+  ) as profiler_name,
   d.shg_name                                            as profile_shg_name,
   case when (g.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
        then (left(g.data->>'dateCreated',10))::date else null end as created_date
