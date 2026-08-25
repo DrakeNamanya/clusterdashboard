@@ -208,6 +208,88 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use('/api/*', cors());
 app.use('/odata/*', cors());
 
+// ---------------------------------------------------------------------------
+// EDGE CACHE for heavy read-only report endpoints.
+//
+// These reports run 8-20s against the 2-OCPU Oracle VM. With 10-50 (or 200+)
+// users all filtering/refreshing, identical requests would hammer the VM and
+// hit the ~20s edge/Hyperdrive ceiling (e.g. the all-clusters CF league timed
+// out). We cache each distinct GET (keyed by full URL incl. query string) in
+// Cloudflare's edge Cache API for a few minutes, so repeated identical loads
+// are served instantly from the edge and the VM is queried at most once per
+// TTL window. Zero cost — no extra Cloudflare product, just the built-in cache.
+//
+// Only GETs on this exact list are cached; everything else (uploads, refresh
+// POSTs, admin, lightweight /api/stats etc.) is untouched. Cache-busting:
+// append ?nocache=1 (or use a non-GET method) to skip the cache.
+// ---------------------------------------------------------------------------
+const EDGE_CACHE_TTL = 300; // seconds (5 min) — reports are minute-fresh, fine
+const CACHEABLE_API_PATHS = new Set<string>([
+  '/api/cf-premier-league',
+  '/api/cf-payment-report',
+  '/api/cf-report',
+  '/api/weekly',
+  '/api/report',
+  '/api/programme-report',
+  '/api/cluster-trainings',
+  '/api/shg-profiling',
+  '/api/shg-distribution',
+  '/api/frontliners',
+  '/api/distribution',
+  '/api/production',
+  '/api/sales',
+  '/api/value-chain-sales',
+  '/api/poultry-sales',
+  '/api/items-not-sold',
+  '/api/local-leverage',
+  '/api/isla',
+  '/api/new-youth',
+  '/api/youth-in-work',
+  '/api/youth-not-job-tracked',
+]);
+
+app.use('/api/*', async (c, next) => {
+  const url = new URL(c.req.url);
+  const cacheable =
+    c.req.method === 'GET' &&
+    !url.searchParams.has('nocache') &&
+    CACHEABLE_API_PATHS.has(url.pathname);
+  if (!cacheable) return next();
+
+  // The Cache API is only available at the real edge runtime. Guard so local
+  // dev / non-edge environments simply fall through to a live query.
+  const cache = (globalThis as any).caches?.default as Cache | undefined;
+  if (!cache) return next();
+
+  // Key by the full URL (path + query) so each filter combination is its own
+  // cache entry.
+  const cacheKey = new Request(url.toString(), { method: 'GET' });
+
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const r = new Response(hit.body, hit);
+    r.headers.set('X-Edge-Cache', 'HIT');
+    return r;
+  }
+
+  await next();
+
+  // Only cache successful responses.
+  if (c.res && c.res.status === 200) {
+    const src = c.res.clone();
+    const headers = new Headers(src.headers);
+    headers.set('Cache-Control', `public, max-age=${EDGE_CACHE_TTL}`);
+    headers.set('X-Edge-Cache', 'MISS');
+    const stored = new Response(src.body, {
+      status: src.status,
+      statusText: src.statusText,
+      headers,
+    });
+    c.executionCtx?.waitUntil?.(cache.put(cacheKey, stored.clone()));
+    c.res = stored;
+  }
+});
+
 // Any uncaught error (e.g. Supabase not configured, transient network) becomes
 // a clean JSON 503 instead of a raw crash — the client retries 5xx.
 app.onError((err, c) => {

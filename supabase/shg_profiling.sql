@@ -72,10 +72,15 @@ with prof_first as (
 dim_shg as (
   -- SHG name (profiling side) still comes from the SHG PROFILING FORM;
   -- the profiler is joined in from prof_first (youth-form submitter) above.
+  -- FALLBACK profiler: the SHG PROFILING FORM records who profiled the group
+  -- in its own "Profilers_name" field (joined by SHG ID = refID). When the
+  -- youth-form submitter is missing for a group (no youth submissions synced
+  -- yet, or submitter blank), we use this form-recorded profiler instead.
   select distinct on (nullif(trim(p.data->>'refID'),''))
     nullif(trim(p.data->>'refID'),'')               as ref_id,
     nullif(trim(p.data->>'shg_name'),'')            as shg_name,
-    pf.profilers_name                               as profilers_name
+    pf.profilers_name                               as profilers_name,
+    nullif(trim(p.data->>'Profilers_name'),'')      as form_profilers_name
   from public.records p
   left join prof_first pf on pf.sid = nullif(trim(p.data->>'refID'),'')
   where p.template='shg_profiling_form'
@@ -130,11 +135,13 @@ select
   nullif(trim(g.data->>'trainings'),'')                 as trainings,
   nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
   nullif(trim(g.data->>'group_status'),'')              as group_status,
-  -- Profiler = FIRST youth-form submitter for this SHG group. Prefer the
-  -- direct prof_first match on SHG ID (covers groups that exist in
-  -- shg_groups_view + youth_profiling but not in shg_profiling_form);
-  -- fall back to the value carried through dim_shg.
-  coalesce(pfg.profilers_name, d.profilers_name)        as profiler_name,
+  -- Profiler resolution order:
+  --   1. FIRST youth-form submitter matched directly on SHG ID (prof_first pfg)
+  --   2. same value carried through dim_shg (d.profilers_name)
+  --   3. FALLBACK: the SHG PROFILING FORM's own "Profilers_name" field
+  --      (d.form_profilers_name) — recovers groups with no youth-form submitter
+  --      by relating SHG ID across both forms, as requested.
+  coalesce(pfg.profilers_name, d.profilers_name, d.form_profilers_name) as profiler_name,
   d.shg_name                                            as profile_shg_name,
   case when (g.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
        then (left(g.data->>'dateCreated',10))::date else null end as created_date
