@@ -64,9 +64,23 @@ BEGIN
                WHERE ap.person_id = p.person_id
           ) allk WHERE coalesce(k,'') <> '') AS akeys
   FROM public.mel_person p
-  WHERE coalesce(p.display_name,'') <> '';
+  WHERE coalesce(p.display_name,'') <> ''
+    -- Task D: drop test accounts that were registered as field staff (they came
+    -- through the official staff upload, so they reach the person registry, not
+    -- the orphan set). Same junk patterns as the orphan filter below.
+    AND public.mel_norm_name(p.display_name) NOT IN (
+      'data','test','testprofile','testcfc','tdifs','commitmentfee','na','nan',
+      'mug','drakenamanya'
+    )
+    AND public.mel_norm_name(p.display_name) !~ 'entrant';
 
   -- Orphan rows: unresolved activity names (kept visible so no work disappears).
+  -- Task D: also drop obvious MIS test/junk entries so they never appear as a
+  -- selectable CF. Two guards:
+  --   (1) an explicit blocklist of known test/system tokens;
+  --   (2) the '<name>entrant' concatenated test artifacts (e.g. "arnoldentrant",
+  --       "euniceentrant") which the token cleaner can't split safely.
+  -- Real facilitators are unaffected (their names never match these patterns).
   CREATE TEMP TABLE _orphan_u ON COMMIT DROP AS
   SELECT NULL::text AS person_id,
          ap.name_key AS nm,
@@ -77,6 +91,11 @@ BEGIN
     AND ap.district <> ''
     AND ap.name_key ~ '[a-z]'
     AND ap.name_key !~ '(group|association|farmers|provision|selfhelp|shg|village|cluster|community)'
+    AND ap.name_key NOT IN (
+      'data','test','testprofile','testcfc','tdifs','commitmentfee','na','nan',
+      'mug','drakenamanya'
+    )
+    AND ap.name_key !~ 'entrant'   -- '<name>entrant' test artifacts
   GROUP BY ap.name_key;
 
   -- Combine person + orphan rows into a flat (nm, person_id, district, akey) set

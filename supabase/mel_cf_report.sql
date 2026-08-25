@@ -73,11 +73,16 @@ GRANT EXECUTE ON FUNCTION public.mel_norm_name(text) TO anon, service_role;
 -- "akunyobeatricaegy".  mel_norm_key() reduces a name to a-z only (spaces
 -- removed) and strips those suffixes so a CF human name ("acham irene josephine")
 -- can be matched against the squashed collector username.
+--   Now routes through mel_clean_name FIRST so the same junk tokens/suffixes
+--   removed from display names (flep/aegy per-token, entrant/cae/space/whcu)
+--   are also removed from the MATCH key. This makes "epiphanyflep ajidiruflep"
+--   and "ajidiru epiphany" collapse to the same person, killing the duplicate
+--   CF rows that used to show separate activity counts for one human.
 CREATE OR REPLACE FUNCTION public.mel_norm_key(txt text)
 RETURNS text
 LANGUAGE sql IMMUTABLE AS $$
   SELECT regexp_replace(
-           regexp_replace(lower(coalesce(txt,'')), '[^a-z]', '', 'g'),
+           regexp_replace(lower(public.mel_clean_name(coalesce(txt,''))), '[^a-z]', '', 'g'),
            '(aegy|flep)$', '');
 $$;
 GRANT EXECUTE ON FUNCTION public.mel_norm_key(text) TO anon, service_role;
