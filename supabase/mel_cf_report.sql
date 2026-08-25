@@ -70,7 +70,7 @@ BEGIN
   -- resolves via akeys, so `key = nm` keeps the report join correct while
   -- `name` shows the clean initcap version.
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
-  ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
+  ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   SELECT coalesce(jsonb_agg(
            jsonb_build_object('key', nm, 'name', initcap(nm), 'activities', acts)
@@ -124,7 +124,7 @@ BEGIN
     v_label := v_label || ' (+' || (array_length(v_keys,1)-1)::text || ' merged)';
   END IF;
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
-  ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
+  ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
   -- Participant sex lookup (frontliner attendance master) so production / sales /
@@ -137,7 +137,7 @@ BEGIN
   prof AS (
     SELECT * FROM shg_profiling_rows
     WHERE public.mel_norm_name(profiler_name) = ANY(v_keys)
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR created_date >= p_date_from)
       AND (p_date_to   IS NULL OR created_date <= p_date_to)
   ),
@@ -191,7 +191,7 @@ BEGIN
     WHERE EXISTS (SELECT 1 FROM unnest(v_nokeys) k
                   WHERE public.mel_norm_key(submitted_by) = k
                      OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
   ),
@@ -215,7 +215,7 @@ BEGIN
   prod AS (
     SELECT * FROM production_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys) AND lower(pdn_level)='production'
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -226,7 +226,7 @@ BEGIN
       AND EXISTS (SELECT 1 FROM unnest(v_nokeys) k
                   WHERE public.mel_norm_key(submitted_by) = k
                      OR (length(k) >= 8 AND public.mel_norm_key(submitted_by) LIKE k || '%'))
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
   ),
@@ -264,7 +264,7 @@ BEGIN
     SELECT * FROM sales_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
       AND lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -278,7 +278,7 @@ BEGIN
   ps AS (
     SELECT * FROM poultry_sales_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -293,7 +293,7 @@ BEGIN
   isla AS (
     SELECT * FROM isla_final_rows
     WHERE public.mel_norm_name(profilers_name) = ANY(v_keys)
-      AND (v_dl IS NULL OR upper(district_shg)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -310,7 +310,7 @@ BEGIN
   lev AS (
     SELECT * FROM local_leverage_rows
     WHERE public.mel_norm_name(submitter_name) = ANY(v_keys)
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR date_created >= p_date_from)
       AND (p_date_to   IS NULL OR date_created <= p_date_to)
   ),
@@ -319,12 +319,12 @@ BEGIN
   -- ---------- DISTRICTS worked in ----------
   ctx AS (
     SELECT string_agg(DISTINCT d, ', ') AS districts FROM (
-      SELECT upper(district) d FROM prof
-      UNION SELECT upper(district_name) FROM prod
-      UNION SELECT upper(district_name) FROM hs
-      UNION SELECT upper(district_name) FROM ps
-      UNION SELECT upper(district_shg) FROM isla
-      UNION SELECT upper(district) FROM lev
+      SELECT public.mel_canon_district(district) d FROM prof
+      UNION SELECT public.mel_canon_district(district_name) FROM prod
+      UNION SELECT public.mel_canon_district(district_name) FROM hs
+      UNION SELECT public.mel_canon_district(district_name) FROM ps
+      UNION SELECT public.mel_canon_district(district_shg) FROM isla
+      UNION SELECT public.mel_canon_district(district) FROM lev
     ) q WHERE d IS NOT NULL
   )
   SELECT jsonb_build_object(

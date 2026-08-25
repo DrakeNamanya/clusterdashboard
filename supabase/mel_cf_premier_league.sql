@@ -26,7 +26,7 @@ DECLARE
   v_dl text[];
 BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
-  ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
+  ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
   -- Universe of CFs — read from the pre-computed cache (public.mel_cf_universe,
@@ -57,7 +57,7 @@ BEGIN
     FROM shg_profiling_rows r
     JOIN keymap km ON km.k = public.mel_norm_key(r.profiler_name)
     WHERE r.profiler_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(r.district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.created_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.created_date <= p_date_to)
     GROUP BY 1
@@ -69,7 +69,7 @@ BEGIN
     FROM isla_final_rows r
     JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(r.district_shg)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
@@ -88,7 +88,7 @@ BEGIN
            SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END)::int                AS youth_trained
     FROM at_rows
     WHERE data_collector IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR day >= p_date_from::text)
       AND (p_date_to   IS NULL OR day <= p_date_to::text)
     GROUP BY 1
@@ -108,7 +108,7 @@ BEGIN
     JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL AND lower(r.pdn_level)='production'
       AND r.shg_participant_id IS NOT NULL
-      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
   ),
@@ -120,7 +120,7 @@ BEGIN
       AND d.livestock_type ILIKE '%poultry%'
       AND lower(coalesce(d.unit,'')) = 'number'
       AND d.participant_id IS NOT NULL
-      AND (v_dl IS NULL OR upper(d.district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR d.dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR d.dist_date <= p_date_to)
   ),
@@ -140,7 +140,7 @@ BEGIN
     FROM poultry_sales_rows r
     JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
@@ -153,7 +153,7 @@ BEGIN
     JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
       AND lower(coalesce(r.value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
-      AND (v_dl IS NULL OR upper(r.district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
     GROUP BY 1
@@ -165,7 +165,7 @@ BEGIN
     FROM local_leverage_rows r
     JOIN keymap km ON km.k = public.mel_norm_key(r.submitter_name)
     WHERE r.submitter_name IS NOT NULL
-      AND (v_dl IS NULL OR upper(r.district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.date_created >= p_date_from)
       AND (p_date_to   IS NULL OR r.date_created <= p_date_to)
     GROUP BY 1
@@ -181,7 +181,7 @@ BEGIN
            submission_date
     FROM job_tracking_rows
     WHERE participant_id IS NOT NULL
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR submission_date >= p_date_from)
       AND (p_date_to   IS NULL OR submission_date <= p_date_to)
     ORDER BY participant_id, submission_date DESC NULLS LAST

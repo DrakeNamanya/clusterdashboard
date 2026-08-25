@@ -38,7 +38,7 @@ BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN
     v_dl := NULL;
   ELSE
-    SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x;
+    SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x;
   END IF;
 
   WITH
@@ -59,12 +59,12 @@ BEGIN
   ),
   reach_sel AS (
     SELECT * FROM ft
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR first_date >= p_date_from)
       AND (p_date_to   IS NULL OR first_date <= p_date_to)
   ),
   reach_by_district AS (
-    SELECT upper(district) AS district,
+    SELECT public.mel_canon_district(district) AS district,
            COUNT(*)::int AS achieved,
            COUNT(*) FILTER (WHERE is_female)::int AS female,
            COUNT(*) FILTER (WHERE is_pwd)::int AS pwd
@@ -73,13 +73,13 @@ BEGIN
 
   -- ---------- REACH / MOBILIZATION TARGETS ----------
   rt AS (
-    SELECT upper(district) AS district,
+    SELECT public.mel_canon_district(district) AS district,
            SUM(monthly_target) AS reach_target,
            SUM(monthly_shgs)*25 AS mob_target,
            SUM(monthly_female) AS female_target,
            SUM(monthly_pwds) AS pwd_target
     FROM mel_reach_targets
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR month >= date_trunc('month',p_date_from)::date)
       AND (p_date_to   IS NULL OR month <= p_date_to)
     GROUP BY 1
@@ -87,12 +87,12 @@ BEGIN
 
   -- ---------- MOBILIZATION ACHIEVED (SHG profiling total) ----------
   mob_ach AS (
-    SELECT upper(district) AS district, SUM(total)::int AS achieved,
+    SELECT public.mel_canon_district(district) AS district, SUM(total)::int AS achieved,
            SUM(COALESCE(female,0))::int AS female,
            SUM(COALESCE(pwd,0))::int    AS pwd,
            COUNT(*)::int AS shgs
     FROM shg_profiling_rows
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR created_date >= p_date_from)
       AND (p_date_to   IS NULL OR created_date <= p_date_to)
     GROUP BY 1
@@ -100,31 +100,31 @@ BEGIN
 
   -- ---------- PRODUCTION ACHIEVED ----------
   prod_hort AS (   -- youth in production (Horticulture + Oil seeds)
-    SELECT upper(district_name) AS district,
+    SELECT public.mel_canon_district(district_name) AS district,
            COUNT(DISTINCT shg_participant_id)::int AS n
     FROM production_rows
     WHERE lower(value_chain) IN ('horticulture','oil seeds','oil_seeds')
       AND lower(pdn_level)='production'
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
     GROUP BY 1
   ),
   prod_live AS (   -- livestock distribution (unit=Number)
-    SELECT upper(district) AS district,
+    SELECT public.mel_canon_district(district) AS district,
            COUNT(DISTINCT participant_id)::int AS n
     FROM distribution_rows
     WHERE lower(material_type) LIKE '%livestock%' AND lower(unit)='number'
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
     GROUP BY 1
   ),
   -- production Y3 target: one row per district (annual), + season breakdown
   ptgt AS (
-    SELECT upper(district) AS district, MAX(y3_target) AS y3_target
+    SELECT public.mel_canon_district(district) AS district, MAX(y3_target) AS y3_target
     FROM mel_production_targets
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
     GROUP BY 1
   ),
   -- union of every district that appears anywhere, so table rows are complete
@@ -173,10 +173,10 @@ BEGIN
   ),
   -- season breakdown for production targets (per district per season)
   season_tbl AS (
-    SELECT upper(district) AS district, season,
+    SELECT public.mel_canon_district(district) AS district, season,
            y3_target, expected_jobs, poultry, goats, horticulture, dairy, total_achieved
     FROM mel_production_targets
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
     ORDER BY district, season
   )
   SELECT jsonb_build_object(

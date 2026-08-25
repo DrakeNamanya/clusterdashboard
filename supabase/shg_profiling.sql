@@ -46,15 +46,38 @@ begin
 end $$;
 
 create or replace view public.shg_profiling_rows as
-with dim_shg as (
-  -- Dim_SHG from the SHG PROFILING FORM (shg_profiling_form_odata_view).
-  -- FIRST profiler per refID (earliest submission by dateCreated, tie-broken
-  -- by _id) — mirrors the MIS FIRST(Profilers_name).
+with prof_first as (
+  -- FIRST profiler per SHG group, taken from the YOUTH PROFILING FORM
+  -- (youth_profiling_form_odata_view). The profiler shown in the MIS SHG
+  -- group statistics is the "submitterName" of the group's FIRST youth
+  -- profiling submission. In our synced records that submitter is
+  -- datacollectors_Name (Title_datacollector = "Community Facilitator" etc).
+  -- We pick the EARLIEST submission (by dateCreated) per shg_id — mirroring
+  -- the MIS FIRST(submitterName). Filtered to Implementing Partner = HEIFER.
+  select distinct on (nullif(trim(y.data->>'shg_id'),''))
+    nullif(trim(y.data->>'shg_id'),'')                as sid,
+    nullif(trim(y.data->>'datacollectors_Name'),'')  as profilers_name
+  from public.records y
+  where y.template='youth_profiling'
+    and upper(trim(y.data->>'name_ip')) = 'HEIFER'
+    and nullif(trim(y.data->>'shg_id'),'') is not null
+    and nullif(trim(y.data->>'datacollectors_Name'),'') is not null
+  order by
+    nullif(trim(y.data->>'shg_id'),''),
+    case when (y.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
+         then (left(y.data->>'dateCreated',10))::date else null end
+         asc nulls last,
+    nullif(trim(y.data->>'_id'),'') asc
+),
+dim_shg as (
+  -- SHG name (profiling side) still comes from the SHG PROFILING FORM;
+  -- the profiler is joined in from prof_first (youth-form submitter) above.
   select distinct on (nullif(trim(p.data->>'refID'),''))
     nullif(trim(p.data->>'refID'),'')               as ref_id,
     nullif(trim(p.data->>'shg_name'),'')            as shg_name,
-    nullif(trim(p.data->>'Profilers_name'),'')      as profilers_name
+    pf.profilers_name                               as profilers_name
   from public.records p
+  left join prof_first pf on pf.sid = nullif(trim(p.data->>'refID'),'')
   where p.template='shg_profiling_form'
     and nullif(trim(p.data->>'refID'),'') is not null
   order by
@@ -107,13 +130,19 @@ select
   nullif(trim(g.data->>'trainings'),'')                 as trainings,
   nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
   nullif(trim(g.data->>'group_status'),'')              as group_status,
-  d.profilers_name                                      as profiler_name,
+  -- Profiler = FIRST youth-form submitter for this SHG group. Prefer the
+  -- direct prof_first match on SHG ID (covers groups that exist in
+  -- shg_groups_view + youth_profiling but not in shg_profiling_form);
+  -- fall back to the value carried through dim_shg.
+  coalesce(pfg.profilers_name, d.profilers_name)        as profiler_name,
   d.shg_name                                            as profile_shg_name,
   case when (g.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
        then (left(g.data->>'dateCreated',10))::date else null end as created_date
 from public.records g
 left join dim_shg d
   on d.ref_id = nullif(trim(g.data->>'SHG ID'),'')
+left join prof_first pfg
+  on pfg.sid = nullif(trim(g.data->>'SHG ID'),'')
 left join roster rm
   on rm.sid = nullif(trim(g.data->>'SHG ID'),'')
 where g.template='shg_groups_view';

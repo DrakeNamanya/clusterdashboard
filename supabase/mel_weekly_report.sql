@@ -16,7 +16,7 @@ DECLARE
   v_dl text[];
 BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
-  ELSE SELECT array_agg(upper(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
+  ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
 
   WITH
   -- Participant sex lookup (from the frontliner attendance master) so production /
@@ -28,7 +28,7 @@ BEGIN
   -- ---------- PROFILING & SHG FORMATION (shg_profiling_rows) ----------
   prof AS (
     SELECT * FROM shg_profiling_rows
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR created_date >= p_date_from)
       AND (p_date_to   IS NULL OR created_date <= p_date_to)
   ),
@@ -44,7 +44,7 @@ BEGIN
     SELECT participant_id, training_type, (day)::date AS d, district
     FROM at_rows
     WHERE has_date=1 AND day ~ '^\d{4}-\d{2}-\d{2}'
-      AND (v_dl IS NULL OR upper(district)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR (day)::date >= p_date_from)
       AND (p_date_to   IS NULL OR (day)::date <= p_date_to)
   ),
@@ -56,7 +56,7 @@ BEGIN
   -- ---------- DISTRIBUTION ----------
   dist AS (
     SELECT * FROM distribution_rows
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
   ),
@@ -81,7 +81,7 @@ BEGIN
   prod AS (
     SELECT * FROM production_rows
     WHERE lower(pdn_level)='production'
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -90,14 +90,14 @@ BEGIN
            COUNT(DISTINCT CASE WHEN lower(sm.sex)='female' THEN p.shg_participant_id END)::int AS female,
            COUNT(DISTINCT CASE WHEN lower(p.disability_status)='yes' THEN p.shg_participant_id END)::int AS pwd,
            COUNT(DISTINCT p.shg_id)::int AS shgs,
-           COUNT(DISTINCT upper(p.district_name))::int AS districts,
+           COUNT(DISTINCT public.mel_canon_district(p.district_name))::int AS districts,
            string_agg(DISTINCT initcap(lower(p.district_name)), ', ') AS district_list
     FROM prod p LEFT JOIN sexmap sm ON sm.participant_id = p.shg_participant_id
   ),
   -- ---------- POULTRY SALES ----------
   ps AS (
     SELECT * FROM poultry_sales_rows
-    WHERE (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -117,7 +117,7 @@ BEGIN
   hs AS (
     SELECT * FROM sales_rows
     WHERE lower(coalesce(value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
-      AND (v_dl IS NULL OR upper(district_name)=ANY(v_dl))
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -154,7 +154,7 @@ BEGIN
   -- ---------- ISLA (savings & loans) ----------
   isla AS (
     SELECT * FROM isla_final_rows
-    WHERE (v_dl IS NULL OR upper(district_shg)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
   ),
@@ -174,7 +174,7 @@ BEGIN
   -- ---------- LEVERAGE ----------
   lev AS (
     SELECT * FROM local_leverage_rows
-    WHERE (v_dl IS NULL OR upper(district)=ANY(v_dl))
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR date_created >= p_date_from)
       AND (p_date_to   IS NULL OR date_created <= p_date_to)
   ),
