@@ -4236,11 +4236,20 @@ export async function misSyncView(
       // Write through the normal storage path (lands where dashboards read).
       // Force dedup on MIS _id regardless of the schema's upload-time dedupKey,
       // so MIS-sourced rows are stable and idempotent.
+      // upsert=true: the MIS is the authoritative source and rows are EDITED IN
+      // PLACE upstream (same _id, changed field — a profiler rename in the shg
+      // profiling form, a membership correction in youth profiling, a district
+      // fix, etc.). An insert-only sync silently drops those edits (DO NOTHING),
+      // which is why renamed profilers (kaudah/lunkuse -> simawo david) never
+      // reached production_rows / distribution_rows / the CF universe. Upserting
+      // MIS view rows applies the edit on the next sweep; the IS DISTINCT FROM
+      // guard inside appendRecordsNeon rewrites ONLY genuinely-changed rows.
       const res = await appendRecords(
         env,
         { ...schema, dedupKey: '_id', dedupCols: undefined },
         recs,
-        `mis:${view}`
+        `mis:${view}`,
+        true
       );
       inserted += res.inserted;
 
