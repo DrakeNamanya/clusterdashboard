@@ -11,6 +11,27 @@
   storage split** (Neon Postgres + Cloudflare D1 + Supabase), SheetJS for
   in-browser parsing, Tailwind CSS UI.
 
+### Feature 2026-08-26: Merge CF Names tool (`/cf-merge`)
+Admin page (padlocked) that folds duplicate spellings of the same Community
+Facilitator into ONE canonical name so their numbers add up on every report
+(CF Report Card, Premier League, Production League, Payment Report).
+- **UI:** search the full CF list, multi-select the spellings that are the same
+  person (checkboxes), pick which spelling to keep (radio / dropdown), click
+  **Merge selected**. Existing merges are listed with an **Undo** button.
+- **API:** `GET /api/cf-merge/candidates?q=`, `GET /api/cf-merge/list`,
+  `POST /api/cf-merge/apply {canon, names[]}`, `POST /api/cf-merge/undo {name}`.
+- **Engine:** `public.mel_cf_merge(alias_key, canon_key, canon_name)` +
+  `mel_cf_merge_apply / _unmerge / _list` (supabase/mel_cf_merge.sql).
+  `mel_refresh_activity_person()` canonicalises every activity name-key through
+  `mel_merge_canon()` BEFORE resolving, so the merge applies uniformly across
+  training / profiling / production / sales / isla / leverage; the universe then
+  shows one row (its `nm` = the chosen canonical name, via `mel_merge_name()`).
+  Durable — survives every sync + refresh (it lives in a table, not the data).
+- Note: the automatic resolver already unifies many cases (e.g. *Praise* +
+  *Praise Joan* both resolve to one registered person → Premier League shows a
+  single "Praise Joan" with 17 groups). The tool is for the cases it can't
+  safely auto-merge (e.g. *Lunkusejoanitah* vs *Joannelunkuse*).
+
 ### Fix 2026-08-26: MIS edits now propagate (Task M membership + Task P profiler rename)
 Two related bugs, both rooted in the sync/derivation layer never reflecting
 **edits made in place in the MIS** (same record `_id`, a changed field):
