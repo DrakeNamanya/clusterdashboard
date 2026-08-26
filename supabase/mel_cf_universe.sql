@@ -81,9 +81,13 @@ BEGIN
   --   (2) the '<name>entrant' concatenated test artifacts (e.g. "arnoldentrant",
   --       "euniceentrant") which the token cleaner can't split safely.
   -- Real facilitators are unaffected (their names never match these patterns).
+  -- For a USER-MERGED group with no registered person, show the friendly
+  -- canonical display name (mel_merge_name) instead of the raw no-space key, so
+  -- the card reads "Praise Joan" not "praisejoan". Non-merged orphans keep their
+  -- own key as before.
   CREATE TEMP TABLE _orphan_u ON COMMIT DROP AS
   SELECT NULL::text AS person_id,
-         ap.name_key AS nm,
+         COALESCE(public.mel_norm_name(public.mel_merge_name(ap.name_key)), ap.name_key) AS nm,
          array_agg(DISTINCT ap.district) AS districts,
          ARRAY[ap.name_key] AS akeys
   FROM public.mel_activity_person ap

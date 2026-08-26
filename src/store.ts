@@ -2183,6 +2183,58 @@ export async function refreshCfAll(env: Env): Promise<number> {
   return neonRpcScalar(env, 'mel_refresh_cf_all');
 }
 
+// ---- CF manual merge (Praise vs Praise Joan / duplicate-spelling folding) ---
+// The user multi-selects CF spellings that are the same person and picks a
+// canonical display name; every spelling's activity is then attributed to ONE
+// canonical key so all reports add the numbers up under a single name.
+
+/** All CFs in the universe (name + district + activity totals) for the picker. */
+export async function cfMergeCandidates(env: Env, search?: string): Promise<any[]> {
+  const like = search && search.trim() ? `%${search.trim().toLowerCase()}%` : null;
+  const rows = await neonQuery(
+    env,
+    `select u.nm as name,
+            u.ck as key,
+            coalesce(array_to_string(u.districts, ', '), '') as districts,
+            (select count(*) from public.mel_activity_person ap
+               where ap.name_key = any(u.akeys)) as activity_rows,
+            (select m.canon_name from public.mel_cf_merge m
+               where m.canon_key = u.ck limit 1) as merged_into_here,
+            exists (select 1 from public.mel_cf_merge m where m.canon_key = u.ck) as is_canon
+       from public.mel_cf_universe u
+      where ($1::text is null or lower(u.nm) like $1)
+      order by u.nm`,
+    [like]
+  );
+  return rows || [];
+}
+
+/** Apply a merge: fold all provided spellings into the canonical display name. */
+export async function cfMergeApply(env: Env, canonName: string, names: string[]): Promise<number> {
+  const n = await neonRpcScalar(env, 'mel_cf_merge_apply', '$1,$2', [canonName, names]);
+  // Rebuild the identity->universe chain so the merge is reflected everywhere.
+  await refreshCfAll(env);
+  return n;
+}
+
+/** Undo a merge involving a given display name, then rebuild. */
+export async function cfMergeUndo(env: Env, name: string): Promise<number> {
+  const n = await neonRpcScalar(env, 'mel_cf_unmerge', '$1', [name]);
+  await refreshCfAll(env);
+  return n;
+}
+
+/** List all current merges (grouped by canonical name) for the admin view. */
+export async function cfMergeList(env: Env): Promise<any[]> {
+  const rows = await neonQuery(
+    env,
+    `select canon_name, canon_key, array_agg(alias_key order by alias_key) as alias_keys
+       from public.mel_cf_merge group by canon_name, canon_key order by canon_name`,
+    []
+  );
+  return rows || [];
+}
+
 // ---- Field Staff admin (Task E "CF Registry" tab) --------------------------
 // Thin wrappers over the mel_admin_* RPCs. Read helpers return jsonb; write
 // helpers return { ok, ... } and internally re-run the Task-E refresh chain so

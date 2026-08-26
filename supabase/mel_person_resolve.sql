@@ -121,16 +121,22 @@ CREATE OR REPLACE FUNCTION public.mel_refresh_activity_person()
 $fn$
 DECLARE n integer;
 BEGIN
+  -- Each raw activity name_key is canonicalised through public.mel_merge_canon()
+  -- so any USER-MERGED spellings ("Praise" -> "Praise Joan",
+  -- "Joannelunkuse" -> "Lunkusejoanitah") collapse to ONE key here, BEFORE
+  -- resolution + universe build. That makes the merge apply uniformly across
+  -- training / profiling / production / sales / isla / leverage so every
+  -- report adds the numbers up under the single canonical name.
   CREATE TEMP TABLE _ap ON COMMIT DROP AS
-  SELECT DISTINCT src, name_key, upper(coalesce(district,'')) AS district
+  SELECT DISTINCT src, public.mel_merge_canon(name_key) AS name_key, district
   FROM (
-    SELECT 'training'::text src, public.mel_norm_key(data_collector) name_key, district FROM at_rows WHERE data_collector IS NOT NULL
-    UNION ALL SELECT 'profiling', public.mel_norm_key(profiler_name),  district      FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
-    UNION ALL SELECT 'production',public.mel_norm_key(profilers_name), district_name FROM production_rows    WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT 'poultry',   public.mel_norm_key(profilers_name), district_name FROM poultry_sales_rows WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT 'sales',     public.mel_norm_key(profilers_name), district_name FROM sales_rows         WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT 'isla',      public.mel_norm_key(profilers_name), district_shg  FROM isla_final_rows     WHERE profilers_name IS NOT NULL
-    UNION ALL SELECT 'leverage',  public.mel_norm_key(submitter_name), district      FROM local_leverage_rows WHERE submitter_name IS NOT NULL
+    SELECT 'training'::text src, public.mel_norm_key(data_collector) name_key, upper(coalesce(district,'')) AS district FROM at_rows WHERE data_collector IS NOT NULL
+    UNION ALL SELECT 'profiling', public.mel_norm_key(profiler_name),  upper(coalesce(district,''))      FROM shg_profiling_rows WHERE profiler_name  IS NOT NULL
+    UNION ALL SELECT 'production',public.mel_norm_key(profilers_name), upper(coalesce(district_name,'')) FROM production_rows    WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT 'poultry',   public.mel_norm_key(profilers_name), upper(coalesce(district_name,'')) FROM poultry_sales_rows WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT 'sales',     public.mel_norm_key(profilers_name), upper(coalesce(district_name,'')) FROM sales_rows         WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT 'isla',      public.mel_norm_key(profilers_name), upper(coalesce(district_shg,''))  FROM isla_final_rows     WHERE profilers_name IS NOT NULL
+    UNION ALL SELECT 'leverage',  public.mel_norm_key(submitter_name), upper(coalesce(district,''))      FROM local_leverage_rows WHERE submitter_name IS NOT NULL
   ) s
   WHERE coalesce(name_key,'') <> '';
 

@@ -11,6 +11,7 @@ import {
   distributionDash, distributionDetail, distributionOptions, refreshDistribution,
   shgDistributionDash, shgDistributionDetail, shgDistributionOptions, refreshShgDistribution,
   refreshCfAll,
+  cfMergeCandidates, cfMergeApply, cfMergeUndo, cfMergeList,
   adminPersonList, adminOrphanList, adminPersonDetail, adminAddAlias, adminDelAlias,
   adminMergeAccounts, adminUnmergeAccount, adminRenamePerson, adminTransferShg, adminUntransferShg,
   shgProfilingDash, shgProfilingOptions, refreshShgProfiling,
@@ -61,6 +62,7 @@ import { renderCfPremierLeague } from './cfleague';
 import { renderCfProductionLeague } from './cfprodleague';
 import { renderCfPaymentReport } from './cfpayment';
 import { renderFieldStaff } from './fieldstaff';
+import { renderCfMerge } from './cfmerge';
 import { clusterDistricts } from './clusters';
 import { renderProgrammeReport } from './programmepage';
 import { renderYouthInWork } from './youthinwork';
@@ -1568,6 +1570,61 @@ app.post('/api/cf-universe/refresh', async (c) => {
   try {
     const n = await refreshCfAll(storeEnv(c));
     return c.json({ ok: true, cfs: n });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// ---- CF Merge tool (Praise vs Praise Joan): list, apply, undo ---------------
+// Admin page + JSON API to fold duplicate CF spellings into one canonical name
+// so every report (CF Report / Premier League / Production League / Payment)
+// adds their numbers up under a single card.
+app.get('/cf-merge', (c) =>
+  c.html(renderCfMerge(baseUrl(c.req.url)).replace('</body>', navGate() + '</body>')));
+
+// List every CF in the universe (optional ?q= search) for the multi-select.
+app.get('/api/cf-merge/candidates', async (c) => {
+  try {
+    const rows = await cfMergeCandidates(storeEnv(c), c.req.query('q') || undefined);
+    return c.json({ ok: true, rows });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Current merges (grouped by canonical name).
+app.get('/api/cf-merge/list', async (c) => {
+  try {
+    const rows = await cfMergeList(storeEnv(c));
+    return c.json({ ok: true, rows });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Apply a merge: { canon: string, names: string[] }.
+app.post('/api/cf-merge/apply', async (c) => {
+  try {
+    const body = await c.req.json<{ canon?: string; names?: string[] }>();
+    const canon = (body.canon || '').trim();
+    const names = Array.isArray(body.names) ? body.names.filter(Boolean) : [];
+    if (!canon) return c.json({ ok: false, error: 'canon (canonical name) is required' }, 400);
+    if (names.length < 2) return c.json({ ok: false, error: 'select at least two names to merge' }, 400);
+    const written = await cfMergeApply(storeEnv(c), canon, names);
+    return c.json({ ok: true, aliasesWritten: written });
+  } catch (e: any) {
+    return c.json({ ok: false, error: String(e?.message || e) }, 500);
+  }
+});
+
+// Undo a merge involving a given display name: { name: string }.
+app.post('/api/cf-merge/undo', async (c) => {
+  try {
+    const body = await c.req.json<{ name?: string }>();
+    const name = (body.name || '').trim();
+    if (!name) return c.json({ ok: false, error: 'name is required' }, 400);
+    const removed = await cfMergeUndo(storeEnv(c), name);
+    return c.json({ ok: true, removed });
   } catch (e: any) {
     return c.json({ ok: false, error: String(e?.message || e) }, 500);
   }
