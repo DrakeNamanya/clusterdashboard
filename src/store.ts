@@ -489,7 +489,8 @@ export async function appendRecords(
   env: Env,
   schema: SheetSchema,
   records: Record<string, string>[],
-  sourceFile: string
+  sourceFile: string,
+  upsert = false
 ): Promise<AppendResult> {
   if (!records.length) return { inserted: 0, duplicatesSkipped: 0, total: 0 };
 
@@ -505,7 +506,7 @@ export async function appendRecords(
     }
   }
   if (usesNeon(env, schema.key)) {
-    return appendRecordsNeon(env, schema, records, sourceFile);
+    return appendRecordsNeon(env, schema, records, sourceFile, upsert);
   }
 
   const seqIdx = schema.columns.findIndex((c) => c.type === 'seq');
@@ -570,7 +571,8 @@ async function appendRecordsNeon(
   env: Env,
   schema: SheetSchema,
   records: Record<string, string>[],
-  sourceFile: string
+  sourceFile: string,
+  upsert = false
 ): Promise<AppendResult> {
   const seqIdx = schema.columns.findIndex((c) => c.type === 'seq');
   const seqName = seqIdx >= 0 ? schema.columns[seqIdx].name : null;
@@ -611,16 +613,33 @@ async function appendRecordsNeon(
         values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}::jsonb)`);
         params.push(row.template, row.dedup_key, row.seq, row.source_file, row.data);
       });
-      const text =
-        `insert into public.records (template, dedup_key, seq, source_file, data) values ` +
-        values.join(', ') +
-        ` on conflict (template, dedup_key) do nothing returning 1`;
+      // UPSERT mode (MIS view syncs): the MIS is authoritative and records are
+      // EDITED IN PLACE upstream (same _id, changed field — e.g. a profiler
+      // rename in the shg profiling form). The default insert-only path
+      // (DO NOTHING) silently skips those edits, so renamed profilers / fixed
+      // membership never propagate to production_rows / distribution_rows / the
+      // CF universe. In upsert mode we overwrite `data` (and source_file/seq)
+      // whenever the incoming row DIFFERS, so MIS edits flow through on the next
+      // sync. The `WHERE ... IS DISTINCT FROM` guard means unchanged rows are
+      // NOT rewritten, keeping the pass cheap (no thrashing of 100k+ static
+      // rows). `RETURNING 1` then counts inserts + genuine updates.
+      const text = upsert
+        ? `insert into public.records (template, dedup_key, seq, source_file, data) values ` +
+          values.join(', ') +
+          ` on conflict (template, dedup_key) do update set ` +
+          `data = excluded.data, source_file = excluded.source_file, seq = excluded.seq ` +
+          `where public.records.data is distinct from excluded.data returning 1`
+        : `insert into public.records (template, dedup_key, seq, source_file, data) values ` +
+          values.join(', ') +
+          ` on conflict (template, dedup_key) do nothing returning 1`;
       const res = await client.query(text, params);
       inserted += Array.isArray(res.rows) ? res.rows.length : 0;
     }
   } finally {
     try { await client.end(); } catch { /* ignore */ }
   }
+  // In upsert mode `inserted` counts inserts + updates (both are the writes we
+  // want to report); duplicatesSkipped is then the unchanged remainder.
   const dup = records.length - inserted;
   return { inserted, duplicatesSkipped: dup < 0 ? 0 : dup, total: records.length };
 }
