@@ -11,6 +11,33 @@
   storage split** (Neon Postgres + Cloudflare D1 + Supabase), SheetJS for
   in-browser parsing, Tailwind CSS UI.
 
+### Fix 2026-08-26: MIS edits now propagate (Task M membership + Task P profiler rename)
+Two related bugs, both rooted in the sync/derivation layer never reflecting
+**edits made in place in the MIS** (same record `_id`, a changed field):
+
+- **Task M — membership undercount.** `/shg-profiling` total membership did not
+  match the MIS youth profiling form (e.g. *Katente poultry farmers - Mukono*:
+  MIS ~30, dashboard 9). Cause: `shg_profiling.sql` trusted the pre-aggregated
+  `shg_groups_view.Total` whenever it was `> 0`, even though that view **lags**
+  the actual youth-profiling roster. Fix: membership is now
+  `GREATEST(view figure, youth roster count)` per field (male/female/pwd/total),
+  so the more-complete source wins. Katente now shows 31 (matching the MIS),
+  and the fix corrected ~1,325 groups whose view Total was stale-low without
+  regressing the minority whose roster was mid-sync.
+- **Task P — profiler rename not propagating.** Renaming a profiler in the SHG
+  profiling form (e.g. *kaudah catheline / lunkuse → simawo david*) never
+  reached `production_rows` / `distribution_rows` / the CF universe, so
+  `cf-production-league` kept showing the old name. Cause: the MIS view sync was
+  **insert-only** (`ON CONFLICT (template, dedup_key) DO NOTHING`), so an edited
+  record (same `_id`) was silently skipped and the old `data` kept forever. Fix:
+  MIS view syncs now **upsert** — `DO UPDATE SET data = excluded.data …
+  WHERE records.data IS DISTINCT FROM excluded.data`. Only genuinely-changed
+  rows are rewritten (no thrashing of static rows), and the downstream refreshes
+  (`refresh_production_rows`, `refresh_distribution_rows`, `mel_refresh_cf_all`)
+  then carry the new name through on their existing cron rotation. This also
+  fixes ANY edited field (membership corrections, district fixes, etc.), not
+  just profiler names.
+
 ## Storage Architecture (Oracle-hosted Postgres — single backend, via Cloudflare Hyperdrive)
 **All data now lives on a self-hosted PostgreSQL 16 server** on the Oracle VM
 `51.170.135.225` / `defaultdb`. CockroachDB Serverless (previous backend), Neon
