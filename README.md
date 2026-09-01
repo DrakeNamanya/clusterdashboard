@@ -1,5 +1,17 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **Fix 2026-09-01: Production dashboard district case-sensitivity.** The MIS
+> stores `District` with inconsistent casing (`JINJA`, `Jinja`, `jinja`,
+> `JINJA CITY`). The production dashboard filtered/faceted districts with an
+> exact case-sensitive match, so picking "Jinja" missed the `JINJA` uppercase
+> rows — Jinja+Jinja City (Aug 1–Sep 1) showed **278** instead of the MIS's
+> **~445**. Fixed `production_dash`/`production_detail`/`production_options`
+> (in `supabase/production.sql`) to canonicalize the district filter via
+> `mel_canon_district()` and dedupe the facet list via
+> `mel_canon_district_disp()`. Now returns **447** for that slice, matching the
+> MIS. The report dashboard (`mel_report_dash`) and CF premier league already
+> canonicalized districts, so no change was needed there.
+
 ## Project Overview
 - **Name**: SHG Data Cleaner & Consolidator
 - **Goal**: Accept uploaded Excel/CSV sheets, auto-detect their template, clean &
