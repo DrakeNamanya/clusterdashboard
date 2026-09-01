@@ -101,8 +101,13 @@ BEGIN
     JOIN keymap km ON km.k = a.k
     GROUP BY km.nm
   ),
-  -- ---- YOUTH INTO PRODUCTION = horticulture youth + bird recipients ----
-  prod_hort_pairs AS (
+  -- ---- YOUTH INTO PRODUCTION (per M&E, 2026-09-01) ----
+  -- DISTINCT participant_id (e.g. HEI-JIN-00122891) credited to this CF from
+  -- EITHER (a) the Production & Marketing tool, pdn_level=Production, ALL value
+  -- chains (Horticulture, Poultry, Beef, Oil seeds, Dairy — NOT Marketing), OR
+  -- (b) livestock distribution with unit=Number (ANY livestock type). A youth in
+  -- both is counted once (prod_youth UNIONs then COUNT(DISTINCT pid)).
+  prod_hort_pairs AS (   -- (a) all production value chains
     SELECT DISTINCT km.nm, r.shg_participant_id AS pid
     FROM production_rows r
     JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
@@ -112,12 +117,11 @@ BEGIN
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
   ),
-  dist_matched AS (
+  dist_matched AS (      -- (b) livestock distributed, unit=Number (all types)
     SELECT km.nm, d.participant_id
     FROM distribution_rows d
     JOIN keymap km ON km.k = public.mel_norm_key(d.submitted_by)
-    WHERE lower(coalesce(d.material_type,'')) = 'livestock'
-      AND d.livestock_type ILIKE '%poultry%'
+    WHERE lower(coalesce(d.material_type,'')) LIKE '%livestock%'
       AND lower(coalesce(d.unit,'')) = 'number'
       AND d.participant_id IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl))

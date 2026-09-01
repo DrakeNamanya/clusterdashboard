@@ -99,26 +99,49 @@ BEGIN
   ),
 
   -- ---------- PRODUCTION ACHIEVED ----------
-  prod_hort AS (   -- youth in production (Horticulture + Oil seeds)
-    SELECT public.mel_canon_district(district_name) AS district,
-           COUNT(DISTINCT shg_participant_id)::int AS n
+  -- DEFINITION (per M&E, 2026-09-01): a youth is "in production" if their
+  -- participant_id (e.g. HEI-JIN-00122891) appears in EITHER
+  --   (a) the Production & Marketing tool with pdn_level=Production (ALL value
+  --       chains — Horticulture, Poultry, Beef, Oil seeds, Dairy; NOT Marketing), OR
+  --   (b) livestock distribution with unit=Number.
+  -- Achieved = COUNT(DISTINCT participant_id) across the UNION of (a) and (b), so
+  -- a youth who is in both is counted ONCE (no double count).
+  --
+  -- prod_pids / live_pids collect the DISTINCT participant ids per district for
+  -- each source; prod_hort / prod_live keep the per-source headline counts for
+  -- the "youth_in_prod" and "livestock_dist" breakdown columns.
+  prod_pids AS (   -- (a) all production value chains, one row per (district,pid)
+    SELECT DISTINCT public.mel_canon_district(district_name) AS district,
+           shg_participant_id AS pid
     FROM production_rows
-    WHERE lower(value_chain) IN ('horticulture','oil seeds','oil_seeds')
-      AND lower(pdn_level)='production'
+    WHERE lower(pdn_level)='production'
+      AND shg_participant_id IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR activity_date <= p_date_to)
-    GROUP BY 1
   ),
-  prod_live AS (   -- livestock distribution (unit=Number)
-    SELECT public.mel_canon_district(district) AS district,
-           COUNT(DISTINCT participant_id)::int AS n
+  live_pids AS (   -- (b) livestock distribution (unit=Number)
+    SELECT DISTINCT public.mel_canon_district(district) AS district,
+           participant_id AS pid
     FROM distribution_rows
     WHERE lower(material_type) LIKE '%livestock%' AND lower(unit)='number'
+      AND participant_id IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR dist_date <= p_date_to)
-    GROUP BY 1
+  ),
+  prod_hort AS (   -- headline: youth in production (ALL value chains)
+    SELECT district, COUNT(*)::int AS n FROM prod_pids GROUP BY district
+  ),
+  prod_live AS (   -- headline: youth who received distributed livestock (Number)
+    SELECT district, COUNT(*)::int AS n FROM live_pids GROUP BY district
+  ),
+  prod_union AS ( -- DISTINCT participants across BOTH sources = "achieved"
+    SELECT district, COUNT(*)::int AS n FROM (
+      SELECT district, pid FROM prod_pids
+      UNION
+      SELECT district, pid FROM live_pids
+    ) u GROUP BY district
   ),
   -- production Y3 target: one row per district (annual), + season breakdown
   ptgt AS (
@@ -162,13 +185,14 @@ BEGIN
   prod_tbl AS (
     SELECT a.district,
            COALESCE(pt.y3_target,0)::numeric         AS target,
-           COALESCE(ph.n,0) + COALESCE(pl.n,0)       AS achieved,
-           COALESCE(ph.n,0)                          AS youth_in_prod,
-           COALESCE(pl.n,0)                          AS livestock_dist
+           COALESCE(pu.n,0)                          AS achieved,      -- DISTINCT union
+           COALESCE(ph.n,0)                          AS youth_in_prod, -- (a) all chains
+           COALESCE(pl.n,0)                          AS livestock_dist -- (b) livestock=Number
     FROM all_d a
     LEFT JOIN ptgt pt ON pt.district=a.district
     LEFT JOIN prod_hort ph ON ph.district=a.district
     LEFT JOIN prod_live pl ON pl.district=a.district
+    LEFT JOIN prod_union pu ON pu.district=a.district
     WHERE COALESCE(pt.y3_target,0)<>0 OR COALESCE(ph.n,0)<>0 OR COALESCE(pl.n,0)<>0
   ),
   -- season breakdown for production targets (per district per season)
