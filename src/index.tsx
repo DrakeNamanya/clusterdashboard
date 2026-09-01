@@ -1964,6 +1964,24 @@ exec 9>"$LOCK"
 flock -n 9 || { echo "$(date -u) SKIP: previous run still active"; exit 0; }
 
 # ---------------------------------------------------------------------------
+# SELF-UPDATE: pull the latest driver from the server every run so logic fixes
+# (e.g. which dashboards refresh each tick) propagate to this VM automatically
+# within one cron cycle — no manual re-install needed. Heavily guarded: the
+# download must succeed, be non-empty, and start with the bash shebang; only
+# then do we replace this file and re-exec. Any failure keeps the current copy.
+SELF="\${BASH_SOURCE[0]:-\$0}"
+NEWSRC="\$(curl -s --max-time 30 "\$BASE/api/cron-script" || true)"
+case "\$NEWSRC" in
+  '#!/usr/bin/env bash'*)
+    if [ -n "\$NEWSRC" ] && [ "\$NEWSRC" != "\$(cat "\$SELF" 2>/dev/null)" ]; then
+      printf '%s' "\$NEWSRC" > "\$SELF.tmp" && chmod +x "\$SELF.tmp" && mv "\$SELF.tmp" "\$SELF"
+      echo "\$(date -u) self-updated cron driver; re-exec"
+      flock -u 9 2>/dev/null || true
+      exec "\$SELF"
+    fi ;;
+esac
+
+# ---------------------------------------------------------------------------
 # OVERLOAD FIX (2026-08-02): the previous version fired the ENTIRE workload
 # (heavy multi-page MIS pulls + 6 view syncs + 6 distribution OData feeds +
 # 10 dashboard rebuilds + a full warm-cache) EVERY 5 minutes. That request
@@ -2007,9 +2025,17 @@ sync_call() {
 #    this keeps "Youth Trained" current every tick at minimal gateway cost.
 sync_call "run" "$BASE/api/mis-sync/run"
 
-# 2) Light dashboard rebuilds that the home page reads directly. Kept every tick
-#    so the landing KPIs never go stale; the heavier rebuilds are rotated below.
-for c in cluster newyouth; do
+# 2) Dashboard rebuilds. These are all CHEAP SQL re-derivations from the already
+#    -ingested public.records (measured: production 0.24s, sales 0.08s,
+#    poultry 0.23s, profiling 0.18s, isla 0.11s, leverage 0.06s, jobs 2.3s,
+#    distribution 1.3s, shg-dist 0.38s — the whole set ~5s). There is no gateway
+#    cost here (no MIS pull), so we run EVERY TICK. This is the key fix for
+#    "numbers ever-changing per MIS": as soon as any slot below pulls new/edited
+#    raw rows into public.records, the very next 15-min tick re-derives EVERY
+#    dashboard from them — instead of waiting for that table's ~45-min slot.
+#    (The heavy part — pulling raw rows from the MIS gateway — is still rotated
+#    across slots 0/1/2 to stay under the Worker CPU limit.)
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking shgdistribution; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
@@ -2040,9 +2066,9 @@ if [ "$CYCLE" = "0" ]; then
   for v in youth_profiling shg_profiling_form; do
     sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
   done
-  for c in shgprofiling isla; do
-    echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
-  done
+  # (shgprofiling + isla are now refreshed EVERY tick in the block above, so we
+  #  no longer refresh them again here — the fresh view pulls above land in
+  #  public.records and the next tick's every-cycle block re-derives them.)
 fi
 
 # ===== CYCLE SLOT 1 — production / sales / leverage / jobs views =============
@@ -2054,9 +2080,9 @@ if [ "$CYCLE" = "1" ]; then
     sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=500"
   done
   sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=250&maxPages=1"
-  for c in production sales poultrysales localleverage jobtracking; do
-    echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
-  done
+  # (production/sales/poultry/leverage/jobs are now refreshed EVERY tick in the
+  #  block above — the fresh view pulls here land in public.records and the next
+  #  tick's every-cycle block re-derives them.)
 fi
 
 # ===== CYCLE SLOT 2 — distribution OData + items-not-sold + full warm ========
