@@ -12,6 +12,17 @@
 > MIS. The report dashboard (`mel_report_dash`) and CF premier league already
 > canonicalized districts, so no change was needed there.
 
+> **Fix 2026-09-01: Dashboards now refresh every 15 min (was ~45 min).** The
+> cron driver only re-derived each dashboard once per 3-slot rotation, so fixes
+> and new MIS data took up to ~45 min to appear. The derived-table refreshes are
+> cheap SQL (~5s for all of them combined, no gateway cost), so they now run on
+> **every 15-min tick**. The heavy MIS *raw pulls* stay rotated across slots to
+> respect the Worker CPU limit. The driver is also now **self-updating** (each
+> run re-fetches `/api/cron-script` and re-execs if it changed) so future logic
+> fixes reach the VM automatically. **One-time action:** re-install the driver on
+> the VM once so it picks up the self-update header:
+> `curl -s -o /home/ubuntu/mis-cron.sh https://shg-data-cleaner.pages.dev/api/cron-script && chmod +x /home/ubuntu/mis-cron.sh`
+
 ## Project Overview
 - **Name**: SHG Data Cleaner & Consolidator
 - **Goal**: Accept uploaded Excel/CSV sheets, auto-detect their template, clean &
