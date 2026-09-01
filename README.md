@@ -1,5 +1,29 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **Feature 2026-09-01: Production performance by month (line curve).** The Report
+> Dashboard now shows a **monthly trend curve** directly under the KPI strip:
+> the number of youths entering production each calendar month (distinct
+> participant IDs — production form, all value chains, `pdn_level=Production`
+> **UNION** livestock distribution `unit=Number`, de-duplicated per month). It
+> follows the cluster filter and spans the whole timeline. Backed by a new
+> `production_monthly[]` array in `mel_report_dash` (`prod_monthly` CTE) and a
+> Chart.js area/line chart (`renderProdTrend` in `src/report.tsx`). The Aug 2026
+> point (2,025 for the Iganga cluster) matches the Production KPI card exactly.
+
+> **Fix 2026-09-01: Mobilization now counts youth profiling records (was SHG
+> group totals).** The Report Dashboard "Mobilization: Targets vs Achieved" was
+> computed as `SUM(shg_profiling_rows.total)` — the number of members in SHG
+> *groups* whose GROUP profiling record was created in the range, dated by
+> **group-creation**. That under-counted vs the MIS `youth_profiling_form` view
+> (e.g. Mayuge Aug 1→ showed **461** vs the MIS's **~769**). Mobilization achieved
+> is now **`COUNT(DISTINCT _id)` of youth_profiling submissions** per district and
+> date range (dated by `dateCreated`, the 100%-populated submission timestamp),
+> with Female/PWD read from each youth's own `Sex` / `Disability_status`. This is
+> the same definition as counting `unique_id` in the MIS youth profiling download.
+> *Note:* the youth_profiling feed is large and synced on a rolling tail/backfill
+> cursor, so on any given day the DB may trail the live MIS by a few days for the
+> most recent submissions; the every-15-min cron closes the gap over time.
+
 > **Fix 2026-09-01: Production dashboard district case-sensitivity.** The MIS
 > stores `District` with inconsistent casing (`JINJA`, `Jinja`, `jinja`,
 > `JINJA CITY`). The production dashboard filtered/faceted districts with an
