@@ -85,16 +85,42 @@ BEGIN
     GROUP BY 1
   ),
 
-  -- ---------- MOBILIZATION ACHIEVED (SHG profiling total) ----------
+  -- ---------- MOBILIZATION ACHIEVED (youth profiling form) ----------
+  -- DEFINITION (per M&E, 2026-09-01): Mobilization achieved = the number of
+  -- YOUTHS PROFILED, i.e. COUNT(DISTINCT _id) of youth_profiling submissions in
+  -- the selected district(s) and date range — exactly what the MIS
+  -- `youth_profiling_form_odata_view` returns when you count unique records for
+  -- "Aug 1 to date". It was previously SUM(shg_profiling_rows.total) — the number
+  -- of members in SHG *groups* whose GROUP profiling record was created in the
+  -- range (dated by group-creation, not by youth-profiling date), which
+  -- under-counted (Mayuge showed 461 vs the MIS's ~769).
+  --
+  -- Date field: `dateCreated` is the submission timestamp and is 100% populated,
+  -- so it is the reliable "date profiled" the MIS filter uses. Female/PWD are
+  -- read from the youth record's own Sex / Disability_status fields.
+  yp AS (
+    SELECT DISTINCT ON (data->>'_id')
+           public.mel_canon_district(data->>'district_name') AS district,
+           data->>'_id'                                       AS uid,
+           lower(trim(data->>'Sex'))                          AS sex,
+           lower(trim(data->>'Disability_status'))            AS disability,
+           left(coalesce(nullif(data->>'dateCreated',''),
+                         data->>'Date_start'), 10)::date       AS prof_date
+    FROM records
+    WHERE template='youth_profiling'
+      AND coalesce(data->>'_id','') <> ''
+  ),
   mob_ach AS (
-    SELECT public.mel_canon_district(district) AS district, SUM(total)::int AS achieved,
-           SUM(COALESCE(female,0))::int AS female,
-           SUM(COALESCE(pwd,0))::int    AS pwd,
-           COUNT(*)::int AS shgs
-    FROM shg_profiling_rows
-    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR created_date >= p_date_from)
-      AND (p_date_to   IS NULL OR created_date <= p_date_to)
+    SELECT district,
+           COUNT(*)::int                                          AS achieved,
+           COUNT(*) FILTER (WHERE sex='female')::int              AS female,
+           COUNT(*) FILTER (WHERE disability='yes')::int          AS pwd,
+           0::int                                                 AS shgs
+    FROM yp
+    WHERE district IS NOT NULL
+      AND (v_dl IS NULL OR district = ANY(v_dl))
+      AND (p_date_from IS NULL OR prof_date >= p_date_from)
+      AND (p_date_to   IS NULL OR prof_date <= p_date_to)
     GROUP BY 1
   ),
 
@@ -202,6 +228,38 @@ BEGIN
     FROM mel_production_targets
     WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
     ORDER BY district, season
+  ),
+  -- ---------- PRODUCTION MONTHLY CURVE ----------
+  -- One point per calendar month = COUNT(DISTINCT participant_id) who entered
+  -- production that month, using the SAME definition as the Production card
+  -- (production form pdn_level=Production, ALL value chains  UNION  livestock
+  -- distribution unit=Number). Respects the district filter but spans the WHOLE
+  -- timeline (independent of the date range) so the trend line is always full.
+  pm_prod AS (
+    SELECT date_trunc('month', activity_date)::date AS mon,
+           shg_participant_id AS pid
+    FROM production_rows
+    WHERE lower(pdn_level)='production'
+      AND shg_participant_id IS NOT NULL
+      AND activity_date IS NOT NULL
+      AND (v_dl IS NULL OR public.mel_canon_district(district_name)=ANY(v_dl))
+  ),
+  pm_live AS (
+    SELECT date_trunc('month', dist_date)::date AS mon,
+           participant_id AS pid
+    FROM distribution_rows
+    WHERE lower(material_type) LIKE '%livestock%' AND lower(unit)='number'
+      AND participant_id IS NOT NULL
+      AND dist_date IS NOT NULL
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
+  ),
+  prod_monthly AS (
+    SELECT mon, COUNT(DISTINCT pid)::int AS n
+    FROM ( SELECT mon, pid FROM pm_prod
+           UNION ALL
+           SELECT mon, pid FROM pm_live ) u
+    GROUP BY mon
+    ORDER BY mon
   )
   SELECT jsonb_build_object(
     'reach', (SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -225,6 +283,9 @@ BEGIN
                  'expected_jobs',expected_jobs,'poultry',poultry,'goats',goats,
                  'horticulture',horticulture,'dairy',dairy,'total_achieved',total_achieved
                )), '[]'::jsonb) FROM season_tbl),
+    'production_monthly', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                 'month', to_char(mon,'YYYY-MM'), 'n', n
+               ) ORDER BY mon), '[]'::jsonb) FROM prod_monthly),
     'totals', jsonb_build_object(
         'reach_target',      (SELECT COALESCE(SUM(target),0) FROM reach_tbl),
         'reach_achieved',    (SELECT COALESCE(SUM(achieved),0) FROM reach_tbl),

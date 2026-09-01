@@ -184,9 +184,15 @@ ${navSidebar('report')}
       </div>
     </div>
 
+    <section class="card" id="prodTrendCard" style="padding:18px; margin-bottom:18px">
+      <h2 style="margin-bottom:2px"><i class="fas fa-chart-line" style="color:var(--primary)"></i> Production performance by month</h2>
+      <p class="desc" style="margin-top:2px">Youths entering production each calendar month (distinct participant IDs — production form + livestock distribution, unit = Number). Follows the cluster filter; spans the whole timeline.</p>
+      <div style="position:relative;height:230px;width:100%"><canvas id="prodTrendChart"></canvas></div>
+    </section>
+
     <section class="card" style="padding:18px; margin-bottom:18px">
       <h2><span class="snum">1</span><i class="fas fa-seedling"></i> Production: Targets vs Achieved</h2>
-      <p class="desc">Achieved = Youth in Production (Horticulture + Oil seeds) + Livestock Distribution (unit = Number), distinct youth. Target = Year-3 production target.</p>
+      <p class="desc">Achieved = distinct youths in Production (all value chains) + Livestock Distribution (unit = Number), de-duplicated by participant ID. Target = Year-3 production target.</p>
       <div style="overflow-x:auto">
         <table><thead><tr>
           <th>District</th><th class="num">Y3 Target</th><th class="num">Achieved</th>
@@ -308,6 +314,38 @@ function renderSeasons(rows){
   });
 }
 
+let prodTrendChart=null;
+function renderProdTrend(rows){
+  const card=document.getElementById('prodTrendCard');
+  if(!rows || !rows.length){ if(card) card.style.display='none'; return; }
+  if(card) card.style.display='';
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const labels=rows.map(r=>{ const [y,m]=r.month.split('-'); return MON[(+m)-1]+" '"+y.slice(2); });
+  const data=rows.map(r=>r.n);
+  const cv=document.getElementById('prodTrendChart');
+  if(prodTrendChart){ prodTrendChart.destroy(); }
+  const ctx=cv.getContext('2d');
+  const grad=ctx.createLinearGradient(0,0,0,230);
+  grad.addColorStop(0,'rgba(29,78,216,0.28)'); grad.addColorStop(1,'rgba(29,78,216,0.01)');
+  prodTrendChart=new Chart(ctx,{
+    type:'line',
+    data:{ labels, datasets:[{
+      label:'Youths into production', data, fill:true, backgroundColor:grad,
+      borderColor:'#1d4ed8', borderWidth:2.5, tension:0.35,
+      pointRadius:3, pointBackgroundColor:'#1d4ed8', pointHoverRadius:5
+    }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label:(c)=>' '+fmt(c.parsed.y)+' youths' } } },
+      scales:{
+        y:{ beginAtZero:true, ticks:{ callback:(v)=>fmt(v) }, grid:{color:'rgba(0,0,0,0.05)'} },
+        x:{ grid:{display:false} }
+      }
+    }
+  });
+}
+
 function setKpi(prefix, ach, tgt){
   document.getElementById(prefix+'Ach').textContent=fmt(ach);
   document.getElementById(prefix+'Tgt').textContent=fmt(tgt);
@@ -340,6 +378,7 @@ async function load(){
     document.getElementById('reachGen').innerHTML = genLine(t.reach_female||0, t.reach_pwd||0);
     document.getElementById('mobGen').innerHTML = genLine(t.mob_female||0, t.mob_pwd||0);
     renderProd(d.production||[]);
+    renderProdTrend(d.production_monthly||[]);
     renderSeasons(d.production_seasons||[]);
     renderReach(d.reach||[]);
     renderMob(d.mobilization||[]);
