@@ -23,6 +23,25 @@
 > the VM once so it picks up the self-update header:
 > `curl -s -o /home/ubuntu/mis-cron.sh https://shg-data-cleaner.pages.dev/api/cron-script && chmod +x /home/ubuntu/mis-cron.sh`
 
+> **Fix 2026-09-01: Exact "Production achieved" definition (report dash + CF
+> production league).** Per the M&E definition, **production achieved = the count
+> of distinct participant IDs** (e.g. `HEI-JIN-00122891`) drawn from the UNION of:
+> **(a)** the **Production & Marketing tool** filtered to `pdn_level = Production`
+> (exclude Marketing) across **ALL value chains** — not just horticulture/oil
+> seeds — plus **(b)** **livestock distribution** where the **unit of measure =
+> Number**. A participant who appears in both sources is counted **once**
+> (de-duplicated by `participant_id`). Two bugs were fixed:
+> 1. `mel_report_dash` counted only horticulture/oil-seed chains for (a) → now
+>    counts **all** production value chains (Poultry, Beef, Dairy, etc.).
+> 2. `achieved` was **additive** (`production + livestock`), double-counting
+>    anyone in both → now a **DISTINCT-participant UNION** (`prod_union` CTE).
+> The `mel_cf_premier_league` `dist_matched` leg was broadened the same way
+> (removed the poultry-only restriction; `material_type LIKE '%livestock%'`,
+> `unit = Number`). The `/production` table (production-form view) already counted
+> all chains and correctly carries **no** livestock component, so it was left as-is.
+> Both functions read **live** from `production_rows` / `distribution_rows` (no
+> cache table), so the numbers change as MIS data flows in via the 15-min refresh.
+
 ## Project Overview
 - **Name**: SHG Data Cleaner & Consolidator
 - **Goal**: Accept uploaded Excel/CSV sheets, auto-detect their template, clean &
