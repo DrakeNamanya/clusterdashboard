@@ -151,14 +151,16 @@ stable
 as $$
   with sel as (
     select
+      -- Canonicalise the incoming district selections so a pick of "Jinja"
+      -- matches raw rows stored as JINJA / Jinja / jinja (case-insensitive).
       case when p_districts is null or array_length(p_districts,1) is null then null
-           else p_districts end as dl,
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl,
       case when p_valuechains is null or array_length(p_valuechains,1) is null then null
            else p_valuechains end as vl
   ),
   f as (
     select r.* from public.production_rows r, sel
-    where (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+    where (sel.dl is null or public.mel_canon_district(coalesce(r.district_name,'(Blank)')) = any(sel.dl))
       and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
       and (p_from is null or r.activity_date >= p_from)
       and (p_to   is null or r.activity_date <= p_to)
@@ -176,7 +178,7 @@ as $$
       min(qty_seed_measure)    as qty_seed_measure,
       min(poultry)             as poultry,
       min(other_poultry)       as other_poultry,
-      min(district_name)       as district_name,
+      min(public.mel_canon_district_disp(district_name)) as district_name,
       min(profilers_name)      as profilers_name,
       count(distinct shg_id)                                    as shg_count,
       count(distinct shg_participant_id)                        as participant_count,
@@ -216,7 +218,7 @@ as $$
         'pwds', (select count(distinct shg_participant_id) from f where lower(coalesce(disability_status,''))='yes')
       ) from g),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.production_rows) x),
     'valuechains', (select coalesce(jsonb_agg(v order by v), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
@@ -243,14 +245,14 @@ as $$
   with sel as (
     select
       case when p_districts is null or array_length(p_districts,1) is null then null
-           else p_districts end as dl,
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl,
       case when p_valuechains is null or array_length(p_valuechains,1) is null then null
            else p_valuechains end as vl
   ),
   f as (
     select r.* from public.production_rows r, sel
     where r.shg_name = p_shg
-      and (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+      and (sel.dl is null or public.mel_canon_district(coalesce(r.district_name,'(Blank)')) = any(sel.dl))
       and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
       and (p_from is null or r.activity_date >= p_from)
       and (p_to   is null or r.activity_date <= p_to)
@@ -267,7 +269,7 @@ as $$
       min(qty_seed_measure)    as qty_seed_measure,
       min(poultry)             as poultry,
       min(other_poultry)       as other_poultry,
-      min(district_name)       as district_name,
+      min(public.mel_canon_district_disp(district_name)) as district_name,
       min(profilers_name)      as profilers_name,
       count(distinct shg_id)                                    as shg_count,
       count(distinct shg_participant_id)                        as participant_count,
@@ -309,7 +311,7 @@ stable
 as $$
   select jsonb_build_object(
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.production_rows) x),
     'valuechains', (select coalesce(jsonb_agg(v order by v), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
