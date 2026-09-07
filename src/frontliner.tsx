@@ -46,6 +46,7 @@ export function renderFrontliners(base: string): string {
 </head>
 <body>
 ${navSidebar('frontliners')}
+${dashToolsAssets()}
   <div class="max-w-[1300px] mx-auto p-4 md:p-6">
 
     <!-- Title + top toolbar (date range moved to top) -->
@@ -70,7 +71,6 @@ ${navSidebar('frontliners')}
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
     </div>
-    ${dashToolsAssets()}
 
     <div class="grid grid-cols-12 gap-3">
 

@@ -86,6 +86,14 @@ export function dashToolsAssets(): string {
       print: function(sel, title){
         var tbl = tableEl(sel); if(!tbl) return;
         var root = document.getElementById('dt-print-root');
+        if(!root){ root = document.createElement('div'); root.id = 'dt-print-root'; }
+        // The @media-print rule hides every DIRECT child of <body> except
+        // #dt-print-root. If the assets blob was rendered inside a wrapper div
+        // (the common case on these pages), the print root is NOT a direct child
+        // of body, so the wrapper — and the print root inside it — both get
+        // hidden => a BLANK printed page. Guarantee correctness by relocating the
+        // print root to be a direct child of <body> right before printing.
+        if(root.parentNode !== document.body){ document.body.appendChild(root); }
         var clone = tbl.cloneNode(true);
         clone.querySelectorAll('.dt-arrow').forEach(function(a){ a.remove(); });
         root.innerHTML =
