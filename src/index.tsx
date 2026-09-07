@@ -2046,6 +2046,31 @@ done
 #     and Frontliner/profiling data are ingested — no manual refresh needed.
 echo -n "refresh cfuniverse: "; curl -s --max-time 120 -X POST "$BASE/api/refresh-all?only=cfuniverse"; echo
 
+# 2c) BIG-FEED FRESHNESS — EVERY TICK. This is the fix for "numbers not changing
+#     since Friday / youth-in-work smaller than the MIS".
+#
+#     Root cause: the big member-grain feeds (job_tracking, youth_profiling,
+#     production_and_marketing_tool) used to advance their backfill cursor only
+#     ONE 500-row page per ~45-min slot. job_tracking alone is ~171 pages, so a
+#     full wrap took ~5 DAYS — and the MIS interleaves new/edited submissions in
+#     the MIDDLE of the feed (not the tail), so neither the page-1 nor the tail
+#     pass caught them. They silently fell days behind.
+#
+#     Fix: sweep each big feed with SEVERAL sequential small slices every tick.
+#     Each call advances the persistent cursor a few pages and stays well under
+#     the Worker CPU limit (1102); together they cover ~10 pages/feed/tick, so a
+#     full wrap now completes in ~2-3 hours instead of days, and upsert-on-_id
+#     picks up every interleaved new/edited record on the way. A short tail pass
+#     each tick grabs anything sitting on the final page immediately.
+for v in job_tracking youth_profiling production_and_marketing_tool; do
+  for slice in 1 2 3 4 5; do
+    echo -n "sweep $v #$slice: "
+    curl -s --max-time 60 "$BASE/api/mis-sync/view?key=$v&maxPages=2&pageSize=1000"; echo
+  done
+  echo -n "tail $v: "
+  curl -s --max-time 60 "$BASE/api/mis-sync/view?key=$v&tail=1&maxPages=2&pageSize=1000"; echo
+done
+
 # 3) Warm ONLY the two heaviest caches every tick (these are the ones whose cold
 #    compute over ~765k rows caused the CPU-limit outages). The rest are warmed
 #    by the full warm-cache on cycle slot 2.
@@ -2063,7 +2088,9 @@ if [ "$CYCLE" = "0" ]; then
   for v in shg_groups_view isla_form; do
     sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
   done
-  for v in youth_profiling shg_profiling_form; do
+  # youth_profiling is now swept EVERY TICK in the big-feed freshness block (2c);
+  # only the tiny shg_profiling_form group feed is synced here.
+  for v in shg_profiling_form; do
     sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=1000"
   done
   # (shgprofiling + isla are now refreshed EVERY tick in the block above, so we
@@ -2071,18 +2098,11 @@ if [ "$CYCLE" = "0" ]; then
   #  public.records and the next tick's every-cycle block re-derives them.)
 fi
 
-# ===== CYCLE SLOT 1 — production / sales / leverage / jobs views =============
+# ===== CYCLE SLOT 1 — leverage view =========================================
 if [ "$CYCLE" = "1" ]; then
-  # These three views have WIDE rows (many numeric columns) so their per-row
-  # map+JSON cost is higher than the slot-0 views; 1000 still tripped 1102, so
-  # they run 1 page * 500 rows each.
-  for v in production_and_marketing_tool job_tracking; do
-    sync_call "view $v" "$BASE/api/mis-sync/view?key=$v&maxPages=1&pageSize=500"
-  done
+  # production_and_marketing_tool + job_tracking are now swept EVERY TICK in the
+  # big-feed freshness block (2c) above, so they are no longer synced here.
   sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=250&maxPages=1"
-  # (production/sales/poultry/leverage/jobs are now refreshed EVERY tick in the
-  #  block above — the fresh view pulls here land in public.records and the next
-  #  tick's every-cycle block re-derives them.)
 fi
 
 # ===== CYCLE SLOT 2 — distribution OData + items-not-sold + full warm ========
