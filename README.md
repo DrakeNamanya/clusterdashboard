@@ -1,5 +1,32 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **Fix 2026-09-07 (b): Training / Reach data incomplete (CF trainings smaller
+> than the MIS) + Print gave a blank page.**
+>
+> **Training/Reach gaps.** The Frontliners dashboard (`/frontliners`) reads
+> `at_rows`, which is fed from the MIS `all_trainees_view` by a SANDBOX-side
+> drain (`scripts/drain_trainees.sh`) because the MIS join-view endpoint is too
+> slow/unstable for a Cloudflare Worker. That drain is an EPHEMERAL sandbox
+> process — it stopped when the previous sandbox ended, so `at_rows` had scattered
+> gaps and CFs saw fewer youth/groups than the MIS (e.g. birungivicto showed
+> 49 youth / 3 groups vs the MIS's ~137 / 5). Separately, the `trainees_v2` table
+> (powers `/trainees-v2`, built from the reliable attendance OData feeds via
+> `scripts/ingest_trainees_v2.py`) was frozen at Aug 2. **Fix:** re-ran both
+> ingesters from the sandbox — `ingest_trainees_v2.py` (+49,761 rows → max date
+> Sep 7) and `drain_trainees.sh` (recovered 3,000+ missing `at_rows` records).
+> birungivicto now shows 5 groups (matching the MIS). *Root limitation: training
+> ingest depends on a sandbox process, not the persistent Cloudflare cron — it
+> must be re-run whenever the sandbox restarts. A durable fix is to move the
+> attendance join into the every-tick cron path like the other big feeds.*
+>
+> **Print blank page.** `DashTools.print()` clones the table into `#dt-print-root`
+> and the `@media print` rule hides every direct child of `<body>` except that
+> node. But `dashToolsAssets()` was rendered INSIDE each page's wrapper `<div>`,
+> so `#dt-print-root` was not a direct child of `<body>` — the wrapper (and the
+> print root inside it) were both hidden → a blank printed page on `/frontliners`
+> and every other dashboard. Fixed in the shared helper: `print()` now relocates
+> `#dt-print-root` to be a direct child of `<body>` right before `window.print()`.
+
 > **Fix 2026-09-07: Dashboards stale since Friday / "youth in work" smaller than
 > the MIS — big-feed sync lag.** The member-grain MIS feeds (`job_tracking`,
 > `youth_profiling`, `production_and_marketing_tool`, `distribution_form_v2`)
