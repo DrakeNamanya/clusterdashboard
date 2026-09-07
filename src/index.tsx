@@ -2056,17 +2056,20 @@ echo -n "refresh cfuniverse: "; curl -s --max-time 120 -X POST "$BASE/api/refres
 #     the MIDDLE of the feed (not the tail), so neither the page-1 nor the tail
 #     pass caught them. They silently fell days behind.
 #
-#     Fix: sweep each big feed with SEVERAL sequential small slices every tick.
-#     Each call advances the persistent cursor a few pages and stays well under
-#     the Worker CPU limit (1102); together they cover ~10 pages/feed/tick, so a
-#     full wrap now completes in ~2-3 hours instead of days, and upsert-on-_id
-#     picks up every interleaved new/edited record on the way. A short tail pass
-#     each tick grabs anything sitting on the final page immediately.
+#     Fix: sweep each big feed a LARGE page window every tick. One call of
+#     maxPages=8 x pageSize=1000 advances the persistent cursor 8 pages and stays
+#     under the Worker CPU limit when there is little/nothing new (the common
+#     case: fetch+dedup only). A full wrap of the biggest feed (~86 pages) now
+#     completes in ~11 ticks (~3 hours) instead of ~5 days, and upsert-on-_id
+#     picks up every interleaved new/edited record on the way. A tail pass each
+#     tick also grabs anything sitting on the final page immediately.
+#
+#     NOTE: two sequential calls to the SAME view in one tick can race on the
+#     cursor (the 2nd may read next_page before the 1st commits), so we issue
+#     exactly ONE forward call + ONE tail call per feed per tick.
 for v in job_tracking youth_profiling production_and_marketing_tool; do
-  for slice in 1 2 3 4 5; do
-    echo -n "sweep $v #$slice: "
-    curl -s --max-time 60 "$BASE/api/mis-sync/view?key=$v&maxPages=2&pageSize=1000"; echo
-  done
+  echo -n "sweep $v: "
+  curl -s --max-time 90 "$BASE/api/mis-sync/view?key=$v&maxPages=8&pageSize=1000"; echo
   echo -n "tail $v: "
   curl -s --max-time 60 "$BASE/api/mis-sync/view?key=$v&tail=1&maxPages=2&pageSize=1000"; echo
 done

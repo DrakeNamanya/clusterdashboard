@@ -1,5 +1,24 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **Fix 2026-09-07: Dashboards stale since Friday / "youth in work" smaller than
+> the MIS — big-feed sync lag.** The member-grain MIS feeds (`job_tracking`,
+> `youth_profiling`, `production_and_marketing_tool`, `distribution_form_v2`)
+> advanced their backfill cursor only **one 500-row page per ~45-min slot**.
+> `job_tracking` alone is ~86–171 pages, so a full wrap took **~5 days**, and the
+> MIS interleaves new/edited submissions in the **middle** of the feed (not the
+> tail), so neither the page-1 nor the tail freshness pass caught them — the DB
+> silently fell days behind (job_tracking capped at Sep 3; youth-in-work showed
+> 83,829 vs the MIS's 85,501). **Fixes:** (1) ran a full `reconcile` sweep to
+> catch every feed up immediately (job_tracking → 85,501, youth_profiling →
+> 127,434, distribution → 16,661); (2) the 15-min cron now sweeps each big feed a
+> **large window every tick** (`maxPages=8 × pageSize=1000`, one forward call +
+> one tail call per feed) so a full wrap completes in **~3 hours instead of ~5
+> days**, and `upsert`-on-`_id` picks up every interleaved new/edited record. The
+> driver is self-updating, so the VM picks this up automatically on its next tick.
+> *A full `reconcile` sweep (`/api/mis-sync/view?key=<feed>&reconcile=1`) is the
+> manual catch-up lever if a feed ever drifts again; the Worker completes it even
+> if the HTTP client times out.*
+
 > **Feature 2026-09-01: Production performance by month (line curve).** The Report
 > Dashboard now shows a **monthly trend curve** directly under the KPI strip:
 > the number of youths entering production each calendar month (distinct
