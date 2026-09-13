@@ -63,38 +63,47 @@ declare rows_out bigint;
 begin
   truncate public.distribution_rows;
   insert into public.distribution_rows
+  -- SOURCE (fixed 2026-09-13): rebuilt from the OData distribution pipeline
+  -- (odata_dist_participants ⋈ odata_dist_events) instead of the old
+  -- participants_shg ⋈ distribution_form_v2 join on public.records.
+  --
+  -- Why: the `participants_shg` records feed (shg_participants_view) now arrives
+  -- with EMPTY __Submissions-id / shg_participant_id on every row, so the old
+  -- join produced ZERO rows — distribution_rows went empty, which zeroed the
+  -- production report's livestock component AND the CF payment report's
+  -- distribution figures. The odata_dist_* tables carry the same distribution
+  -- data with working keys (submission_id → event doc_id) and are refreshed to
+  -- current every tick, so we source from them instead.
   with j as (
     select
-      nullif(trim(p.data->>'shg_participant_id'),'')  as participant_id,
-      nullif(trim(p.data->>'participant_name'),'')     as participant_name,
-      nullif(trim(p.data->>'shg_name'),'')             as shg_name,
-      upper(nullif(trim(p.data->>'district'),''))      as district,
-      nullif(trim(p.data->>'subcounty'),'')            as subcounty,
-      nullif(trim(d.data->>'material_type'),'')        as material_type,
-      nullif(trim(d.data->>'other_material_type'),'')  as other_material_type,
-      nullif(trim(p.data->>'shg_unit_received'),'')    as unit,
-      nullif(trim(p.data->>'other_shg_unit_received'),'') as other_unit,
-      nullif(regexp_replace(p.data->>'shg_qty_received','[^0-9.\-]','','g'),'')::numeric as qty_received,
-      nullif(trim(d.data->>'livestock_type'),'')            as livestock_type,
-      nullif(trim(d.data->>'other_livestock_type'),'')      as other_livestock_type,
-      nullif(trim(d.data->>'crop_type'),'')                 as crop_type,
-      nullif(trim(d.data->>'other_crop_type'),'')           as other_crop_type,
-      nullif(trim(d.data->>'agri_resources_type'),'')       as agri_resources_type,
-      nullif(trim(d.data->>'other_agri_resources_type'),'') as other_agri_resources_type,
-      nullif(trim(d.data->>'isla_kits'),'')                 as isla_kits,
-      nullif(trim(d.data->>'other_isla_kits'),'')           as other_isla_kits,
-      nullif(trim(d.data->>'submitterName'),'')             as submitted_by,
-      nullif(trim(d.data->>'supplier'),'')                  as supplier,
-      nullif(trim(d.data->>'other_supplier'),'')            as other_supplier,
-      (lower(trim(coalesce(p.data->>'disability_status', p.data->>'Disability_status'))) = 'yes') as is_pwd,
-      case when (d.data->>'distribution_date') ~ '^\d{4}-\d{2}-\d{2}'
-           then (left(d.data->>'distribution_date',10))::date else null end as dist_date
-    from public.records p
-    join public.records d
-      on d.template='distribution_form_v2'
-     and (p.data->>'__Submissions-id') = (d.data->>'_id')
-    where p.template='participants_shg'
-      and nullif(trim(p.data->>'__Submissions-id'),'') is not null
+      nullif(trim(p.shg_participant_id),'')            as participant_id,
+      nullif(trim(p.participant_name),'')              as participant_name,
+      nullif(trim(e.village),'')                       as shg_name,  -- roster shg_name not in odata; village as locality
+      upper(nullif(trim(e.district_name),''))          as district,
+      nullif(trim(e.subcounty_name),'')                as subcounty,
+      nullif(trim(e.material_type),'')                 as material_type,
+      null::text                                       as other_material_type,
+      nullif(trim(coalesce(p.unit_received, e.unit)),'') as unit,
+      null::text                                       as other_unit,
+      nullif(regexp_replace(coalesce(p.qty_received::text,''),'[^0-9.\-]','','g'),'')::numeric as qty_received,
+      nullif(trim(e.livestock_type),'')               as livestock_type,
+      null::text                                       as other_livestock_type,
+      nullif(trim(e.crop_type),'')                    as crop_type,
+      null::text                                       as other_crop_type,
+      nullif(trim(e.agri_resources_type),'')         as agri_resources_type,
+      null::text                                       as other_agri_resources_type,
+      nullif(trim(e.isla_kits),'')                    as isla_kits,
+      null::text                                       as other_isla_kits,
+      nullif(trim(coalesce(e.distributor, e.created_by)),'') as submitted_by,
+      nullif(trim(e.supplier),'')                     as supplier,
+      null::text                                       as other_supplier,
+      (lower(trim(coalesce(p.sex,''))) = 'pwd')       as is_pwd,
+      case when e.distribution_date ~ '^\d{4}-\d{2}-\d{2}'
+           then (left(e.distribution_date,10))::date else null end as dist_date
+    from public.odata_dist_participants p
+    join public.odata_dist_events e
+      on e.doc_id = p.submission_id
+    where nullif(trim(p.shg_participant_id),'') is not null
   ),
   firsts as (
     select participant_id, min(dist_date) as first_date

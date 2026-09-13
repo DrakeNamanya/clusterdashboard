@@ -115,33 +115,36 @@ select
   nullif(trim(g.data->>'SHG Name'),'')                  as shg_name,
   nullif(trim(g.data->>'district'),'')                  as district,
   nullif(trim(g.data->>'subcounty'),'')                 as subcounty,
-  -- Membership headcount: the MIS YOUTH PROFILING FORM roster (one row per
-  -- profiled member, in youth_profiling) is the authoritative source of who is
-  -- actually in the group. The pre-aggregated shg_groups_view Total/Male/Female
-  -- frequently LAGS the roster (e.g. Katente poultry farmers: view Total=9 but
-  -- the youth form has 26 profiled members) — so using the view alone made the
-  -- dashboard UNDERCOUNT membership vs the MIS.
-  -- We therefore take GREATEST(view, roster) per field: this matches the MIS
-  -- youth form whenever the roster is more complete (the common case), while
-  -- still not regressing the minority of groups where the roster is mid-sync
-  -- and the view is momentarily ahead.
-  greatest(
-    coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0),
-    coalesce(rm.r_male,0)
-  )   as male,
-  greatest(
-    coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0),
-    coalesce(rm.r_female,0)
-  ) as female,
-  greatest(
-    coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0),
-    coalesce(rm.r_pwd,0)
-  )    as pwd,
+  -- Membership headcount — VIEW-FIRST (fixed 2026-09-13).
+  -- The MIS shg_groups_view Male/Female/PWD/Total is the AUTHORITATIVE,
+  -- staff-maintained group size: it is what gets corrected when a group is
+  -- SPLIT (e.g. "Jumba youth development group" was split into a 28-member group
+  -- + a new 30-member "Jumba Genda poultry group"). The youth_profiling ROSTER
+  -- count does NOT update on a split — the 30 members who moved out keep the OLD
+  -- shg_id on their youth form until re-profiled — so the roster stays at the
+  -- pre-split 58.
+  --
+  -- The previous logic took GREATEST(view, roster) to patch groups whose view
+  -- momentarily LAGGED a fuller roster. But since shg_groups_view now syncs every
+  -- 15-min tick it is rarely stale, and GREATEST made split groups STICK at the
+  -- stale roster (58) AND double-count (old group 58 + new group 30 = 88 for what
+  -- is really 58 people). So we now trust the view whenever it carries a real
+  -- Total (>0), and fall back to the roster ONLY when the view Total is 0/blank
+  -- (~493 groups the view has not aggregated yet). All four fields switch together
+  -- on the SAME signal (view Total present) so they stay internally consistent.
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Male','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_male,0) end     as male,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Female','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_female,0) end   as female,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'PWD','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_pwd,0) end      as pwd,
   coalesce(nullif(regexp_replace(g.data->>'Participants Trained','[^0-9\-]','','g'),'')::int, 0) as participants_trained,
-  greatest(
-    coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0),
-    coalesce(rm.r_total,0)
-  )  as total,
+  case when coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0) > 0
+       then coalesce(nullif(regexp_replace(g.data->>'Total','[^0-9\-]','','g'),'')::int, 0)
+       else coalesce(rm.r_total,0) end    as total,
   nullif(trim(g.data->>'trainings'),'')                 as trainings,
   nullif(regexp_replace(g.data->>'no_trainings','[^0-9\-]','','g'),'')::int as no_trainings,
   nullif(trim(g.data->>'group_status'),'')              as group_status,
