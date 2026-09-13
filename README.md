@@ -1,5 +1,33 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **Fix 2026-09-13: CF Payment Report inaccurate + split groups still showing old
+> size + distribution numbers zeroed.** Three linked data bugs:
+> 1. **Split groups stuck at old size.** SHG membership was
+>    `GREATEST(shg_groups_view.Total, youth_profiling roster)`. When staff SPLIT a
+>    group in the MIS, the view Total updates (e.g. "Jumba youth development group"
+>    58 → 28, with a new 30-member "Jumba Genda poultry group") but the youth-form
+>    roster keeps the OLD shg_id (still 58) until members are re-profiled — so
+>    GREATEST stuck at 58 AND double-counted the 30 moved members (old 58 + new 30
+>    = 88 for 58 people). Now **view-first**: trust `shg_groups_view.Total` when
+>    it is >0, fall back to the roster only when the view Total is 0/blank
+>    (`supabase/shg_profiling.sql`). Grand SHG total 129,503 → 126,785.
+> 2. **`distribution_rows` was EMPTY** (`supabase/distribution.sql`). The
+>    `participants_shg` (shg_participants_view) feed now arrives with empty
+>    `__Submissions-id`/`shg_participant_id` on every row, so the old
+>    `participants_shg ⋈ distribution_form_v2` join produced 0 rows — zeroing the
+>    production report's livestock component AND the CF payment report's
+>    distribution figures. Rebuilt `distribution_rows` from the OData pipeline
+>    (`odata_dist_participants ⋈ odata_dist_events`, working keys, fresh every
+>    tick): 77,297 rows, 8,222 livestock unit=Number.
+> 3. **CF Payment Report threw an error** — `relation shg_distribution_rows does
+>    not exist`. The table/function existed in the repo (`shg_distribution.sql`)
+>    but was never applied to the DB, so `mel_cf_payment_report` errored out
+>    entirely. Applied it; refresh builds 938 rows and the report renders (674 CFs).
+>
+> **Durability:** added `distribution_form_v2` + `participants_shg` to the every-
+> tick big-feed sweep, and `distribution` to the every-tick derived-refresh list,
+> so these stop drifting (self-updating cron picks it up on the VM automatically).
+
 > **Fix 2026-09-07 (b): Training / Reach data incomplete (CF trainings smaller
 > than the MIS) + Print gave a blank page.**
 >
