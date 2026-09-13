@@ -2035,7 +2035,7 @@ sync_call "run" "$BASE/api/mis-sync/run"
 #    dashboard from them — instead of waiting for that table's ~45-min slot.
 #    (The heavy part — pulling raw rows from the MIS gateway — is still rotated
 #    across slots 0/1/2 to stay under the Worker CPU limit.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking shgdistribution; do
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking distribution shgdistribution; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
@@ -2067,7 +2067,7 @@ echo -n "refresh cfuniverse: "; curl -s --max-time 120 -X POST "$BASE/api/refres
 #     NOTE: two sequential calls to the SAME view in one tick can race on the
 #     cursor (the 2nd may read next_page before the 1st commits), so we issue
 #     exactly ONE forward call + ONE tail call per feed per tick.
-for v in job_tracking youth_profiling production_and_marketing_tool; do
+for v in job_tracking youth_profiling production_and_marketing_tool distribution_form_v2 participants_shg; do
   echo -n "sweep $v: "
   curl -s --max-time 90 "$BASE/api/mis-sync/view?key=$v&maxPages=8&pageSize=1000"; echo
   echo -n "tail $v: "
