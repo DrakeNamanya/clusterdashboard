@@ -79,8 +79,17 @@ begin
       nullif(trim(p.shg_participant_id),'')            as participant_id,
       nullif(trim(p.participant_name),'')              as participant_name,
       nullif(trim(e.village),'')                       as shg_name,  -- roster shg_name not in odata; village as locality
-      upper(nullif(trim(e.district_name),''))          as district,
-      nullif(trim(e.subcounty_name),'')                as subcounty,
+      -- District (fixed 2026-09-15): the odata_dist_events feed stopped populating
+      -- district_name for recent (e.g. Sept 2026) events — only parish/village are
+      -- filled — which made those participants fall out of every cluster filter and
+      -- show LIVESTOCK DIST. = 0 on the report dashboard even though the data is
+      -- there. The raw distribution_form_v2 record (joined by doc_id = _id) still
+      -- carries district_name, so we fall back to it. (The participant_id prefix is
+      -- NOT usable: BUG=Bugiri/Bugweri and NAM=Namutumba/Namayingo are ambiguous.)
+      upper(coalesce(nullif(trim(e.district_name),''),
+                     nullif(trim(rd.data->>'district_name'),''))) as district,
+      coalesce(nullif(trim(e.subcounty_name),''),
+               nullif(trim(rd.data->>'Subcounty_name'),''))       as subcounty,
       nullif(trim(e.material_type),'')                 as material_type,
       null::text                                       as other_material_type,
       nullif(trim(coalesce(p.unit_received, e.unit)),'') as unit,
@@ -103,6 +112,9 @@ begin
     from public.odata_dist_participants p
     join public.odata_dist_events e
       on e.doc_id = p.submission_id
+    left join public.records rd
+      on rd.template='distribution_form_v2'
+     and nullif(trim(rd.data->>'_id'),'') = e.doc_id
     where nullif(trim(p.shg_participant_id),'') is not null
   ),
   firsts as (
