@@ -142,6 +142,7 @@ DECLARE
   v_dl   text[];
   v_keys text[];
   v_nokeys text[];
+  v_akeys text[];
   v_label text;
 BEGIN
   -- p_staff may be a single normalised key OR several joined by '|' (the UI
@@ -155,6 +156,29 @@ BEGIN
   SELECT array_agg(DISTINCT public.mel_norm_key(x)) INTO v_nokeys
     FROM unnest(v_keys) x WHERE public.mel_norm_key(x) <> '';
   IF v_nokeys IS NULL THEN v_nokeys := ARRAY['']; END IF;
+  -- Full akeys from the CF universe for the selected staff. mel_cf_report_staff
+  -- passes the CF's display name (nm) as p_staff, so v_keys[] = that name. The
+  -- universe stores EVERY normalised name-variant key (first name, surname, and
+  -- BOTH word orders — e.g. flaviakyoeondeze AND kyoeondezeflavia) in akeys, so
+  -- we pull them here to match at_rows.data_collector reliably regardless of the
+  -- order the collector name was captured in. Fixes trainings showing 0 for CFs
+  -- whose attendance name order differs from their profiling name.
+  -- Only keep akeys that are UNAMBIGUOUS (belong to exactly one CF in the whole
+  -- universe). This drops bare shared first-names like 'flavia' (3 different CFs)
+  -- while keeping her unique compound keys 'flaviakyoeondeze' / 'kyoeondezeflavia'
+  -- / 'kyoeondeze' — so at_rows matching credits the right person, both orders.
+  SELECT array_agg(DISTINCT k) INTO v_akeys
+    FROM (
+      SELECT k, count(DISTINCT u2.nm) AS ncf
+      FROM public.mel_cf_universe u2, unnest(u2.akeys) k
+      GROUP BY k
+    ) gk
+   WHERE gk.ncf = 1
+     AND gk.k IN (
+       SELECT k2 FROM public.mel_cf_universe u, unnest(u.akeys) k2
+       WHERE public.mel_norm_name(u.nm) = ANY(v_keys)
+     );
+  IF v_akeys IS NULL OR array_length(v_akeys,1) IS NULL THEN v_akeys := v_nokeys; END IF;
   -- Display label: initcap of the first key (merged staff share one card).
   v_label := initcap(v_keys[1]);
   IF array_length(v_keys,1) > 1 THEN
@@ -214,14 +238,34 @@ BEGIN
     FROM tr, LATERAL regexp_split_to_table(coalesce(tr.trainings,''), '\s*,\s*') AS t
     WHERE btrim(t) <> ''
   ),
+  -- ATTENDANCE trainings (frontliner sheet, at_rows) matched by the CF's UNIQUE
+  -- name keys (v_akeys, both word orders). Many CFs record their trainings ONLY
+  -- here (e.g. Flavia Kyoeondeze: 5,571 attendance rows in Namutumba but 0 SHG-
+  -- profiling rows), so deriving trainings from profiling alone showed 0. We take
+  -- the GREATER of the two sources per metric so neither is lost.
+  tr_at AS (
+    SELECT
+      COUNT(*) FILTER (WHERE has_date=1)::int      AS youth_trained,
+      COUNT(DISTINCT group_id)::int                AS groups_trained
+    FROM at_rows
+    WHERE public.mel_norm_key(data_collector) = ANY(v_akeys)
+      AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR day >= p_date_from)
+      AND (p_date_to   IS NULL OR day <= p_date_to)
+  ),
   tr_t AS (
     SELECT
-      COALESCE(SUM(participants_trained),0)::int AS youth_trained,
+      GREATEST(
+        COALESCE((SELECT SUM(participants_trained) FROM tr),0),
+        COALESCE((SELECT youth_trained FROM tr_at),0)
+      )::int AS youth_trained,
       (SELECT COUNT(*) FROM tr_topics)::int AS training_areas,
-      COUNT(*) FILTER (
-        WHERE trainings IS NOT NULL OR COALESCE(participants_trained,0) > 0
+      GREATEST(
+        (SELECT COUNT(*) FILTER (
+           WHERE trainings IS NOT NULL OR COALESCE(participants_trained,0) > 0) FROM tr),
+        COALESCE((SELECT groups_trained FROM tr_at),0)
       )::int AS groups_trained
-    FROM tr ),
+  ),
   -- ---------- DISTRIBUTION (submitted_by = squashed username) ----------
   dist AS (
     SELECT * FROM distribution_rows
