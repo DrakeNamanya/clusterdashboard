@@ -1,5 +1,19 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **2026-09-15: Poultry-Sales Excel export + CF-report zero-trainings fix.**
+> 1. **Export Excel** added to `/poultry-sales` (same shared DashTools control as
+>    the other dashboards) — exports the currently-filtered table.
+> 2. **CF Report showed 0 / 0% for many CFs in Bugiri / Kamuli / Central clusters**
+>    (e.g. Flavia Kyoeondeze). Root cause: the CF report derived *trainings* only
+>    from `shg_profiling_rows.participants_trained`, but many CFs record their
+>    trainings ONLY in the frontliner attendance sheet (`at_rows`), not in SHG
+>    profiling — so they showed 0 (Flavia: 5,571 attendance rows / 99 groups in
+>    Namutumba, but 0 SHG-profiling rows). Fix: `mel_cf_report` now also counts
+>    trainings from `at_rows`, matching the CF via their UNIQUE CF-universe akeys
+>    (both name word orders; bare shared first-names dropped to avoid collisions
+>    like three different "flavia" CFs), taking GREATEST(profiling, attendance)
+>    per metric. Flavia now shows 5,571 youth trained / 99 groups (was 0).
+
 > **Fix 2026-09-13: CF Payment Report inaccurate + split groups still showing old
 > size + distribution numbers zeroed.** Three linked data bugs:
 > 1. **Split groups stuck at old size.** SHG membership was
