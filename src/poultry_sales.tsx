@@ -1,4 +1,5 @@
 import { navSidebar } from './nav';
+import { dashToolsAssets } from './dashtools';
 // ---------------------------------------------------------------------------
 // "POULTRY SALES"
 //   Marketing_Table = production_and_marketing_tool filtered
@@ -60,6 +61,7 @@ export function renderPoultrySales(base: string, opts: any = {}): string {
 </head>
 <body>
 ${navSidebar('poultrysales')}
+${dashToolsAssets()}
   <div class="max-w-[1600px] mx-auto p-3 md:p-4">
 
     <div class="flex flex-wrap items-center gap-3 mb-3">
@@ -89,6 +91,7 @@ ${navSidebar('poultrysales')}
         <button data-preset="thismonth" class="preset text-[10px] px-2 py-1 rounded border border-[var(--line)] bg-white hover:bg-[var(--cream)]">Month</button>
       </div>
 
+      <button id="btnExcel" class="dt-btn excel ml-auto"><i class="fas fa-file-excel"></i> Export Excel</button>
       <button id="refreshBtn" class="text-xs px-3 py-1.5 rounded-lg border border-[var(--line)] bg-white hover:bg-[var(--cream)] text-[var(--muted)]">
         <i class="fas fa-rotate mr-1"></i> Refresh
       </button>
@@ -311,6 +314,9 @@ ${navSidebar('poultrysales')}
       catch(err){ alert('Refresh failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
+
+    // Export the currently-rendered (filtered) table to Excel.
+    if (window.DashTools) window.DashTools.wireExcel('btnExcel', '#tbl', 'Poultry_Sales');
 
     loadOptions();
     load();
