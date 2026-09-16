@@ -250,8 +250,10 @@ BEGIN
     FROM at_rows
     WHERE public.mel_norm_key(data_collector) = ANY(v_akeys)
       AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
-      AND (p_date_from IS NULL OR day >= p_date_from)
-      AND (p_date_to   IS NULL OR day <= p_date_to)
+      -- at_rows.day is text 'YYYY-MM-DD'; ISO strings sort like dates, so compare
+      -- against the date params rendered as text (guards non-date/blank days too).
+      AND (p_date_from IS NULL OR (day ~ '^\d{4}-\d{2}-\d{2}' AND day >= p_date_from::text))
+      AND (p_date_to   IS NULL OR (day ~ '^\d{4}-\d{2}-\d{2}' AND day <= p_date_to::text))
   ),
   tr_t AS (
     SELECT
