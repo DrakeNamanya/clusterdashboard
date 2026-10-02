@@ -112,11 +112,24 @@ begin
     d.subcounty_shg,
     d.parish_shg,
     d.village_shg
-  from public.records i
+  from (
+    -- DE-DUP by docId: the VM cron syncs isla_form as BOTH mis:isla_form and
+    -- odata:isla_form, so the same submission lands twice in public.records and
+    -- the old unguarded scan double-counted ~9.6k ISLA records (22,845 rows vs
+    -- 13,198 distinct docId), inflating every loans/savings/fund total. Keep one
+    -- row per docId, preferring the odata source (the complete 13,401-row pull);
+    -- rows without a docId fall back to their own unique dedup_key so nothing
+    -- real is dropped.
+    select distinct on (coalesce(nullif(trim(r.data->>'docId'),''), r.dedup_key))
+           r.data
+    from public.records r
+    where r.template='isla_form'
+    order by coalesce(nullif(trim(r.data->>'docId'),''), r.dedup_key),
+             case when r.source_file='odata:isla_form' then 0 else 1 end
+  ) i
   left join dim_shg_isla d
     on d.ref_id = nullif(trim(i.data->>'shg_id'),'')
-  where i.template='isla_form'
-    and nullif(trim(i.data->>'shg_id'),'') is not null;   -- SelectRows: shg_id <> ''
+  where nullif(trim(i.data->>'shg_id'),'') is not null;   -- SelectRows: shg_id <> ''
 
   get diagnostics rows_out = row_count;
   return rows_out;
