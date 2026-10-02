@@ -4794,14 +4794,36 @@ async function rebuildDistributionRowsFromOData(
   // RPC lists participants within each SHG.
   await q(`DROP TABLE IF EXISTS public.distribution_rows`);
   await q(`CREATE TABLE public.distribution_rows AS
-    WITH j AS (
+    WITH
+    -- Participant-ID district prefix map. The MIS distribution EVENT often
+    -- carries no district_name (esp. recent poultry batches), and some
+    -- distribution participants are not yet in dim_profile, so both the
+    -- event-district and profile-district fallbacks come up blank and the row
+    -- is dropped from every district total (this is the Sept-poultry
+    -- Iganga/Jinja/Mayuge undercount vs the MIS). The Heifer participant id
+    -- (HEI-XXX-########) encodes the district in its 3-letter cluster prefix,
+    -- so we use it as a LAST-resort district source. Ambiguous prefixes
+    -- (BUG=Bugiri/Bugweri, NAM=Namutumba/Namayingo) are mapped to the dominant
+    -- district; profiled rows are unaffected because dim_profile wins first.
+    pfxmap(pfx, dist) AS (VALUES
+      ('IGA','IGANGA'), ('JIN','JINJA'), ('MAY','MAYUGE'), ('LUU','LUUKA'),
+      ('KAM','KAMULI'), ('KAL','KALIRO'), ('BUY','BUYENDE'), ('BUG','BUGIRI'),
+      ('NAM','NAMUTUMBA'), ('BGW','BUGWERI'), ('NMY','NAMAYINGO')
+    ),
+    j AS (
       SELECT p.shg_participant_id                       AS participant_id,
              p.participant_name                         AS participant_name,
              COALESCE(
                NULLIF(TRIM(dp.shg_name),''),
                '(Unmatched) ' || COALESCE(NULLIF(TRIM(p.participant_name),''), p.shg_participant_id, 'Unnamed')
              )                                          AS shg_name,
-             UPPER(COALESCE(NULLIF(TRIM(dp.district_name),''), e.district_name,''))         AS district,
+             UPPER(COALESCE(
+               NULLIF(TRIM(dp.district_name),''),
+               NULLIF(TRIM(e.district_name),''),
+               (SELECT dist FROM pfxmap
+                 WHERE pfx = substring(p.shg_participant_id FROM 'HEI-([A-Z]+)-')),
+               ''
+             ))                                          AS district,
              e.subcounty_name                            AS subcounty,
              e.material_type                             AS material_type,
              NULL::text                                  AS other_material_type,
