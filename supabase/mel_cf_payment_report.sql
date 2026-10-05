@@ -111,24 +111,27 @@ BEGIN
   -- PERF: at_rows has ~820k rows, so we FIRST collapse to one row per
   -- data_collector via the indexed district/day columns, THEN fuzzy-match names
   -- on that tiny set (matching raw rows caused 503 timeouts).
-  at_dc AS (
-    SELECT public.mel_cf_resolve_name(data_collector) AS nm,
+  -- PERF: collapse 820k at_rows to one row per RAW data_collector FIRST (cheap,
+  -- uses indexed district/day), THEN resolve the name on that tiny set. Resolving
+  -- per raw row would be ~820k function calls and time out.
+  at_raw AS (
+    SELECT data_collector,
            COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int AS groups_trained,
            SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END)::int                AS youth_trained
     FROM at_rows
     WHERE data_collector IS NOT NULL
-      AND public.mel_cf_resolve_name(data_collector) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR day >= p_date_from::text)
       AND (p_date_to   IS NULL OR day <= p_date_to::text)
     GROUP BY 1
   ),
   trained AS (
-    SELECT a.nm,
+    SELECT public.mel_cf_resolve_name(a.data_collector) AS nm,
            SUM(a.groups_trained)::int AS groups_trained,
            SUM(a.youth_trained)::int  AS youth_trained
-    FROM at_dc a
-    GROUP BY a.nm
+    FROM at_raw a
+    WHERE public.mel_cf_resolve_name(a.data_collector) IS NOT NULL
+    GROUP BY 1
   ),
   -- NOTE: trainings are now sourced ONLY from at_rows (the `trained` CTE above),
   -- which is the single source of truth shared by the CF Report Card and the CF
