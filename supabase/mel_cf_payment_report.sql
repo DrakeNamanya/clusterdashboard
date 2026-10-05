@@ -25,17 +25,19 @@
 -- Resolve a raw submitter/profiler name to a canonical CF name: use the keymap
 -- canonical nm when the normalised key matches a known CF, otherwise fall back
 -- to the cleaned raw name itself so the worker is never dropped.
+-- Requires a GIN index on mel_cf_universe.akeys for the array-containment lookup:
+--   CREATE INDEX IF NOT EXISTS mel_cf_universe_akeys_gin
+--     ON public.mel_cf_universe USING gin (akeys);
 CREATE OR REPLACE FUNCTION public.mel_cf_resolve_name(p_raw text)
 RETURNS text LANGUAGE sql STABLE AS $resolve$
   SELECT COALESCE(
-    (SELECT c.nm
-       FROM public.mel_cf_universe c, unnest(c.akeys) ak
-      WHERE ak = public.mel_norm_key(p_raw)
+    (SELECT c.nm FROM public.mel_cf_universe c
+      WHERE c.akeys @> ARRAY[public.mel_norm_key(p_raw)]
       LIMIT 1),
     NULLIF(lower(trim(regexp_replace(coalesce(p_raw,''), '\s+', ' ', 'g'))), '')
   );
 $resolve$;
-GRANT EXECUTE ON FUNCTION public.mel_cf_resolve_name(text) TO anon, service_role;
+GRANT EXECUTE ON FUNCTION public.mel_cf_resolve_name(text) TO service_role;
 CREATE OR REPLACE FUNCTION public.mel_cf_payment_report(
   p_districts text[] DEFAULT NULL::text[],
   p_date_from date DEFAULT NULL::date,
@@ -65,14 +67,11 @@ BEGIN
     FROM public.mel_cf_universe
     WHERE (v_dl IS NULL OR districts && v_dl)
   ),
-  -- Task E: exact activity-key -> canonical nm map (same as Premier League).
-  -- Every activity CTE joins THIS instead of fuzzy nm-prefix matching, so
-  -- reversed names, short profiler names and merged accounts roll up to one CF.
-  keymap AS (
-    SELECT DISTINCT ak AS k, c.nm
-    FROM cfs c, unnest(c.akeys) AS ak
-    WHERE coalesce(ak,'') <> ''
-  ),
+  -- NOTE: the old `keymap` CTE (exact activity-key -> canonical nm) has been
+  -- replaced by public.mel_cf_resolve_name(), which does the same canonical
+  -- lookup but FALLS BACK to the raw name instead of dropping the row. Name
+  -- roll-up (reversed/short/merged spellings) is preserved via mel_cf_universe
+  -- inside that helper.
   -- ---- A1 PROFILING: SHGs, youth, female/male, mobilized (for ratio & YiW) ----
   prof AS (
     SELECT public.mel_cf_resolve_name(r.profiler_name) AS nm,
@@ -281,40 +280,53 @@ BEGIN
     GROUP BY c.nm
   ),
   -- Full CF roster = known CFs (mel_cf_universe) UNION every resolved worker
-  -- name that appears in ANY activity. This is what guarantees no worker is
-  -- dropped from the payment report even if they were never a registered CF.
-  -- District for fallback names comes from where their activity occurred.
-  all_names AS (
-    SELECT nm, district FROM cfs
-    UNION SELECT nm, NULL::text FROM prof
-    UNION SELECT nm, NULL::text FROM isla
-    UNION SELECT nm, NULL::text FROM trained
-    UNION SELECT nm, NULL::text FROM prod
-    UNION SELECT nm, NULL::text FROM prod_youth
-    UNION SELECT nm, NULL::text FROM dist_birds
-    UNION SELECT nm, NULL::text FROM dist_shg
-    UNION SELECT nm, NULL::text FROM poultry
-    UNION SELECT nm, NULL::text FROM hsales
-    UNION SELECT nm, NULL::text FROM lev
+  -- name that appears in ANY activity, WITH the district where that activity
+  -- occurred. This guarantees no worker is dropped and that unrecognised workers
+  -- still show under the right cluster. Each source is scanned ONCE (no per-name
+  -- correlated subqueries), so this stays fast on the big feeds.
+  name_src AS (
+    SELECT nm, district FROM cfs WHERE district IS NOT NULL
+    UNION ALL
+    SELECT public.mel_cf_resolve_name(r.profiler_name), public.mel_canon_district(r.district)
+      FROM public.shg_profiling_rows r
+     WHERE r.profiler_name IS NOT NULL
+       AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
+       AND (p_date_from IS NULL OR r.created_date >= p_date_from)
+       AND (p_date_to   IS NULL OR r.created_date <= p_date_to)
+    UNION ALL
+    SELECT public.mel_cf_resolve_name(r.profilers_name), public.mel_canon_district(r.district_name)
+      FROM public.production_rows r
+     WHERE r.profilers_name IS NOT NULL AND lower(r.pdn_level)='production'
+       AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
+       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
+       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
+    UNION ALL
+    SELECT public.mel_cf_resolve_name(d.submitted_by), public.mel_canon_district(d.district)
+      FROM public.distribution_rows d
+     WHERE d.submitted_by IS NOT NULL
+       AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl))
+       AND (p_date_from IS NULL OR d.dist_date >= p_date_from)
+       AND (p_date_to   IS NULL OR d.dist_date <= p_date_to)
+    UNION ALL
+    SELECT public.mel_cf_resolve_name(r.submitter_name), public.mel_canon_district(r.district)
+      FROM public.local_leverage_rows r
+     WHERE r.submitter_name IS NOT NULL
+       AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
+       AND (p_date_from IS NULL OR r.date_created >= p_date_from)
+       AND (p_date_to   IS NULL OR r.date_created <= p_date_to)
   ),
-  -- Resolve each name's district: prefer the known-CF district, else derive it
-  -- from the activity feeds (profiling/production/distribution) so unrecognised
-  -- workers still show under the right cluster.
+  -- One row per worker name with a single chosen district (max = deterministic).
   name_district AS (
-    SELECT an.nm,
-           COALESCE(
-             (SELECT district FROM cfs c WHERE c.nm = an.nm AND c.district IS NOT NULL LIMIT 1),
-             (SELECT public.mel_canon_district(r.district) FROM public.shg_profiling_rows r
-               WHERE public.mel_cf_resolve_name(r.profiler_name) = an.nm
-                 AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl)) LIMIT 1),
-             (SELECT public.mel_canon_district(r.district_name) FROM public.production_rows r
-               WHERE public.mel_cf_resolve_name(r.profilers_name) = an.nm
-                 AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl)) LIMIT 1),
-             (SELECT public.mel_canon_district(d.district) FROM public.distribution_rows d
-               WHERE public.mel_cf_resolve_name(d.submitted_by) = an.nm
-                 AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl)) LIMIT 1)
-           ) AS district
-    FROM (SELECT DISTINCT nm FROM all_names WHERE nm IS NOT NULL) an
+    SELECT nm, max(district) AS district
+    FROM name_src
+    WHERE nm IS NOT NULL AND coalesce(district,'') <> ''
+    GROUP BY nm
+    UNION
+    -- names that appear in activities but had no resolvable district anywhere
+    SELECT nm, NULL::text FROM name_src s
+    WHERE s.nm IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM name_src s2 WHERE s2.nm = s.nm AND coalesce(s2.district,'')<>'')
+    GROUP BY nm
   ),
   -- ---- Assemble per-CF metrics ----
   metrics AS (
@@ -349,7 +361,7 @@ BEGIN
       COALESCE(lv.lev_count,0)         AS lev_count,
       COALESCE(lv.lev_amount,0)        AS lev_amount,
       COALESCE(yw.employed_youth,0)    AS employed_youth
-    FROM cfs c
+    FROM name_district c
     LEFT JOIN prof p        ON p.nm  = c.nm
     LEFT JOIN isla i        ON i.nm  = c.nm
     LEFT JOIN trained t       ON t.nm  = c.nm
