@@ -8,6 +8,34 @@
 -- manual "Status" column.
 --
 -- SET-BASED single pass (fast) — not a per-CF loop.
+--
+-- PAYMENT INTEGRITY (2026-10): this report drives FINANCE PAYMENTS, so NO work
+-- may be dropped. Previously every activity INNER-JOINed `keymap` (the known-CF
+-- universe), so any record whose submitter/profiler name was not already a
+-- recognised CF vanished from the report (e.g. 245 of 646 Sept bird-distribution
+-- recipients, and under-counted ISLA/leverage). The attribution is now a
+-- fallback chain that keeps EVERYTHING:
+--   1. the canonical CF name from keymap (normalised-key match), ELSE
+--   2. the RAW submitter/profiler name on the form (cleaned, title-cased), ELSE
+--   3. (where the form carries no submitter) the profiler of the participant's
+--      SHG via the profiling feed.
+-- The final CF list is the UNION of every name that appears in ANY activity,
+-- not just mel_cf_universe, so unrecognised workers still get their own row.
+
+-- Resolve a raw submitter/profiler name to a canonical CF name: use the keymap
+-- canonical nm when the normalised key matches a known CF, otherwise fall back
+-- to the cleaned raw name itself so the worker is never dropped.
+CREATE OR REPLACE FUNCTION public.mel_cf_resolve_name(p_raw text)
+RETURNS text LANGUAGE sql STABLE AS $resolve$
+  SELECT COALESCE(
+    (SELECT c.nm
+       FROM public.mel_cf_universe c, unnest(c.akeys) ak
+      WHERE ak = public.mel_norm_key(p_raw)
+      LIMIT 1),
+    NULLIF(lower(trim(regexp_replace(coalesce(p_raw,''), '\s+', ' ', 'g'))), '')
+  );
+$resolve$;
+GRANT EXECUTE ON FUNCTION public.mel_cf_resolve_name(text) TO anon, service_role;
 CREATE OR REPLACE FUNCTION public.mel_cf_payment_report(
   p_districts text[] DEFAULT NULL::text[],
   p_date_from date DEFAULT NULL::date,
@@ -47,14 +75,14 @@ BEGIN
   ),
   -- ---- A1 PROFILING: SHGs, youth, female/male, mobilized (for ratio & YiW) ----
   prof AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.profiler_name) AS nm,
            COUNT(*)::int AS shgs_profiled,
            COALESCE(SUM(r.total),0)::int  AS youth_profiled,
            COALESCE(SUM(r.female),0)::int AS prof_female,
            COALESCE(SUM(r.male),0)::int   AS prof_male
     FROM shg_profiling_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.profiler_name)
     WHERE r.profiler_name IS NOT NULL
+      AND public.mel_cf_resolve_name(r.profiler_name) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.created_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.created_date <= p_date_to)
@@ -64,15 +92,15 @@ BEGIN
   -- so the JOIN below reads cleanly. (Reuse youth_profiled as mobilized.)
   -- ---- A3 ISLA: SHGs saving, savers, savings, loans ----
   isla AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.profilers_name) AS nm,
            COUNT(DISTINCT r.shg_id)::int AS shgs_saving,
            COALESCE(SUM(CASE WHEN r.youth_group_saving > 35 THEN 30 ELSE r.youth_group_saving END),0)::int AS isla_savers,
            COALESCE(SUM(r.savings_value),0)::numeric AS isla_savings,
            COALESCE(SUM(CASE WHEN r.loans > 35 THEN 30 ELSE r.loans END),0)::int AS isla_loans,
            COALESCE(SUM(r.youth_loans_value_given),0)::numeric AS isla_loans_value
     FROM isla_final_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
+      AND public.mel_cf_resolve_name(r.profilers_name) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(r.district_shg)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
@@ -85,23 +113,23 @@ BEGIN
   -- data_collector via the indexed district/day columns, THEN fuzzy-match names
   -- on that tiny set (matching raw rows caused 503 timeouts).
   at_dc AS (
-    SELECT public.mel_norm_key(data_collector) AS k,
+    SELECT public.mel_cf_resolve_name(data_collector) AS nm,
            COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL)::int AS groups_trained,
            SUM(CASE WHEN has_date = 1 THEN 1 ELSE 0 END)::int                AS youth_trained
     FROM at_rows
     WHERE data_collector IS NOT NULL
+      AND public.mel_cf_resolve_name(data_collector) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
       AND (p_date_from IS NULL OR day >= p_date_from::text)
       AND (p_date_to   IS NULL OR day <= p_date_to::text)
     GROUP BY 1
   ),
   trained AS (
-    SELECT km.nm,
+    SELECT a.nm,
            SUM(a.groups_trained)::int AS groups_trained,
            SUM(a.youth_trained)::int  AS youth_trained
     FROM at_dc a
-    JOIN keymap km ON km.k = a.k
-    GROUP BY km.nm
+    GROUP BY a.nm
   ),
   -- NOTE: trainings are now sourced ONLY from at_rows (the `trained` CTE above),
   -- which is the single source of truth shared by the CF Report Card and the CF
@@ -109,12 +137,12 @@ BEGIN
   -- three reports stay in lock-step and auto-update as Frontliner data arrives.
   -- ---- A6 PRODUCTION: youth in horticulture production + SHGs ----
   prod AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.profilers_name) AS nm,
            COUNT(DISTINCT r.shg_participant_id)::int AS prod_youth_hort,
            COUNT(DISTINCT r.shg_id)::int             AS prod_shgs
     FROM production_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL AND lower(r.pdn_level)='production'
+      AND public.mel_cf_resolve_name(r.profilers_name) IS NOT NULL
       AND r.shg_participant_id IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
@@ -125,10 +153,23 @@ BEGIN
   -- (distribution_rows), filter Livestock + unit = 'Number' (the bird count).
   -- We report the NUMBER OF BIRDS distributed (SUM of qty where unit=Number),
   -- the recipients, and the SHGs reached — mirroring the dashboard's slicers.
+  -- A7 bird distribution. PAYMENT INTEGRITY: attribute to the resolved CF when
+  -- the distributor is a known CF, otherwise to the RAW distributor name on the
+  -- form, otherwise (blank distributor) to the profiler who profiled the
+  -- recipient's SHG. The inner keymap JOIN used to drop ~38% of recipients.
   dist_matched AS (
-    SELECT km.nm, d.participant_id, d.shg_name, d.qty_received
+    SELECT COALESCE(
+             public.mel_cf_resolve_name(d.submitted_by),
+             public.mel_cf_resolve_name(pf.profiler_name)
+           ) AS nm,
+           d.participant_id, d.shg_name, d.qty_received
     FROM distribution_rows d
-    JOIN keymap km ON km.k = public.mel_norm_key(d.submitted_by)
+    LEFT JOIN LATERAL (
+      SELECT r.profiler_name
+      FROM public.shg_profiling_rows r
+      WHERE r.shg_name = d.shg_name AND r.profiler_name IS NOT NULL
+      LIMIT 1
+    ) pf ON TRUE
     WHERE lower(coalesce(d.material_type,'')) = 'livestock'
       AND d.livestock_type ILIKE '%poultry%'
       AND lower(coalesce(d.unit,'')) = 'number'
@@ -148,42 +189,43 @@ BEGIN
   prod_youth AS (
     SELECT nm, COUNT(DISTINCT pid)::int AS youth_production
     FROM (
-      SELECT km.nm, r.shg_participant_id AS pid
+      SELECT public.mel_cf_resolve_name(r.profilers_name) AS nm, r.shg_participant_id AS pid
         FROM production_rows r
-        JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
        WHERE r.profilers_name IS NOT NULL AND lower(r.pdn_level)='production' AND r.shg_participant_id IS NOT NULL
+         AND public.mel_cf_resolve_name(r.profilers_name) IS NOT NULL
          AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
          AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
          AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
       UNION
       SELECT nm, participant_id FROM dist_matched
     ) u
+    WHERE nm IS NOT NULL
     GROUP BY nm
   ),
   -- ---- A8 DISTRIBUTION TO SHG: from the /shg-distribution dashboard
   -- (shg_distribution_rows) — inputs handed to whole groups, a DIFFERENT feed
   -- from A7's participant-level distribution_rows. Grouped by shg_group_name.
   dist_shg AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(d.submitted_by) AS nm,
            COUNT(DISTINCT d.shg_group_name)::int AS distshg_shgs,
            COUNT(*)::int                         AS distshg_lines
     FROM shg_distribution_rows d
-    JOIN keymap km ON km.k = public.mel_norm_key(d.submitted_by)
     WHERE d.submitted_by IS NOT NULL
+      AND public.mel_cf_resolve_name(d.submitted_by) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR d.dist_date >= p_date_from)
       AND (p_date_to   IS NULL OR d.dist_date <= p_date_to)
-    GROUP BY km.nm
+    GROUP BY 1
   ),
   -- ---- A4 POULTRY SALES ----
   poultry AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.profilers_name) AS nm,
            COALESCE(SUM(r.poultry_sold),0)::numeric AS birds_sold,
            COUNT(DISTINCT r.shg_participant_id)::int AS ps_sellers,
            COALESCE(SUM(r.total_poultry_value),0)::numeric AS ps_value
     FROM poultry_sales_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
+      AND public.mel_cf_resolve_name(r.profilers_name) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
       AND (p_date_to   IS NULL OR r.activity_date <= p_date_to)
@@ -191,13 +233,13 @@ BEGIN
   ),
   -- ---- A2 HORTICULTURE SALES ----
   hsales AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.profilers_name) AS nm,
            COALESCE(SUM(r.total_planting_value),0)::numeric AS hs_value,
            COALESCE(SUM(r.net_planting),0)::numeric         AS hs_net,
            COUNT(DISTINCT r.shg_participant_id)::int        AS hs_sellers
     FROM sales_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.profilers_name)
     WHERE r.profilers_name IS NOT NULL
+      AND public.mel_cf_resolve_name(r.profilers_name) IS NOT NULL
       AND lower(coalesce(r.value_chain,'')) IN ('horticulture','oil seeds','oilseeds')
       AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.activity_date >= p_date_from)
@@ -206,12 +248,12 @@ BEGIN
   ),
   -- ---- A5 LOCAL LEVERAGE ----
   lev AS (
-    SELECT km.nm,
+    SELECT public.mel_cf_resolve_name(r.submitter_name) AS nm,
            COUNT(*)::int AS lev_count,
            COALESCE(SUM(r.contribution_amount),0)::numeric AS lev_amount
     FROM local_leverage_rows r
-    JOIN keymap km ON km.k = public.mel_norm_key(r.submitter_name)
     WHERE r.submitter_name IS NOT NULL
+      AND public.mel_cf_resolve_name(r.submitter_name) IS NOT NULL
       AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl))
       AND (p_date_from IS NULL OR r.date_created >= p_date_from)
       AND (p_date_to   IS NULL OR r.date_created <= p_date_to)
@@ -237,6 +279,42 @@ BEGIN
     SELECT c.nm, COUNT(*) FILTER (WHERE j.status_after='Employed')::int AS employed_youth
     FROM cfs c JOIN jt j ON j.ikey = c.sortkey
     GROUP BY c.nm
+  ),
+  -- Full CF roster = known CFs (mel_cf_universe) UNION every resolved worker
+  -- name that appears in ANY activity. This is what guarantees no worker is
+  -- dropped from the payment report even if they were never a registered CF.
+  -- District for fallback names comes from where their activity occurred.
+  all_names AS (
+    SELECT nm, district FROM cfs
+    UNION SELECT nm, NULL::text FROM prof
+    UNION SELECT nm, NULL::text FROM isla
+    UNION SELECT nm, NULL::text FROM trained
+    UNION SELECT nm, NULL::text FROM prod
+    UNION SELECT nm, NULL::text FROM prod_youth
+    UNION SELECT nm, NULL::text FROM dist_birds
+    UNION SELECT nm, NULL::text FROM dist_shg
+    UNION SELECT nm, NULL::text FROM poultry
+    UNION SELECT nm, NULL::text FROM hsales
+    UNION SELECT nm, NULL::text FROM lev
+  ),
+  -- Resolve each name's district: prefer the known-CF district, else derive it
+  -- from the activity feeds (profiling/production/distribution) so unrecognised
+  -- workers still show under the right cluster.
+  name_district AS (
+    SELECT an.nm,
+           COALESCE(
+             (SELECT district FROM cfs c WHERE c.nm = an.nm AND c.district IS NOT NULL LIMIT 1),
+             (SELECT public.mel_canon_district(r.district) FROM public.shg_profiling_rows r
+               WHERE public.mel_cf_resolve_name(r.profiler_name) = an.nm
+                 AND (v_dl IS NULL OR public.mel_canon_district(r.district)=ANY(v_dl)) LIMIT 1),
+             (SELECT public.mel_canon_district(r.district_name) FROM public.production_rows r
+               WHERE public.mel_cf_resolve_name(r.profilers_name) = an.nm
+                 AND (v_dl IS NULL OR public.mel_canon_district(r.district_name)=ANY(v_dl)) LIMIT 1),
+             (SELECT public.mel_canon_district(d.district) FROM public.distribution_rows d
+               WHERE public.mel_cf_resolve_name(d.submitted_by) = an.nm
+                 AND (v_dl IS NULL OR public.mel_canon_district(d.district)=ANY(v_dl)) LIMIT 1)
+           ) AS district
+    FROM (SELECT DISTINCT nm FROM all_names WHERE nm IS NOT NULL) an
   ),
   -- ---- Assemble per-CF metrics ----
   metrics AS (
