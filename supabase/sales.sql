@@ -144,14 +144,16 @@ stable
 as $$
   with sel as (
     select
+      -- Canonicalise incoming district picks so "Iganga" matches rows stored as
+      -- IGANGA / Iganga / iganga (case/space/underscore variants all collapse).
       case when p_districts is null or array_length(p_districts,1) is null then null
-           else p_districts end as dl,
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl,
       case when p_valuechains is null or array_length(p_valuechains,1) is null then null
            else p_valuechains end as vl
   ),
   f as (
     select r.* from public.sales_rows r, sel
-    where (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+    where (sel.dl is null or public.mel_canon_district(coalesce(r.district_name,'(Blank)')) = any(sel.dl))
       and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
       and (p_from is null or r.activity_date >= p_from)
       and (p_to   is null or r.activity_date <= p_to)
@@ -164,7 +166,7 @@ as $$
       min(qty_harvested_measure) as qty_harvested_measure,
       sum(total_planting_value)  as total_planting_value,
       sum(net_planting)          as net_planting,
-      min(district_name)         as district_name,
+      min(public.mel_canon_district_disp(district_name)) as district_name,
       min(profilers_name)        as profilers_name
     from f
     where shg_name is not null
@@ -195,7 +197,7 @@ as $$
         'net_planting', coalesce(sum(net_planting),0)
       ) from g),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.sales_rows) x),
     'valuechains', (select coalesce(jsonb_agg(v order by v), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
@@ -273,7 +275,7 @@ stable
 as $$
   select jsonb_build_object(
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.sales_rows) x),
     'valuechains', (select coalesce(jsonb_agg(v order by v), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
