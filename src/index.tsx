@@ -1404,6 +1404,7 @@ app.get('/api/items-not-sold', async (c) => {
     districts: split(q.districts),
     daysMin: numOrNull(q.daysMin) ?? undefined,
     daysMax: numOrNull(q.daysMax) ?? undefined,
+    limit: numOrNull(q.limit) ?? undefined,
   }));
 });
 

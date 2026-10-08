@@ -298,7 +298,7 @@ as $$
     'unique_shgs',         (select count(distinct shg_group_name) from f where shg_group_name is not null),
     'total_items',         (select count(*) from f),
     'rows', (select coalesce(jsonb_agg(to_jsonb(t) order by t.days_since_distribution desc nulls last), '[]'::jsonb)
-             from (select * from f order by days_since_distribution desc nulls last limit p_limit) t),
+             from (select * from f order by days_since_distribution desc nulls last limit coalesce(p_limit, 5000)) t),
     'value_chains', (select coalesce(jsonb_agg(v order by v), '[]'::jsonb)
                      from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
                            from public.items_not_sold_rows) x),

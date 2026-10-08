@@ -345,10 +345,29 @@ ${navSidebar('itemsnotsold')}
       finally{ btn.disabled=false; btn.innerHTML=old; }
     });
 
-    // ---- Export to Excel: the current (filtered + sorted) table -------------
-    document.getElementById('exportBtn').addEventListener('click', ()=>{
-      const rows = (lastData && lastData.rows) ? lastData.rows : [];
-      if(!rows.length){ alert('Nothing to export — the table is empty for this selection.'); return; }
+    // ---- Export to Excel: the FULL (filtered) dataset -----------------------
+    // The on-screen table is capped (default 5000 rows) for responsiveness, but
+    // the export must contain EVERY matching row — otherwise the Excel file
+    // silently differs from the KPI totals. So we re-fetch with a high limit
+    // using the SAME filters, rather than exporting the capped lastData.rows.
+    document.getElementById('exportBtn').addEventListener('click', async ()=>{
+      const btn = document.getElementById('exportBtn');
+      const orig = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Preparing…';
+      let rows = [];
+      try {
+        const params = filterParams();
+        params.set('limit', '1000000');
+        const res = await fetch('/api/items-not-sold?'+params.toString());
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const d = await res.json();
+        rows = d.rows || [];
+      } catch(err) {
+        btn.disabled = false; btn.innerHTML = orig;
+        alert('Export failed to load the full data: '+err.message);
+        return;
+      }
+      if(!rows.length){ btn.disabled=false; btn.innerHTML=orig; alert('Nothing to export — the table is empty for this selection.'); return; }
       const sorted = [...rows].sort((a,b)=> (Number(b[sortKey])||0) - (Number(a[sortKey])||0));
       const header = COLS.map(c=>c[1]);
       const aoa = [header].concat(sorted.map(r=>COLS.map(([key,label,type])=>{
@@ -373,6 +392,7 @@ ${navSidebar('itemsnotsold')}
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
       }
+      btn.disabled = false; btn.innerHTML = orig;
     });
 
     loadOptions();

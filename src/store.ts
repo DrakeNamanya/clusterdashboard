@@ -2781,6 +2781,7 @@ export interface ItemsNotSoldFilters {
   districts?: string[];
   daysMin?: number;
   daysMax?: number;
+  limit?: number;
 }
 
 /** Dashboard aggregate: KPIs + detail rows + slicer lists. [Neon] */
@@ -2791,12 +2792,13 @@ export async function itemsNotSoldDash(
   return neonRpcJson(
     env,
     'items_not_sold_dash',
-    '$1::text[], $2::text[], $3::int, $4::int',
+    '$1::text[], $2::text[], $3::int, $4::int, $5::int',
     [
       opts.valuechains && opts.valuechains.length ? opts.valuechains : null,
       opts.districts && opts.districts.length ? opts.districts : null,
       opts.daysMin != null ? opts.daysMin : null,
       opts.daysMax != null ? opts.daysMax : null,
+      opts.limit != null ? opts.limit : null,
     ]
   );
 }
