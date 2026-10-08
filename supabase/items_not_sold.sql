@@ -122,10 +122,10 @@ begin
       nullif(trim(p.shg_participant_id),'')              as participant_id,
       nullif(trim(p.sex),'')                             as gender,
       nullif(trim(dp.shg_name),'')                       as shg_group_name,
-      upper(coalesce(
+      public.mel_canon_district(coalesce(
         nullif(trim(dp.district_name),''),
         nullif(trim(e.district_name),''),
-        (select m.dist from pfxmap m where m.pfx = substring(p.shg_participant_id from 'HEI-([A-Za-z]+)-' )),
+        (select m.dist from pfxmap m where m.pfx = upper(substring(p.shg_participant_id from '^[A-Za-z]+-([A-Za-z]+)-' ))),
         ''
       ))                                                  as district,
       nullif(trim(e.subcounty_name),'')                  as subcounty,
