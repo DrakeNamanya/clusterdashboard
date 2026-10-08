@@ -152,11 +152,13 @@ stable
 as $$
   with sel as (
     select
-      case when p_districts is null or array_length(p_districts,1) is null then null else p_districts end as dl
+      -- Canonicalise district picks so one pick matches all spellings.
+      case when p_districts is null or array_length(p_districts,1) is null then null
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl
   ),
   f as (
     select r.* from public.local_leverage_rows r, sel
-    where (sel.dl is null or coalesce(r.district,'(Blank)') = any(sel.dl))
+    where (sel.dl is null or public.mel_canon_district(coalesce(r.district,'(Blank)')) = any(sel.dl))
       and (p_date_from is null or r.date_created >= p_date_from)
       and (p_date_to   is null or r.date_created <= p_date_to)
   )
@@ -178,7 +180,7 @@ as $$
     'rows', (select coalesce(jsonb_agg(to_jsonb(t) order by t.date_created desc nulls last), '[]'::jsonb)
              from (select * from f order by date_created desc nulls last limit p_limit) t),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district),'(Blank)') as d
                         from public.local_leverage_rows) x),
     'date_bounds', (select jsonb_build_object(
                       'min', to_char(min(date_created),'YYYY-MM-DD'),
@@ -197,7 +199,7 @@ stable
 as $$
   select jsonb_build_object(
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district),'(Blank)') as d
                         from public.local_leverage_rows) x),
     'date_bounds', (select jsonb_build_object(
                       'min', to_char(min(date_created),'YYYY-MM-DD'),

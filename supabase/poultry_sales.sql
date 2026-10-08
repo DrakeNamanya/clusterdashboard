@@ -155,13 +155,15 @@ stable
 as $$
   with sel as (
     select
-      case when p_districts is null or array_length(p_districts,1) is null then null else p_districts end as dl,
+      -- Canonicalise district picks so one pick matches all spellings (IGANGA/Iganga/iganga).
+      case when p_districts is null or array_length(p_districts,1) is null then null
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl,
       case when p_poultry   is null or array_length(p_poultry,1)   is null then null else p_poultry   end as pl,
       case when p_profilers is null or array_length(p_profilers,1) is null then null else p_profilers end as fl
   ),
   f as (
     select r.* from public.poultry_sales_rows r, sel
-    where (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+    where (sel.dl is null or public.mel_canon_district(coalesce(r.district_name,'(Blank)')) = any(sel.dl))
       and (sel.pl is null or coalesce(r.poultry,'(Blank)')       = any(sel.pl))
       and (sel.fl is null or coalesce(r.profilers_name,'(Blank)')= any(sel.fl))
       and (p_from is null or r.activity_date >= p_from)
@@ -175,7 +177,7 @@ as $$
       sum(avg_bird_price)        as avg_bird_price,
       sum(total_poultry_value)   as total_poultry_value,
       sum(net_poultry)           as net_poultry,
-      min(district_name)         as district_name,
+      min(public.mel_canon_district_disp(district_name)) as district_name,
       min(other_poultry)         as other_poultry,
       min(profilers_name)        as profilers_name
     from f
@@ -210,7 +212,7 @@ as $$
         'net_poultry', coalesce(sum(net_poultry),0)
       ) from g),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.poultry_sales_rows) x),
     'poultry_types', (select coalesce(jsonb_agg(p order by p), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(poultry),''),'(Blank)') as p
@@ -231,7 +233,7 @@ stable
 as $$
   select jsonb_build_object(
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district_name),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district_name),'(Blank)') as d
                         from public.poultry_sales_rows) x),
     'poultry_types', (select coalesce(jsonb_agg(p order by p), '[]'::jsonb)
                   from (select distinct coalesce(nullif(trim(poultry),''),'(Blank)') as p

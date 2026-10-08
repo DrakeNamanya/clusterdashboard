@@ -223,15 +223,17 @@ stable
 as $$
   with sel as (
     select
+      -- Canonicalise district picks (see sales_dash) so one pick matches all
+      -- case/space/underscore spellings of the same district.
       case when p_districts is null or array_length(p_districts,1) is null then null
-           else p_districts end as dl,
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl,
       case when p_valuechains is null or array_length(p_valuechains,1) is null then null
            else p_valuechains end as vl
   ),
   f as (
     select r.* from public.sales_rows r, sel
     where r.shg_name = p_shg
-      and (sel.dl is null or coalesce(r.district_name,'(Blank)') = any(sel.dl))
+      and (sel.dl is null or public.mel_canon_district(coalesce(r.district_name,'(Blank)')) = any(sel.dl))
       and (sel.vl is null or coalesce(r.value_chain,'(Blank)')  = any(sel.vl))
       and (p_from is null or r.activity_date >= p_from)
       and (p_to   is null or r.activity_date <= p_to)
@@ -244,7 +246,7 @@ as $$
       min(qty_harvested_measure) as qty_harvested_measure,
       sum(total_planting_value)  as total_planting_value,
       sum(net_planting)          as net_planting,
-      min(district_name)         as district_name,
+      min(public.mel_canon_district_disp(district_name)) as district_name,
       min(profilers_name)        as profilers_name
     from f
     where participant_name is not null
