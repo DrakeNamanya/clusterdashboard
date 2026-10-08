@@ -98,79 +98,97 @@ begin
   truncate public.items_not_sold_rows;
 
   insert into public.items_not_sold_rows
-  with dist as (
-    -- one row per received item (participant detail from participants_shg,
-    -- material/qty breakdown from distribution_form_v2).
+  with
+  -- Heifer participant-id district prefix map (last-resort district source when
+  -- the event has no district_name and the participant isn't profiled — same
+  -- fallback used by the distribution_rows rebuild).
+  pfxmap(pfx, dist) as (values
+    ('IGA','IGANGA'),('JIN','JINJA'),('MAY','MAYUGE'),('LUU','LUUKA'),
+    ('KAM','KAMULI'),('KAL','KALIRO'),('BUY','BUYENDE'),('BUG','BUGIRI'),
+    ('NAM','NAMUTUMBA'),('BGW','BUGWERI'),('NMY','NAMAYINGO'),
+    ('KAY','KAYUNGA'),('BUI','BUIKWE'),('MUK','MUKONO')
+  ),
+  dist as (
+    -- one row per received item. SOURCE CHANGED (2026-10): the MIS-synced
+    -- participants_shg records lost their __Submissions-id link key (now 100%
+    -- blank), which silently froze this table (the join produced 0 rows on
+    -- refresh, so the dashboard stopped getting recent districts/records). We
+    -- now read the OData distribution pipeline (odata_dist_participants ⋈
+    -- odata_dist_events on submission_id = doc_id) — the SAME working source as
+    -- distribution_rows — so refreshes stay current. District is resolved via
+    -- event -> participant profile -> HEI-id prefix so nothing lands blank.
     select
-      nullif(trim(p.data->>'participant_name'),'')       as participant_name,
-      nullif(trim(p.data->>'shg_participant_id'),'')      as participant_id,
-      nullif(trim(p.data->>'sex'),'')                     as gender,
-      nullif(trim(p.data->>'shg_name'),'')                as shg_group_name,
-      upper(nullif(trim(coalesce(d.data->>'district_name', p.data->>'district')),'')) as district,
-      nullif(trim(coalesce(d.data->>'Subcounty_name', p.data->>'subcounty')),'') as subcounty,
-      nullif(trim(p.data->>'shg_unit_received'),'')       as unit_received,
-      nnum(p.data->>'shg_qty_received')                   as qty_received,
-      nullif(trim(p.data->>'other_shg_unit_received'),'') as other_unit_received,
-      nullif(trim(p.data->>'shg_plot_size'),'')           as plot_size,
-      nullif(trim(d.data->>'parish'),'')                  as parish,
-      nullif(trim(d.data->>'village'),'')                 as village,
-      nullif(trim(d.data->>'material_type'),'')           as material_type,
-      nullif(trim(d.data->>'other_material_type'),'')     as other_material_type,
-      nullif(trim(d.data->>'livestock_type'),'')          as livestock_type,
-      nullif(trim(d.data->>'other_livestock_type'),'')    as other_livestock_type,
-      nullif(trim(d.data->>'crop_type'),'')               as crop_type,
-      nullif(trim(d.data->>'other_crop_type'),'')         as other_crop_type,
-      nullif(trim(d.data->>'agri_resources_type'),'')     as agri_resources_type,
-      nullif(trim(d.data->>'other_agri_resources_type'),'') as other_agri_resources_type,
-      nullif(trim(d.data->>'isla_kits'),'')               as isla_kits,
-      nullif(trim(d.data->>'other_isla_kits'),'')         as other_isla_kits,
-      nnum(d.data->>'qty_distributed_kgs')                as qty_kgs,
-      nnum(d.data->>'qty_distributed_grams')              as qty_grams,
-      nnum(d.data->>'qty_distributed_liters')             as qty_liters,
-      nnum(d.data->>'qty_distributed_seedlings')          as qty_seedlings,
-      nnum(d.data->>'qty_distributed_packets')            as qty_packets,
-      nnum(d.data->>'qty_distributed_tins')               as qty_tins,
-      nnum(d.data->>'qty_distributed_pieces')             as qty_pieces,
-      nnum(d.data->>'qty_distributed_dozens')             as qty_dozens,
-      nnum(d.data->>'qty_distributed_sackets')            as qty_sackets,
-      nnum(d.data->>'qty_distributed_boxes')              as qty_boxes,
-      nnum(d.data->>'qty_distributed_number')             as qty_number,
-      nnum(d.data->>'qty_distributed_meters')             as qty_meters,
-      nnum(d.data->>'qty_distributed_kit')                as qty_kit,
-      nnum(d.data->>'qty_distributed_hectare')            as qty_hectare,
-      nnum(d.data->>'qty_distributed_acre')               as qty_acre,
-      nnum(d.data->>'qty_distributed_foot')               as qty_foot,
-      nnum(d.data->>'qty_distributed_other')              as qty_other,
-      case when (d.data->>'distribution_date') ~ '^\d{4}-\d{2}-\d{2}'
-           then (left(d.data->>'distribution_date',10))::date else null end as distribution_date,
-      nullif(trim(d.data->>'partner'),'')                 as partner,
-      nullif(trim(d.data->>'supplier'),'')                as supplier,
-      nullif(trim(d.data->>'other_supplier'),'')          as other_supplier,
-      nullif(trim(d.data->>'distributor'),'')             as distributor,
-      nullif(trim(d.data->>'distributor_title'),'')       as distributor_title,
-      nullif(trim(d.data->>'submitterName'),'')           as submitted_by,
-      nullif(trim(d.data->>'unique_id'),'')               as distribution_id,
-      case when (d.data->>'submissionDate') ~ '^\d{4}-\d{2}-\d{2}'
-           then (left(d.data->>'submissionDate',10))::date else null end as submission_date,
+      nullif(trim(p.participant_name),'')                as participant_name,
+      nullif(trim(p.shg_participant_id),'')              as participant_id,
+      nullif(trim(p.sex),'')                             as gender,
+      nullif(trim(dp.shg_name),'')                       as shg_group_name,
+      upper(coalesce(
+        nullif(trim(dp.district_name),''),
+        nullif(trim(e.district_name),''),
+        (select m.dist from pfxmap m where m.pfx = substring(p.shg_participant_id from 'HEI-([A-Za-z]+)-' )),
+        ''
+      ))                                                  as district,
+      nullif(trim(e.subcounty_name),'')                  as subcounty,
+      nullif(trim(p.unit_received),'')                   as unit_received,
+      coalesce(p.qty_received,0)                         as qty_received,
+      null::text                                         as other_unit_received,
+      nullif(trim(p.plot_size),'')                       as plot_size,
+      nullif(trim(e.parish),'')                          as parish,
+      nullif(trim(e.village),'')                         as village,
+      nullif(trim(e.material_type),'')                   as material_type,
+      null::text                                         as other_material_type,
+      nullif(trim(e.livestock_type),'')                  as livestock_type,
+      null::text                                         as other_livestock_type,
+      nullif(trim(e.crop_type),'')                       as crop_type,
+      null::text                                         as other_crop_type,
+      nullif(trim(e.agri_resources_type),'')             as agri_resources_type,
+      null::text                                         as other_agri_resources_type,
+      nullif(trim(e.isla_kits),'')                       as isla_kits,
+      null::text                                         as other_isla_kits,
+      case when lower(e.unit)='kgs'       then coalesce(p.qty_received,0) end as qty_kgs,
+      case when lower(e.unit)='grams'     then coalesce(p.qty_received,0) end as qty_grams,
+      case when lower(e.unit)='liters'    then coalesce(p.qty_received,0) end as qty_liters,
+      case when lower(e.unit)='seedlings' then coalesce(p.qty_received,0) end as qty_seedlings,
+      case when lower(e.unit)='packets'   then coalesce(p.qty_received,0) end as qty_packets,
+      case when lower(e.unit)='tins'      then coalesce(p.qty_received,0) end as qty_tins,
+      case when lower(e.unit)='pieces'    then coalesce(p.qty_received,0) end as qty_pieces,
+      case when lower(e.unit)='dozens'    then coalesce(p.qty_received,0) end as qty_dozens,
+      case when lower(e.unit)='sackets'   then coalesce(p.qty_received,0) end as qty_sackets,
+      case when lower(e.unit)='boxes'     then coalesce(p.qty_received,0) end as qty_boxes,
+      case when lower(e.unit)='number'    then coalesce(p.qty_received,0) end as qty_number,
+      case when lower(e.unit)='meters'    then coalesce(p.qty_received,0) end as qty_meters,
+      case when lower(e.unit) in ('kit','set/kit','set_slash_kit') then coalesce(p.qty_received,0) end as qty_kit,
+      case when lower(e.unit)='hectare'   then coalesce(p.qty_received,0) end as qty_hectare,
+      case when lower(e.unit)='acre'      then coalesce(p.qty_received,0) end as qty_acre,
+      case when lower(e.unit)='foot'      then coalesce(p.qty_received,0) end as qty_foot,
+      case when lower(e.unit)='other'     then coalesce(p.qty_received,0) end as qty_other,
+      case when e.distribution_date ~ '^\d{4}-\d{2}-\d{2}'
+           then (left(e.distribution_date,10))::date else null end as distribution_date,
+      nullif(trim(e.partner),'')                         as partner,
+      nullif(trim(e.supplier),'')                        as supplier,
+      null::text                                         as other_supplier,
+      nullif(trim(e.distributor),'')                     as distributor,
+      nullif(trim(e.distributor_title),'')               as distributor_title,
+      nullif(trim(e.distributor),'')                     as submitted_by,
+      e.doc_id                                           as distribution_id,
+      case when e.date_created ~ '^\d{4}-\d{2}-\d{2}'
+           then (left(e.date_created,10))::date else null end as submission_date,
       -- derived value chain from the distributed item
       case
-        when d.data->>'livestock_type' ilike 'Poultry%' then 'Poultry'
-        when d.data->>'crop_type' ilike '%g.nut%'
-          or d.data->>'crop_type' ilike '%soy%'          then 'Oil seeds'
-        when d.data->>'crop_type' ilike '%tomato%'
-          or d.data->>'crop_type' ilike '%watermelon%'
-          or d.data->>'crop_type' ilike '%vegetable%'
-          or d.data->>'crop_type' ilike '%passion%'
-          or d.data->>'crop_type' ilike '%onion%'
-          or d.data->>'crop_type' ilike '%pumpkin%'      then 'Horticulture'
+        when e.livestock_type ilike 'Poultry%' then 'Poultry'
+        when e.crop_type ilike '%g.nut%'
+          or e.crop_type ilike '%soy%'          then 'Oil seeds'
+        when e.crop_type ilike '%tomato%'
+          or e.crop_type ilike '%watermelon%'
+          or e.crop_type ilike '%vegetable%'
+          or e.crop_type ilike '%passion%'
+          or e.crop_type ilike '%onion%'
+          or e.crop_type ilike '%pumpkin%'      then 'Horticulture'
         else null
       end as value_chain
-    from public.records p
-    join public.records d
-      on d.template='distribution_form_v2'
-     and (p.data->>'__Submissions-id') = (d.data->>'_id')
-    where p.template='participants_shg'
-      and nullif(trim(p.data->>'__Submissions-id'),'') is not null
+    from public.odata_dist_participants p
+    join public.odata_dist_events e on e.doc_id = p.submission_id
+    left join public.dim_profile dp on dp.participant_id = p.shg_participant_id
   ),
   -- shg_id for each participant (from participants master), for reference.
   shgmap as (
@@ -269,12 +287,14 @@ as $$
   with sel as (
     select
       case when p_valuechains is null or array_length(p_valuechains,1) is null then null else p_valuechains end as vl,
-      case when p_districts   is null or array_length(p_districts,1)   is null then null else p_districts   end as dl
+      -- Canonicalise district picks so one pick matches all spellings.
+      case when p_districts   is null or array_length(p_districts,1)   is null then null
+           else (select array_agg(public.mel_canon_district(x)) from unnest(p_districts) x) end as dl
   ),
   f as (
     select r.* from public.items_not_sold_rows r, sel
     where (sel.vl is null or coalesce(r.value_chain,'(Blank)') = any(sel.vl))
-      and (sel.dl is null or coalesce(r.district,'(Blank)')    = any(sel.dl))
+      and (sel.dl is null or public.mel_canon_district(coalesce(r.district,'(Blank)')) = any(sel.dl))
       and (p_days_min is null or coalesce(r.days_since_distribution,-1) >= p_days_min)
       and (p_days_max is null or coalesce(r.days_since_distribution, 2147483647) <= p_days_max)
   )
@@ -288,7 +308,7 @@ as $$
                      from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
                            from public.items_not_sold_rows) x),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district),'(Blank)') as d
                         from public.items_not_sold_rows) x),
     'days_bounds', (select jsonb_build_object(
                       'min', coalesce(min(days_since_distribution),0),
@@ -310,7 +330,7 @@ as $$
                      from (select distinct coalesce(nullif(trim(value_chain),''),'(Blank)') as v
                            from public.items_not_sold_rows) x),
     'districts', (select coalesce(jsonb_agg(d order by d), '[]'::jsonb)
-                  from (select distinct coalesce(nullif(trim(district),''),'(Blank)') as d
+                  from (select distinct coalesce(public.mel_canon_district_disp(district),'(Blank)') as d
                         from public.items_not_sold_rows) x),
     'days_bounds', (select jsonb_build_object(
                       'min', coalesce(min(days_since_distribution),0),
