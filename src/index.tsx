@@ -643,6 +643,11 @@ app.all('/api/warm-cache', async (c) => {
         // Fully await each downstream request so its compute-and-store COMPLETES
         // (each is a separate Worker invocation with its own CPU budget, so a
         // slow one can't blow this warmer's budget). We read the status only.
+        // NB: warm with the PLAIN url (no nocache) so the fresh compute is
+        // STORED in the edge cache. Because this warm runs AFTER refreshAll(),
+        // the compute reads the just-refreshed fact tables, so the stored cache
+        // is current. (A ?nocache=1 warm would recompute but NOT store, which
+        // defeats warming.) The 90s SWR window then keeps it live between ticks.
         const r = await fetch(base + p, { method: 'GET', headers: { 'X-Warm': '1' } });
         results[p] = String(r.status);
       } catch (e: any) {
