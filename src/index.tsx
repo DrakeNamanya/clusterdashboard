@@ -652,15 +652,52 @@ app.all('/api/warm-cache', async (c) => {
     return results;
   };
 
+  // SELF-HEAL: before warming the READ cache, REFRESH the derived fact tables
+  // from public.records so the cache is warmed with CURRENT data. The dashboards
+  // read materialized tables (isla_final_rows, sales_rows, production_rows, …)
+  // that only change when their refresh_* function runs; warming alone re-caches
+  // STALE tables. The VM cron is supposed to call /api/refresh-all each tick, but
+  // if its installed script is outdated or a call is dropped, the derived tables
+  // silently drift (this is the recurring "ISLA/weekly not updating" problem).
+  // Doing the refresh HERE, keyed to the same warm groups, makes freshness a
+  // property of the Worker — independent of the VM cron's version. Each refresh
+  // is a separate Worker subrequest with its own budget; all are fast (<5s) and
+  // individually guarded so one failure never blocks warming. Opt out with
+  // ?refresh=0 (e.g. a pure cache-warm). Default: refresh on.
+  const WARM_REFRESH: Record<string, string[]> = {
+    cluster: ['cluster'], newyouth: ['newyouth', 'frontliners'],
+    distribution: ['distribution', 'shgdistribution'], shgprofiling: ['shgprofiling'],
+    isla: ['isla'], sales: ['sales', 'poultrysales'], production: ['production'],
+    itemsnotsold: ['itemsnotsold'], localleverage: ['localleverage'], report: [],
+  };
+  const doRefresh = c.req.query('refresh') !== '0';
+  const refreshKeys = doRefresh
+    ? [...new Set(onlyKeys.flatMap((k) => WARM_REFRESH[k] || []))]
+    : [];
+  const refreshAll = async () => {
+    const out: Record<string, string> = {};
+    for (const k of refreshKeys) {
+      try {
+        const r = await fetch(base + '/api/refresh-all?only=' + k, { method: 'POST', headers: { 'X-Warm': '1' } });
+        out[k] = String(r.status);
+      } catch (e: any) {
+        out[k] = 'err:' + String(e?.message || e).slice(0, 30);
+      }
+    }
+    return out;
+  };
+
   const wait = c.req.query('wait') === '1';
   if (wait) {
+    const refreshed = await refreshAll();
     const results = await warmAll();
-    return c.json({ ok: true, warmed: paths.length, results }, 200, { 'Cache-Control': 'no-store' });
+    return c.json({ ok: true, refreshed, warmed: paths.length, results }, 200, { 'Cache-Control': 'no-store' });
   }
   const ctx = c.executionCtx ?? (c as any).ctx;
-  if (ctx?.waitUntil) ctx.waitUntil(warmAll());
-  else warmAll(); // fire and forget
-  return c.json({ ok: true, warming: paths.length, month: { monthFrom, monthTo } }, 200, { 'Cache-Control': 'no-store' });
+  const job = async () => { await refreshAll(); await warmAll(); };
+  if (ctx?.waitUntil) ctx.waitUntil(job());
+  else job(); // fire and forget
+  return c.json({ ok: true, warming: paths.length, refreshing: refreshKeys.length, month: { monthFrom, monthTo } }, 200, { 'Cache-Control': 'no-store' });
 });
 
 app.get('/api/data/:key', async (c) => {
