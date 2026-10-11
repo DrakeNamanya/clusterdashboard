@@ -284,10 +284,13 @@ function buildNarrative(d, clusterLabel, yiw){
      ['PWDs', fmt(poul.pwd)],['SHGs involved', fmt(poul.shgs)],['Earnings', ugx(poul.value)]]);
 
   // 06 Access to Finance (ISLA)
+  // Weekly ISLA = NEW ISLA records SUBMITTED during the reporting week (filtered
+  // by submission date), so these figures are "what came in this week", not the
+  // cumulative programme ISLA (which is far larger and shown on the ISLA dashboard).
   out += section('06','Access to Finance',
-    'Through ISLA, '+em(fmt(isla.shgs)+' SHGs')+' mobilized '+em(ugx(isla.savings))+' in savings from '+
+    'From the ISLA records '+em('submitted this week')+', '+em(fmt(isla.shgs)+' SHGs')+' reported '+em(ugx(isla.savings))+' in savings from '+
     em(fmt(isla.savers)+' youth savers')+', with '+em(ugx(isla.loans_value))+' in loans issued to '+em(fmt(isla.loans_count)+' youth')+'.',
-    [['SHGs saving', fmt(isla.shgs)],['Youth saving', fmt(isla.savers)],['Amount saved', ugx(isla.savings)],
+    [['SHGs saving (new this week)', fmt(isla.shgs)],['Youth saving', fmt(isla.savers)],['Amount saved', ugx(isla.savings)],
      ['Loans given', ugx(isla.loans_value)],['Youth with loans', fmt(isla.loans_count)]]);
 
   // 07 Youth in Work
