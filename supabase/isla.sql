@@ -47,6 +47,7 @@ create table public.isla_final_rows (
   other_funds              int,
   balance                  int,
   activity_date            date,   -- isla_form[activity_date]  (cast to date)
+  created_date             date,   -- isla_form[dateCreated] = SUBMISSION date
   profilers_name           text,   -- RELATED shg_profiling_form[Profilers_name]
   district_shg             text,   -- RELATED shg_profiling_form[district] -> District_SHG
   subcounty_shg            text,
@@ -57,6 +58,7 @@ create index isla_final_rows_shgid_idx  on public.isla_final_rows (shg_id);
 create index isla_final_rows_dist_idx   on public.isla_final_rows (district_shg);
 create index isla_final_rows_prof_idx   on public.isla_final_rows (profilers_name);
 create index isla_final_rows_date_idx   on public.isla_final_rows (activity_date);
+create index isla_final_rows_cdate_idx  on public.isla_final_rows (created_date);
 grant select on public.isla_final_rows to anon, service_role;
 
 -- ---- Rebuild ISLA FINAL ----------------------------------------------------
@@ -107,6 +109,8 @@ begin
     n(i.data->>'balance'),
     case when (i.data->>'activity_date') ~ '^\d{4}-\d{2}-\d{2}'
          then (left(i.data->>'activity_date',10))::date else null end as activity_date,
+    case when (i.data->>'dateCreated') ~ '^\d{4}-\d{2}-\d{2}'
+         then (left(i.data->>'dateCreated',10))::date else null end as created_date,
     d.profilers_name,
     d.district_shg,
     d.subcounty_shg,
