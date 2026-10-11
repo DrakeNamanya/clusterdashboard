@@ -152,11 +152,16 @@ BEGIN
     ) q
   ),
   -- ---------- ISLA (savings & loans) ----------
+  -- Weekly report shows the NEW ISLA data SUBMITTED during the reporting week,
+  -- so we filter by created_date (the submission date = isla_form.dateCreated),
+  -- NOT activity_date (the period the group is reporting about, which can even
+  -- be future-dated). This makes the weekly ISLA = "what was submitted this
+  -- week", matching how M&E reads the weekly review.
   isla AS (
     SELECT * FROM isla_final_rows
     WHERE (v_dl IS NULL OR public.mel_canon_district(district_shg)=ANY(v_dl))
-      AND (p_date_from IS NULL OR activity_date >= p_date_from)
-      AND (p_date_to   IS NULL OR activity_date <= p_date_to)
+      AND (p_date_from IS NULL OR created_date >= p_date_from)
+      AND (p_date_to   IS NULL OR created_date <= p_date_to)
   ),
   isla_tot AS (
     -- MEL rules (per client):
