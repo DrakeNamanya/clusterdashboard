@@ -21,6 +21,7 @@ import {
   poultrySalesDash, poultrySalesOptions, refreshPoultrySales,
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
+  saccoLoanDash, saccoLoanOptions, refreshSaccoLoan,
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague, cfPaymentReport,
   cfGroups, cfWorkplanSave, cfWorkplanList, cfWorkplanGet,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
@@ -54,6 +55,7 @@ import { renderSales } from './sales';
 import { renderPoultrySales } from './poultry_sales';
 import { renderItemsNotSold } from './items_not_sold';
 import { renderLocalLeverage } from './local_leverage';
+import { renderSacco } from './sacco';
 import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';
@@ -1493,6 +1495,39 @@ app.post('/api/local-leverage/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// ---- SACCO Loan tracking ---------------------------------------------------
+app.get('/sacco-loans', async (c) => {
+  let opts = {};
+  try { opts = await saccoLoanOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderSacco(baseUrl(c.req.url), opts));
+});
+
+// Aggregated data feed (KPIs + by SACCO / district / business line + rows + slicers).
+app.get('/api/sacco-loans', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return cachedJson(c, () => saccoLoanDash(storeEnv(c), {
+    districts: split(q.districts),
+    saccos: split(q.saccos),
+    biz: split(q.biz),
+    dateFrom: q.from || undefined,
+    dateTo: q.to || undefined,
+  }));
+});
+
+// Lightweight slicer option lists.
+app.get('/api/sacco-loans/options', async (c) => {
+  const data = await saccoLoanOptions(storeEnv(c));
+  return c.json(data);
+});
+
+// Rebuild the sacco_loan_rows table (run after sync / imports change data).
+app.post('/api/sacco-loans/refresh', async (c) => {
+  const n = await refreshSaccoLoan(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
 // ---- Report Dashboard: Targets vs Achieved ---------------------------------
 app.get('/report', (c) => c.html(renderReport(baseUrl(c.req.url))));
 app.get('/api/report', async (c) => {
@@ -2085,7 +2120,7 @@ sync_call "run" "$BASE/api/mis-sync/run"
 #    dashboard from them — instead of waiting for that table's ~45-min slot.
 #    (The heavy part — pulling raw rows from the MIS gateway — is still rotated
 #    across slots 0/1/2 to stay under the Worker CPU limit.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking distribution shgdistribution; do
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking distribution shgdistribution trainees; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 

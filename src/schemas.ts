@@ -364,6 +364,28 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  {
+    // SACCO Loan tracking — loans the SAYE youth receive through SACCOs.
+    // Synced from the Heifer OData feed loan_portfolio_monitoring_tool_odata_view
+    // and flattened into sacco_loan_rows by refresh_sacco_loan_rows(). The feed
+    // carries three participant streams (shg / sme / incubatee) with parallel
+    // name/id/gender/disability/district columns that the refresh coalesces.
+    // Dedup on the submission docId.
+    key: 'loan_portfolio_monitoring_tool',
+    label: 'loan_portfolio_monitoring_tool_odata_view',
+    filenameHints: ['loan_portfolio', 'sacco_loan', 'sacco loan', 'loan_portfolio_monitoring_tool'],
+    dedupKey: 'docId',
+    columns: cols(
+      'docId,ip_name,participant_type,sacco,sacco_id,participant_name,shg_participant_id,sex,shg_disability,shg_district,sme_participant,sme_participant_id,gender,sme_disability,sme_district,incubatee_participant,incubatee_participant_id,incubatee_gender,incubatee_disability,incubatee_district,nin,biz_line,phone_number,loan_amount,purpose,disbursement_date,interest,createdBy,refID,dateCreated,lastUpdated',
+      {
+        loan_amount: 'number',
+        interest: 'number',
+        disbursement_date: 'date',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(

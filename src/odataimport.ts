@@ -87,6 +87,14 @@ export const ODATA_SOURCES: Record<
     userEnv: 'ODATA_PROFILING_USER',
     passEnv: 'ODATA_PROFILING_PASS',
   },
+  // SACCO Loan portfolio monitoring — loans youth receive via SACCOs.
+  loan_portfolio_monitoring_tool: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'loan_portfolio_monitoring_tool_odata_view/loan_portfolio_monitoring_tool_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
 };
 
 function basicAuth(user: string, pass: string): string {

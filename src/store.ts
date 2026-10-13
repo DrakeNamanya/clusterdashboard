@@ -2847,6 +2847,46 @@ export async function refreshLocalLeverage(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_local_leverage_rows');
 }
 
+// --- SACCO Loan tracking ---------------------------------------------------
+export interface SaccoLoanFilters {
+  districts?: string[];
+  saccos?: string[];
+  biz?: string[];
+  dateFrom?: string; // YYYY-MM-DD (disbursement date)
+  dateTo?: string;
+  limit?: number;
+}
+
+/** Dashboard aggregate: KPIs + by SACCO / district / business line + rows. [Neon] */
+export async function saccoLoanDash(
+  env: Env,
+  opts: SaccoLoanFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'sacco_loan_dash',
+    '$1::text[], $2::text[], $3::text[], $4::date, $5::date, $6::int',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.saccos && opts.saccos.length ? opts.saccos : null,
+      opts.biz && opts.biz.length ? opts.biz : null,
+      opts.dateFrom || null,
+      opts.dateTo || null,
+      opts.limit != null ? opts.limit : null,
+    ]
+  );
+}
+
+/** Lightweight slicer option lists (districts + SACCOs + business lines). [Neon] */
+export async function saccoLoanOptions(env: Env): Promise<any> {
+  return neonRpcJson(env, 'sacco_loan_options', '', []);
+}
+
+/** Rebuild sacco_loan_rows from records (call after sync). [Neon] */
+export async function refreshSaccoLoan(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_sacco_loan_rows');
+}
+
 // --------------------------------------------------------------------------
 // Youth in Work — combined_job_tracking_tool_view.
 // Reads the flattened job_tracking_rows fact table. Targets come from
