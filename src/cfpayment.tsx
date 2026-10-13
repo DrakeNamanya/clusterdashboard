@@ -241,10 +241,18 @@ ${navSidebar('cfpayment')}
         desc:'Training delivery.',
         has:function(r){ return r.groups_trained>0 || r.youth_trained>0; },
         summary:function(r){ return 'Trained '+fmt(r.youth_trained)+' youth across '+fmt(r.groups_trained)+' groups.'; },
-        groups:function(r){ return fmt(r.groups_trained)+' group(s)'; } }
+        groups:function(r){ return fmt(r.groups_trained)+' group(s)'; } },
+
+      { code:'A10', title:'Job Tracking (Youth in Work)',
+        desc:'Youth job-tracked by the facilitator (as interviewer), of whom employed, and jobs they created.',
+        has:function(r){ return (r.youth_tracked||0)>0 || (r.employed_youth||0)>0; },
+        summary:function(r){ return 'Job-tracked '+fmt(r.youth_tracked)+' youth; '+fmt(r.employed_youth)+' employed, '+fmt(r.youth_employing_others)+' employing others. Jobs created: '+fmt((Number(r.jt_jobs_female)||0)+(Number(r.jt_jobs_male)||0))+' ('+fmt(r.jt_jobs_female)+' F / '+fmt(r.jt_jobs_pwd)+' PWD). Income '+ugx(r.jt_income)+'.'; },
+        groups:function(r){ return fmt(r.youth_tracked)+' youth'; } }
     ];
 
     var lastRows = [];
+    var lastSacco = null;
+    var lastSaccoBy = [];
 
     function fillDistricts(){
       var cl = document.getElementById('cluster').value;
@@ -302,6 +310,25 @@ ${navSidebar('cfpayment')}
       }
       var h = '';
       SECTIONS.forEach(function(sec){ h += renderSection(sec, rows); });
+
+      // ---- SACCO Loan Tracking summary (programme-wide, not per-CF) ----
+      // SACCO loans are not attributable to an individual facilitator (bulk
+      // uploaded), so they are reported as one summary block for the selection.
+      if(lastSacco && (Number(lastSacco.loans)||0) > 0){
+        var sc = lastSacco;
+        h += '<section class="sec">'
+          + '<h2><span class="code">B1.</span> SACCO Loan Tracking</h2>'
+          + '<p class="desc">Loans youth received through SACCOs in the selected period (disbursement date). Programme-wide summary — not attributed to individual facilitators.</p>'
+          + '<table><thead><tr><th>SACCO</th><th style="text-align:right">Loans</th><th style="text-align:right">Amount</th></tr></thead><tbody>';
+        (lastSaccoBy||[]).forEach(function(s){
+          h += '<tr><td>'+esc(s.sacco)+'</td><td style="text-align:right">'+fmt(s.loans)+'</td><td style="text-align:right">'+ugx(s.amount)+'</td></tr>';
+        });
+        h += '<tr style="font-weight:700;background:#f1f5f3"><td>TOTAL — '+fmt(sc.saccos)+' SACCO(s)</td><td style="text-align:right">'+fmt(sc.loans)+'</td><td style="text-align:right">'+ugx(sc.amount)+'</td></tr>';
+        h += '</tbody></table>'
+          + '<p class="desc" style="margin-top:6px">'+fmt(sc.female)+' loans to female youth · '+fmt(sc.pwd)+' to PWDs · average interest '+(sc.avg_interest==null?'—':(Number(sc.avg_interest).toFixed(1)+'%'))+'.</p>'
+          + '</section>';
+      }
+
       // grading scale + sign-off
       h += '<section class="sec">'
         + '<h2><span class="code">■</span> Grading Scale &amp; Approval</h2>'
@@ -350,6 +377,8 @@ ${navSidebar('cfpayment')}
         if(!res.ok) throw new Error('HTTP '+res.status);
         var d = await res.json();
         lastRows = Array.isArray(d) ? d : (d.rows || []);
+        lastSacco = Array.isArray(d) ? null : (d.sacco || null);
+        lastSaccoBy = Array.isArray(d) ? [] : (d.sacco_by || []);
         renderReport(lastRows, meta);
       }catch(err){
         document.getElementById('reportBody').innerHTML = '<div class="empty" style="color:var(--bad)">Failed to load: '+esc(err.message)+'</div>';

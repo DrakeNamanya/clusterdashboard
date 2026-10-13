@@ -1,5 +1,33 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **2026-10-13: Date-to=today · Job Tracking sections · SACCO Loan Tracking · Central cluster on trainees-v2.**
+> 1. **All dashboards default "Date to" to today.** A shared snippet in
+>    `navSidebar()` (`src/nav.ts`, injected on every page) sets every date-to
+>    input (`#to`/`#toDate`/`#dateTo`) to today when it is empty or holds a stale
+>    hardcoded default, then fires a `change` so the dashboard reloads. Hardcoded
+>    init defaults in `report.tsx` (reset), `newyouth.tsx`, `cluster.tsx` were
+>    also switched to today. (Programme Report `#mTo`/`#qTo` are reporting-period
+>    selectors and intentionally excluded.)
+> 2. **Job Tracking section** added to the **Weekly Report** (§08, new records
+>    submitted in the week from `job_tracking_rows`) and the **CF Payment Report**
+>    (§A10, youth job-tracked attributed to the interviewer CF). SQL:
+>    `mel_weekly_report` + `mel_cf_payment_report`; UI: `weekly.tsx`, `cfpayment.tsx`.
+> 3. **SACCO Loan Tracking** — brand-new feature. New OData source
+>    `loan_portfolio_monitoring_tool_odata_view` → `records` →
+>    `sacco_loan_rows` (`supabase/sacco_loans.sql`). New dashboard tab
+>    `/sacco-loans` (`src/sacco.tsx`) + nav entry, plus summary sections on the
+>    Weekly Report (§09, loans disbursed in the week) and CF Payment Report
+>    (§B1, programme-wide — loans are not CF-attributable). Tracks SACCO name,
+>    participant, gender, PWD, district, line of business, loan amount, purpose,
+>    interest rate, submitter and disbursement date. Full OData sync wired into
+>    the VM cron (`/api/sacco-loans/sync`) + refresh-all (`?only=saccoloan`).
+> 4. **Central cluster now shows on `/trainees-v2`.** Root cause: recent
+>    attendance submissions (all of Mukono/Buikwe/Kayunga) arrive with a BLANK
+>    `district_name` in the raw attendance OData feed. `backfill_trainees_v2_district()`
+>    (`supabase/trainees_v2_district_backfill.sql`) fills them from `at_rows`
+>    (every participant maps to exactly one district there). Self-heals on every
+>    ingest + refresh-all (`?only=trainees`) + cron tick.
+>
 > **2026-09-15: Poultry-Sales Excel export + CF-report zero-trainings fix.**
 > 1. **Export Excel** added to `/poultry-sales` (same shared DashTools control as
 >    the other dashboards) — exports the currently-filtered table.
