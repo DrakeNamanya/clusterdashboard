@@ -399,7 +399,7 @@ async function load(){
   loading=false;
 }
 document.getElementById('apply').addEventListener('click', load);
-document.getElementById('reset').addEventListener('click', ()=>{ document.getElementById('from').value='2025-10-01'; document.getElementById('to').value='2026-09-30'; document.getElementById('cluster').value='iganga'; load(); });
+document.getElementById('reset').addEventListener('click', ()=>{ const _t=new Date(); const _ti=_t.getFullYear()+'-'+String(_t.getMonth()+1).padStart(2,'0')+'-'+String(_t.getDate()).padStart(2,'0'); document.getElementById('from').value='2025-10-01'; document.getElementById('to').value=_ti; document.getElementById('cluster').value='iganga'; load(); });
 document.getElementById('cluster').addEventListener('change', load);
 load();
 </script>

@@ -274,6 +274,39 @@ export function navSidebar(activeKey: string): string {
         });
       });
 
+      // ---- Default "Date to" = today on every dashboard -------------------
+      // Business rule: every dashboard's "Date to" filter should default to
+      // today's date. Dashboards use a few id conventions for that input
+      // (#to, #toDate, #dateTo) and some ship a stale hardcoded end date. We
+      // set the field to today when it is empty OR holds one of the known
+      // stale programme-year defaults, then fire a change event so the
+      // dashboard's own listener reloads with the new value. We do NOT touch a
+      // value the user has already picked this session (only empty/stale ones).
+      (function(){
+        function todayISO(){
+          var d = new Date();
+          return d.getFullYear() + '-' +
+                 String(d.getMonth()+1).padStart(2,'0') + '-' +
+                 String(d.getDate()).padStart(2,'0');
+        }
+        var STALE = { '2026-09-30':1, '2026-06-30':1 };
+        var t = todayISO();
+        // Generic "Date to" filters across dashboards. NB: #mTo / #qTo on the
+        // Programme Report are reporting-PERIOD selectors (month-end /
+        // quarter-end), not "data up to today" filters, so they are excluded.
+        var ids = ['to','toDate','dateTo'];
+        ids.forEach(function(id){
+          var el = document.getElementById(id);
+          if(!el || el.type !== 'date') return;
+          var v = el.value || '';
+          if(v === '' || STALE[v]){
+            el.value = t;
+            // Let the dashboard react (most listen for the change event).
+            try{ el.dispatchEvent(new Event('change', { bubbles:true })); }catch(e){}
+          }
+        });
+      })();
+
       // Collapsible category groups (Distribution, Sales). A group is open by
       // default when it holds the active page; the user can toggle any group,
       // and the open/closed state per group is remembered.

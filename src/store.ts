@@ -3730,6 +3730,12 @@ export async function ingestTraineesV2(
       const res = await client.query(sql, params);
       upserted += res.rowCount ?? 0;
     }
+    // Self-heal blank districts: recent attendance submissions (incl. the whole
+    // Central cluster) arrive with a BLANK district_name in the raw OData feed.
+    // Backfill them from at_rows (the authoritative MIS all_trainees view), where
+    // every participant maps to exactly one district. Keeps Central on /trainees-v2.
+    try { await client.query(`SELECT public.backfill_trainees_v2_district()`); }
+    catch (e) { /* function may not exist yet on older DBs — non-fatal */ }
     const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM public.trainees_v2`);
     return { ok: true, received: (rows || []).length, upserted, totalRows: Number(cnt.rows?.[0]?.c) || 0 };
   } finally {

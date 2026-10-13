@@ -1939,6 +1939,13 @@ app.all('/api/refresh-all', async (c) => {
   if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
   if (want('localleverage')) jobs.push({ key: 'localleverage', fn: () => refreshLocalLeverage(env) });
   if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
+  // trainees_v2 district self-heal: recent attendance submissions (incl. the
+  // whole Central cluster) land with a BLANK district in the raw OData feed;
+  // backfill them from at_rows so Central shows on /trainees-v2.
+  if (want('trainees'))     jobs.push({ key: 'trainees',     fn: async () => {
+    const r = await neonQuery(env, 'SELECT public.backfill_trainees_v2_district() AS n');
+    return Number((r?.[0] as any)?.n) || 0;
+  } });
   // frontliners is the heaviest (728k rows) — run it last.
   if (want('frontliners'))  jobs.push({ key: 'frontliners',  fn: () => refreshFrontliners(env) });
   // CF identity + universe cache — Task E full chain (person registry ->

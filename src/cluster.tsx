@@ -197,10 +197,9 @@ ${navSidebar('cluster')}
       }
     }
 
-    // Default the date range to June 2026 (matches the reference dashboard view
-    // and keeps queries fast). Users can widen it as needed.
-    document.getElementById('fromDate').value = '2026-06-01';
-    document.getElementById('toDate').value = '2026-06-30';
+    // Default the date range to the current month (Date to = today). Users can
+    // widen it as needed.
+    (function(){ var _d=new Date(); document.getElementById('toDate').value = _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0'); document.getElementById('fromDate').value = _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-01'; })();
 
     // Date inputs
     document.getElementById('fromDate').addEventListener('change', load);
