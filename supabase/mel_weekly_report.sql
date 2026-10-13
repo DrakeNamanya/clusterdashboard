@@ -183,7 +183,44 @@ BEGIN
       AND (p_date_from IS NULL OR date_created >= p_date_from)
       AND (p_date_to   IS NULL OR date_created <= p_date_to)
   ),
-  lev_tot AS ( SELECT COALESCE(SUM(contribution_amount),0)::numeric AS amount FROM lev )
+  lev_tot AS ( SELECT COALESCE(SUM(contribution_amount),0)::numeric AS amount FROM lev ),
+  -- ---------- JOB TRACKING (youth in work) — job_tracking_rows ----------
+  -- New job-tracking records SUBMITTED during the reporting week (by
+  -- submission_date). "Employed" = status_after indicates employment.
+  jobtr AS (
+    SELECT * FROM job_tracking_rows
+    WHERE (v_dl IS NULL OR public.mel_canon_district(district)=ANY(v_dl))
+      AND (p_date_from IS NULL OR submission_date >= p_date_from)
+      AND (p_date_to   IS NULL OR submission_date <= p_date_to)
+  ),
+  jobtr_tot AS (
+    SELECT COUNT(DISTINCT participant_id)::int AS youth_tracked,
+           COUNT(DISTINCT CASE WHEN lower(coalesce(status_after,''))='employed'
+                               OR lower(coalesce(employment_status,'')) IN ('employed','self employed','self-employed')
+                          THEN participant_id END)::int AS youth_employed,
+           COUNT(DISTINCT CASE WHEN lower(coalesce(employ_youth,''))='yes' THEN participant_id END)::int AS youth_employing_others,
+           COALESCE(SUM(jobs_female),0)::int AS jobs_female,
+           COALESCE(SUM(jobs_male),0)::int   AS jobs_male,
+           COALESCE(SUM(jobs_pwd),0)::int    AS jobs_pwd,
+           COALESCE(SUM(total_income),0)::numeric AS total_income
+    FROM jobtr
+  ),
+  -- ---------- SACCO LOANS — sacco_loan_rows ----------
+  -- Loans DISBURSED during the reporting week (by disbursement_date).
+  sacco AS (
+    SELECT * FROM sacco_loan_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
+      AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
+  ),
+  sacco_tot AS (
+    SELECT COUNT(*)::int AS loans,
+           COUNT(DISTINCT sacco_name)::int AS saccos,
+           COALESCE(SUM(loan_amount),0)::numeric AS amount,
+           COALESCE(SUM(is_female),0)::int AS female,
+           COALESCE(SUM(is_pwd),0)::int    AS pwd
+    FROM sacco
+  )
   SELECT jsonb_build_object(
     'profiling', (SELECT to_jsonb(prof_tot) FROM prof_tot),
     'training_total', (SELECT trained FROM tr_tot),
@@ -193,7 +230,9 @@ BEGIN
     'poultry', (SELECT to_jsonb(ps_tot) FROM ps_tot),
     'hort_sales', (SELECT to_jsonb(hs_tot) || jsonb_build_object('items', (SELECT items FROM hs_items)) FROM hs_tot),
     'isla', (SELECT to_jsonb(isla_tot) FROM isla_tot),
-    'leverage', (SELECT to_jsonb(lev_tot) FROM lev_tot)
+    'leverage', (SELECT to_jsonb(lev_tot) FROM lev_tot),
+    'job_tracking', (SELECT to_jsonb(jobtr_tot) FROM jobtr_tot),
+    'sacco', (SELECT to_jsonb(sacco_tot) FROM sacco_tot)
   ) INTO v;
   RETURN v;
 END;

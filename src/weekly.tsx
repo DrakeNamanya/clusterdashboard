@@ -242,6 +242,7 @@ function em(s){ return '<span class="em">'+s+'</span>'; }
 
 function buildNarrative(d, clusterLabel, yiw){
   const p=d.profiling||{}, dist=d.distribution||{}, prod=d.production||{}, poul=d.poultry||{}, hs=d.hort_sales||{}, isla=d.isla||{}, lev=d.leverage||{};
+  const jt=d.job_tracking||{}, sac=d.sacco||{};
   const trBy=d.training_by||[]; const trained=d.training_total||0;
   let out='';
 
@@ -306,8 +307,25 @@ function buildNarrative(d, clusterLabel, yiw){
        ['Wage-employed', fmt(k.wageEmployed)],['Income', ugx(k.totalIncome)],['YiW target', fmt(yiwTgt)]]);
   }
 
-  // 08 Leverage Contributions
-  out += section('08','Leverage Contributions',
+  // 08 Job Tracking (new records submitted this week — from job_tracking_rows)
+  out += section('08','Job Tracking',
+    'From the job-tracking records '+em('submitted this week')+', '+em(fmt(jt.youth_tracked)+' youth')+' were tracked, of whom '+
+    em(fmt(jt.youth_employed)+' are employed')+'. '+em(fmt(jt.youth_employing_others)+' youth')+' are themselves employing others, '+
+    'creating '+em(fmt((Number(jt.jobs_female)||0)+(Number(jt.jobs_male)||0))+' jobs')+' ('+fmt(jt.jobs_female)+' female, '+fmt(jt.jobs_pwd)+' PWD), '+
+    'with '+em(ugx(jt.total_income))+' in income reported.',
+    [['Youth tracked (new this week)', fmt(jt.youth_tracked)],['Youth employed', fmt(jt.youth_employed)],
+     ['Youth employing others', fmt(jt.youth_employing_others)],['Jobs created · female', fmt(jt.jobs_female)],
+     ['Jobs created · male', fmt(jt.jobs_male)],['Jobs created · PWD', fmt(jt.jobs_pwd)],['Income reported', ugx(jt.total_income)]]);
+
+  // 09 SACCO Loans (loans disbursed this week — from sacco_loan_rows)
+  out += section('09','SACCO Loans',
+    'During the week, '+em(fmt(sac.loans)+' loans')+' were disbursed to youth through '+em(fmt(sac.saccos)+' SACCOs')+', '+
+    'totalling '+em(ugx(sac.amount))+' ('+fmt(sac.female)+' to female youth, '+fmt(sac.pwd)+' to PWDs).',
+    [['Loans disbursed', fmt(sac.loans)],['SACCOs involved', fmt(sac.saccos)],['Total disbursed', ugx(sac.amount)],
+     ['Female borrowers', fmt(sac.female)],['PWD borrowers', fmt(sac.pwd)]]);
+
+  // 10 Leverage Contributions
+  out += section('10','Leverage Contributions',
     'Local leverage contributions totalled '+em(ugx(lev.amount))+' during the reporting period.',
     [['Total leverage', ugx(lev.amount)]]);
 

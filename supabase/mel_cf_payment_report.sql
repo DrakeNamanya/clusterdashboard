@@ -261,10 +261,11 @@ BEGIN
       AND (p_date_to   IS NULL OR r.date_created <= p_date_to)
     GROUP BY 1
   ),
-  -- ---- YOUTH IN WORK: employed youth (for grade) ----
+  -- ---- JOB TRACKING / YOUTH IN WORK: per-CF (interviewer -> CF) ----
   jt AS (
     SELECT DISTINCT ON (participant_id)
-           participant_id, status_after,
+           participant_id, status_after, employment_status, employ_youth,
+           jobs_female, jobs_male, jobs_pwd, total_income,
            (SELECT string_agg(w, ' ' ORDER BY w)
               FROM unnest(regexp_split_to_array(
                      trim(regexp_replace(regexp_replace(lower(coalesce(interviewer,'')),'[^a-z ]',' ','g'),'\s+',' ','g')),' ')) w
@@ -278,9 +279,42 @@ BEGIN
     ORDER BY participant_id, submission_date DESC NULLS LAST
   ),
   yiw AS (
-    SELECT c.nm, COUNT(*) FILTER (WHERE j.status_after='Employed')::int AS employed_youth
+    SELECT c.nm,
+           COUNT(*) FILTER (WHERE j.status_after='Employed')::int AS employed_youth,
+           COUNT(*)::int                                          AS youth_tracked,
+           COUNT(*) FILTER (WHERE lower(coalesce(j.employ_youth,''))='yes')::int AS youth_employing_others,
+           COALESCE(SUM(j.jobs_female),0)::int                    AS jt_jobs_female,
+           COALESCE(SUM(j.jobs_male),0)::int                      AS jt_jobs_male,
+           COALESCE(SUM(j.jobs_pwd),0)::int                       AS jt_jobs_pwd,
+           COALESCE(SUM(j.total_income),0)::numeric               AS jt_income
     FROM cfs c JOIN jt j ON j.ikey = c.sortkey
     GROUP BY c.nm
+  ),
+  -- ---- SACCO LOANS: report-level summary (not CF-attributable; submitter is
+  --      a bulk uploader, so this is shown as a programme-wide block). ----
+  sacco_sum AS (
+    SELECT COUNT(*)::int AS loans,
+           COUNT(DISTINCT sacco_name)::int AS saccos,
+           COALESCE(SUM(loan_amount),0)::numeric AS amount,
+           COALESCE(SUM(is_female),0)::int AS female,
+           COALESCE(SUM(is_pwd),0)::int    AS pwd,
+           round(avg(interest_rate)::numeric,1) AS avg_interest
+    FROM sacco_loan_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
+      AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
+  ),
+  sacco_by AS (
+    SELECT coalesce(jsonb_agg(jsonb_build_object(
+             'sacco', sacco_name, 'loans', cnt, 'amount', amt) ORDER BY amt DESC), '[]'::jsonb) AS lst
+    FROM (
+      SELECT coalesce(sacco_name,'(Unknown)') AS sacco_name, count(*) cnt, coalesce(sum(loan_amount),0) amt
+      FROM sacco_loan_rows
+      WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+        AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
+        AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
+      GROUP BY 1
+    ) z
   ),
   -- Full CF roster = known CFs (mel_cf_universe) UNION every resolved worker
   -- name that appears in ANY activity, WITH the district where that activity
@@ -363,7 +397,13 @@ BEGIN
       COALESCE(hs.hs_sellers,0)        AS hs_sellers,
       COALESCE(lv.lev_count,0)         AS lev_count,
       COALESCE(lv.lev_amount,0)        AS lev_amount,
-      COALESCE(yw.employed_youth,0)    AS employed_youth
+      COALESCE(yw.employed_youth,0)    AS employed_youth,
+      COALESCE(yw.youth_tracked,0)         AS youth_tracked,
+      COALESCE(yw.youth_employing_others,0) AS youth_employing_others,
+      COALESCE(yw.jt_jobs_female,0)        AS jt_jobs_female,
+      COALESCE(yw.jt_jobs_male,0)          AS jt_jobs_male,
+      COALESCE(yw.jt_jobs_pwd,0)           AS jt_jobs_pwd,
+      COALESCE(yw.jt_income,0)             AS jt_income
     FROM name_district c
     LEFT JOIN prof p        ON p.nm  = c.nm
     LEFT JOIN isla i        ON i.nm  = c.nm
@@ -439,7 +479,15 @@ BEGIN
         'distshg_lines',     distshg_lines,
         -- A9 trainings
         'groups_trained',    groups_trained,
-        'youth_trained',     youth_trained
+        'youth_trained',     youth_trained,
+        -- A10 job tracking (youth in work) — attributed to the interviewer CF
+        'employed_youth',    employed_youth,
+        'youth_tracked',     youth_tracked,
+        'youth_employing_others', youth_employing_others,
+        'jt_jobs_female',    jt_jobs_female,
+        'jt_jobs_male',      jt_jobs_male,
+        'jt_jobs_pwd',       jt_jobs_pwd,
+        'jt_income',         jt_income
       ) ORDER BY initcap(lower(coalesce(district,''))), initcap(nm)
     ), '[]'::jsonb)
     INTO v

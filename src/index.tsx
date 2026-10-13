@@ -623,6 +623,7 @@ app.all('/api/warm-cache', async (c) => {
     production: [`/api/production`, `/api/production?${dr}`],
     itemsnotsold: [`/api/items-not-sold`],
     localleverage: [`/api/local-leverage`, `/api/local-leverage?${ll}`],
+    saccoloan: [`/api/sacco-loans`],
     report: [`/api/report`, `/api/report?${dr}`],
   };
   const onlyParam = (c.req.query('only') || '').trim();
@@ -675,7 +676,8 @@ app.all('/api/warm-cache', async (c) => {
     cluster: ['cluster'], newyouth: ['newyouth', 'frontliners'],
     distribution: ['distribution', 'shgdistribution'], shgprofiling: ['shgprofiling'],
     isla: ['isla'], sales: ['sales', 'poultrysales'], production: ['production'],
-    itemsnotsold: ['itemsnotsold'], localleverage: ['localleverage'], report: [],
+    itemsnotsold: ['itemsnotsold'], localleverage: ['localleverage'],
+    saccoloan: ['saccoloan'], report: [],
   };
   const doRefresh = c.req.query('refresh') !== '0';
   const refreshKeys = doRefresh
@@ -1528,6 +1530,40 @@ app.post('/api/sacco-loans/refresh', async (c) => {
   return c.json({ ok: true, rows: n });
 });
 
+// Full SACCO OData sync: pull every page of the loan portfolio feed into
+// public.records (upsert by docId), then rebuild sacco_loan_rows. The feed is
+// small (~1.5k rows / 3 pages) so a full pull fits the Worker budget. Called
+// from the VM cron each rotation so new loans flow in automatically.
+app.all('/api/sacco-loans/sync', async (c) => {
+  const schema = SCHEMA_BY_KEY['loan_portfolio_monitoring_tool'];
+  if (!schema) return c.json({ error: 'schema missing' }, 500);
+  let src;
+  try { src = resolveSource(schema, c.env as any); }
+  catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 400); }
+  if (!src) return c.json({ ok: false, error: 'no source' }, 400);
+
+  let skip = 0;
+  const top = 500;
+  let received = 0;
+  let inserted = 0;
+  let startSeq = (await maxSeq(storeEnv(c), schema)) + 1;
+  for (let guard = 0; guard < 20; guard++) {
+    const page = await fetchOdataPage(src, skip, top);
+    if (page.rows.length > 0) {
+      const { cleaned } = cleanRecords(schema, page.headers, page.rows, startSeq);
+      // upsert=true so edited loans overwrite in place.
+      const res = await appendRecords(storeEnv(c), schema, cleaned, `odata:${schema.key}`, true);
+      inserted += res.inserted;
+      received += page.rows.length;
+      startSeq += page.rows.length;
+    }
+    skip += page.rows.length;
+    if (page.done || page.rows.length === 0) break;
+  }
+  const rows = await refreshSaccoLoan(storeEnv(c));
+  return c.json({ ok: true, received, inserted, rows });
+});
+
 // ---- Report Dashboard: Targets vs Achieved ---------------------------------
 app.get('/report', (c) => c.html(renderReport(baseUrl(c.req.url))));
 app.get('/api/report', async (c) => {
@@ -1973,6 +2009,7 @@ app.all('/api/refresh-all', async (c) => {
   if (want('poultrysales')) jobs.push({ key: 'poultrysales', fn: () => refreshPoultrySales(env) });
   if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
   if (want('localleverage')) jobs.push({ key: 'localleverage', fn: () => refreshLocalLeverage(env) });
+  if (want('saccoloan'))    jobs.push({ key: 'saccoloan',    fn: () => refreshSaccoLoan(env) });
   if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
   // trainees_v2 district self-heal: recent attendance submissions (incl. the
   // whole Central cluster) land with a BLANK district in the raw OData feed;
@@ -2120,7 +2157,7 @@ sync_call "run" "$BASE/api/mis-sync/run"
 #    dashboard from them — instead of waiting for that table's ~45-min slot.
 #    (The heavy part — pulling raw rows from the MIS gateway — is still rotated
 #    across slots 0/1/2 to stay under the Worker CPU limit.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage jobtracking distribution shgdistribution trainees; do
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage saccoloan jobtracking distribution shgdistribution trainees; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
@@ -2191,6 +2228,8 @@ if [ "$CYCLE" = "1" ]; then
   # production_and_marketing_tool + job_tracking are now swept EVERY TICK in the
   # big-feed freshness block (2c) above, so they are no longer synced here.
   sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=250&maxPages=1"
+  # SACCO loan portfolio — small OData feed (~1.5k rows); full pull + rebuild.
+  sync_call "sacco loans" "$BASE/api/sacco-loans/sync"
 fi
 
 # ===== CYCLE SLOT 2 — distribution OData + items-not-sold + full warm ========
