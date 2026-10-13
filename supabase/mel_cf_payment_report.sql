@@ -49,6 +49,8 @@ AS $function$
 DECLARE
   v jsonb;
   v_dl text[];
+  v_sacco jsonb;
+  v_sacco_by jsonb;
 BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
   ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
@@ -290,32 +292,6 @@ BEGIN
     FROM cfs c JOIN jt j ON j.ikey = c.sortkey
     GROUP BY c.nm
   ),
-  -- ---- SACCO LOANS: report-level summary (not CF-attributable; submitter is
-  --      a bulk uploader, so this is shown as a programme-wide block). ----
-  sacco_sum AS (
-    SELECT COUNT(*)::int AS loans,
-           COUNT(DISTINCT sacco_name)::int AS saccos,
-           COALESCE(SUM(loan_amount),0)::numeric AS amount,
-           COALESCE(SUM(is_female),0)::int AS female,
-           COALESCE(SUM(is_pwd),0)::int    AS pwd,
-           round(avg(interest_rate)::numeric,1) AS avg_interest
-    FROM sacco_loan_rows
-    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
-      AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
-      AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
-  ),
-  sacco_by AS (
-    SELECT coalesce(jsonb_agg(jsonb_build_object(
-             'sacco', sacco_name, 'loans', cnt, 'amount', amt) ORDER BY amt DESC), '[]'::jsonb) AS lst
-    FROM (
-      SELECT coalesce(sacco_name,'(Unknown)') AS sacco_name, count(*) cnt, coalesce(sum(loan_amount),0) amt
-      FROM sacco_loan_rows
-      WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
-        AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
-        AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
-      GROUP BY 1
-    ) z
-  ),
   -- Full CF roster = known CFs (mel_cf_universe) UNION every resolved worker
   -- name that appears in ANY activity, WITH the district where that activity
   -- occurred. This guarantees no worker is dropped and that unrecognised workers
@@ -489,14 +465,48 @@ BEGIN
         'jt_jobs_pwd',       jt_jobs_pwd,
         'jt_income',         jt_income
       ) ORDER BY initcap(lower(coalesce(district,''))), initcap(nm)
-    ), '[]'::jsonb)
-    INTO v
-  FROM ranked
-  WHERE overall > 0
-     OR shgs_profiled > 0 OR youth_production > 0 OR groups_trained > 0
-     OR birds_sold > 0 OR hs_value > 0 OR lev_count > 0
-     OR dist_participants > 0 OR distshg_shgs > 0 OR shgs_saving > 0;
+    ) FILTER (WHERE overall > 0
+       OR shgs_profiled > 0 OR youth_production > 0 OR groups_trained > 0
+       OR birds_sold > 0 OR hs_value > 0 OR lev_count > 0
+       OR dist_participants > 0 OR distshg_shgs > 0 OR shgs_saving > 0
+       OR youth_tracked > 0), '[]'::jsonb)
+  INTO v
+  FROM ranked;
 
-  RETURN coalesce(v, '[]'::jsonb);
+  -- Programme-wide SACCO loan summary (computed directly — the WITH CTEs above
+  -- are out of scope now). SACCO loans are not CF-attributable (bulk uploader),
+  -- so they are reported as one block, not per CF.
+  SELECT jsonb_build_object(
+    'loans',  COUNT(*)::int,
+    'saccos', COUNT(DISTINCT sacco_name)::int,
+    'amount', COALESCE(SUM(loan_amount),0)::numeric,
+    'female', COALESCE(SUM(is_female),0)::int,
+    'pwd',    COALESCE(SUM(is_pwd),0)::int,
+    'avg_interest', round(avg(interest_rate)::numeric,1)
+  ) INTO v_sacco
+  FROM public.sacco_loan_rows
+  WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+    AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
+    AND (p_date_to   IS NULL OR disbursement_date <= p_date_to);
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'sacco', sacco_name, 'loans', cnt, 'amount', amt) ORDER BY amt DESC), '[]'::jsonb)
+    INTO v_sacco_by
+  FROM (
+    SELECT coalesce(sacco_name,'(Unknown)') AS sacco_name, count(*) cnt, coalesce(sum(loan_amount),0) amt
+    FROM public.sacco_loan_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR disbursement_date >= p_date_from)
+      AND (p_date_to   IS NULL OR disbursement_date <= p_date_to)
+    GROUP BY 1
+  ) z;
+
+  -- Return an OBJECT: per-CF rows PLUS the programme-wide SACCO loan summary.
+  -- The frontend reads d.rows (it already handles both array and {rows}).
+  RETURN jsonb_build_object(
+    'rows', coalesce(v, '[]'::jsonb),
+    'sacco', coalesce(v_sacco, '{}'::jsonb),
+    'sacco_by', coalesce(v_sacco_by, '[]'::jsonb)
+  );
 END;
 $function$;
