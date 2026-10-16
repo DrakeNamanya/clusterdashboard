@@ -1,5 +1,28 @@
 # SHG Data Cleaner & Consolidator (Power BI OData Feed)
 
+> **2026-10-16: Bird distributions freshness · Youth Linked to Banks · CF-payment bank/SACCO sections.**
+> 1. **This week's bird distributions now pull from the MIS.** Root cause: the
+>    distribution participant OData feed is ordered oldest→newest and grows at the
+>    END, but the cron only synced fixed skip windows (0–80k) — so the newest
+>    ~22k participant children (incl. this week's distributions) were never
+>    fetched, and `distribution_rows` (events ⋈ participants) dropped them. Fix:
+>    added a **tail** mode to `/api/distribution-odata/sync?feed=participants&tail=1`
+>    that reads the current total then syncs the newest `limit` rows; the cron now
+>    runs it EVERY slot-2 tick (plus an extra 80k backfill window). Re-synced +
+>    rebuilt: this week's 210 poultry records (10,500 birds) now show.
+> 2. **New "Youth Linked to Banks" tab** (`/bank-linkage`, `src/bank_linkage.tsx`)
+>    + nav entry, from the new OData source
+>    `fsdu_service_linkage_tracking_form_odata_view` → `records` →
+>    `bank_linkage_rows` (`supabase/bank_linkage.sql`). Tracks financial
+>    institution, data collector, loan amount disbursed (UGX) and participant-type
+>    counts (plus district/gender/PWD/service). Also a **Weekly Report §10**
+>    summary. Full OData sync wired into the VM cron (`/api/bank-linkage/sync`) +
+>    refresh-all (`?only=banklinkage`).
+> 3. **CF Payment Report** gained **§B1 SACCO Loan Tracking** (by SACCO) and
+>    **§B2 Youth Linked to Banks** (by financial institution + **by data
+>    collector**, using the feed's REAL `data_collector_name` — never "admin";
+>    the SACCO feed has no real submitter so it is shown by-SACCO only).
+>
 > **2026-10-13: Date-to=today · Job Tracking sections · SACCO Loan Tracking · Central cluster on trainees-v2.**
 > 1. **All dashboards default "Date to" to today.** A shared snippet in
 >    `navSidebar()` (`src/nav.ts`, injected on every page) sets every date-to

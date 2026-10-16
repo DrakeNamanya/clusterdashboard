@@ -253,6 +253,11 @@ ${navSidebar('cfpayment')}
     var lastRows = [];
     var lastSacco = null;
     var lastSaccoBy = [];
+    var lastBank = null;
+    var lastBankBy = [];
+    var lastBankColl = [];
+
+    function pretty(s){ return String(s==null?'':s).replace(/_/g,' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); }); }
 
     function fillDistricts(){
       var cl = document.getElementById('cluster').value;
@@ -329,6 +334,32 @@ ${navSidebar('cfpayment')}
           + '</section>';
       }
 
+      // ---- Youth Linked to Banks (FSDU service linkage) ----
+      // Shows the financial institution, loan disbursed, participant-type count,
+      // AND the real data collector who submitted each linkage (NOT "admin").
+      if(lastBank && (Number(lastBank.linkages)||0) > 0){
+        var bk = lastBank;
+        h += '<section class="sec">'
+          + '<h2><span class="code">B2.</span> Youth Linked to Banks</h2>'
+          + '<p class="desc">Youth linked to financial institutions (banks / MFIs) in the selected period. Financial institution, loan disbursed (UGX), participant-type count and the data collector who submitted the data.</p>';
+        // By financial institution
+        h += '<table><thead><tr><th>Financial institution</th><th style="text-align:right">Youth linked</th><th style="text-align:right">Participant types</th><th style="text-align:right">Loan disbursed</th></tr></thead><tbody>';
+        (lastBankBy||[]).forEach(function(b){
+          h += '<tr><td>'+esc(pretty(b.institution))+'</td><td style="text-align:right">'+fmt(b.linkages)+'</td><td style="text-align:right">'+fmt(b.types)+'</td><td style="text-align:right">'+ugx(b.loan)+'</td></tr>';
+        });
+        h += '<tr style="font-weight:700;background:#f1f5f3"><td>TOTAL — '+fmt(bk.institutions)+' institution(s)</td><td style="text-align:right">'+fmt(bk.linkages)+'</td><td style="text-align:right"></td><td style="text-align:right">'+ugx(bk.loan_amount)+'</td></tr>';
+        h += '</tbody></table>';
+        // By data collector (real names)
+        h += '<p class="desc" style="margin-top:10px"><b>By data collector</b> (name of who submitted the data):</p>';
+        h += '<table><thead><tr><th>Data collector</th><th style="text-align:right">Youth linked</th><th style="text-align:right">Loan disbursed</th></tr></thead><tbody>';
+        (lastBankColl||[]).forEach(function(c){
+          h += '<tr><td>'+esc(c.collector)+'</td><td style="text-align:right">'+fmt(c.linkages)+'</td><td style="text-align:right">'+ugx(c.loan)+'</td></tr>';
+        });
+        h += '</tbody></table>'
+          + '<p class="desc" style="margin-top:6px">'+fmt(bk.female)+' female · '+fmt(bk.pwd)+' PWD.</p>'
+          + '</section>';
+      }
+
       // grading scale + sign-off
       h += '<section class="sec">'
         + '<h2><span class="code">■</span> Grading Scale &amp; Approval</h2>'
@@ -379,6 +410,9 @@ ${navSidebar('cfpayment')}
         lastRows = Array.isArray(d) ? d : (d.rows || []);
         lastSacco = Array.isArray(d) ? null : (d.sacco || null);
         lastSaccoBy = Array.isArray(d) ? [] : (d.sacco_by || []);
+        lastBank = Array.isArray(d) ? null : (d.bank || null);
+        lastBankBy = Array.isArray(d) ? [] : (d.bank_by || []);
+        lastBankColl = Array.isArray(d) ? [] : (d.bank_by_collector || []);
         renderReport(lastRows, meta);
       }catch(err){
         document.getElementById('reportBody').innerHTML = '<div class="empty" style="color:var(--bad)">Failed to load: '+esc(err.message)+'</div>';

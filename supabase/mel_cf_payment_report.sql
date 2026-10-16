@@ -51,6 +51,9 @@ DECLARE
   v_dl text[];
   v_sacco jsonb;
   v_sacco_by jsonb;
+  v_bank jsonb;
+  v_bank_by jsonb;
+  v_bank_coll jsonb;
 BEGIN
   IF p_districts IS NULL OR array_length(p_districts,1) IS NULL THEN v_dl := NULL;
   ELSE SELECT array_agg(public.mel_canon_district(x)) INTO v_dl FROM unnest(p_districts) x; END IF;
@@ -501,12 +504,60 @@ BEGIN
     GROUP BY 1
   ) z;
 
-  -- Return an OBJECT: per-CF rows PLUS the programme-wide SACCO loan summary.
-  -- The frontend reads d.rows (it already handles both array and {rows}).
+  -- Programme-wide YOUTH LINKED TO BANKS summary (FSDU service linkage). This
+  -- feed carries a REAL data_collector_name (not "admin"), so we also break it
+  -- down by data collector per the request.
+  SELECT jsonb_build_object(
+    'linkages', COUNT(*)::int,
+    'institutions', COUNT(DISTINCT financial_institution)::int,
+    'loan_amount', COALESCE(SUM(loan_amount),0)::numeric,
+    'female', COALESCE(SUM(is_female),0)::int,
+    'pwd',    COALESCE(SUM(is_pwd),0)::int
+  ) INTO v_bank
+  FROM public.bank_linkage_rows
+  WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+    AND (p_date_from IS NULL OR linkage_date >= p_date_from)
+    AND (p_date_to   IS NULL OR linkage_date <= p_date_to);
+
+  -- By financial institution (with participant-type count per the request).
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'institution', financial_institution, 'linkages', cnt, 'loan', amt, 'types', types) ORDER BY amt DESC), '[]'::jsonb)
+    INTO v_bank_by
+  FROM (
+    SELECT coalesce(financial_institution,'(Unknown)') AS financial_institution,
+           count(*) cnt, coalesce(sum(loan_amount),0) amt,
+           count(distinct participant_type) types
+    FROM public.bank_linkage_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR linkage_date >= p_date_from)
+      AND (p_date_to   IS NULL OR linkage_date <= p_date_to)
+    GROUP BY 1
+  ) z;
+
+  -- By DATA COLLECTOR (real submitter name — the key ask of issue 3).
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'collector', data_collector, 'linkages', cnt, 'loan', amt) ORDER BY amt DESC), '[]'::jsonb)
+    INTO v_bank_coll
+  FROM (
+    SELECT coalesce(nullif(data_collector,''),'(Unknown)') AS data_collector,
+           count(*) cnt, coalesce(sum(loan_amount),0) amt
+    FROM public.bank_linkage_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR linkage_date >= p_date_from)
+      AND (p_date_to   IS NULL OR linkage_date <= p_date_to)
+    GROUP BY 1
+  ) z;
+
+  -- Return an OBJECT: per-CF rows PLUS the programme-wide SACCO loan and
+  -- Youth-Linked-to-Banks summaries. The frontend reads d.rows (it already
+  -- handles both array and {rows}).
   RETURN jsonb_build_object(
     'rows', coalesce(v, '[]'::jsonb),
     'sacco', coalesce(v_sacco, '{}'::jsonb),
-    'sacco_by', coalesce(v_sacco_by, '[]'::jsonb)
+    'sacco_by', coalesce(v_sacco_by, '[]'::jsonb),
+    'bank', coalesce(v_bank, '{}'::jsonb),
+    'bank_by', coalesce(v_bank_by, '[]'::jsonb),
+    'bank_by_collector', coalesce(v_bank_coll, '[]'::jsonb)
   );
 END;
 $function$;
