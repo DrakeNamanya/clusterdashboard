@@ -70,6 +70,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'itemsnotsold', href: '/items-not-sold', label: 'Items Not Sold', icon: 'fa-triangle-exclamation', group: 'grp-sales' },
   { key: 'localleverage', href: '/local-leverage', label: 'Local Leverage', icon: 'fa-hand-holding-dollar' },
   { key: 'sacco', href: '/sacco-loans', label: 'SACCO Loan Tracking', icon: 'fa-building-columns' },
+  { key: 'banklinkage', href: '/bank-linkage', label: 'Youth Linked to Banks', icon: 'fa-landmark' },
   { key: 'fieldstaff', href: '/field-staff', label: 'Field Staff (CF Registry)', icon: 'fa-users-gear', locked: true },
   { key: 'cfmerge', href: '/cf-merge', label: 'Merge CF Names', icon: 'fa-code-merge', locked: true },
   { key: 'tools', href: '/tools', label: 'Data Tools & OData', icon: 'fa-broom', locked: true },

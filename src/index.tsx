@@ -626,6 +626,7 @@ app.all('/api/warm-cache', async (c) => {
     itemsnotsold: [`/api/items-not-sold`],
     localleverage: [`/api/local-leverage`, `/api/local-leverage?${ll}`],
     saccoloan: [`/api/sacco-loans`],
+    banklinkage: [`/api/bank-linkage`],
     report: [`/api/report`, `/api/report?${dr}`],
   };
   const onlyParam = (c.req.query('only') || '').trim();
@@ -679,7 +680,7 @@ app.all('/api/warm-cache', async (c) => {
     distribution: ['distribution', 'shgdistribution'], shgprofiling: ['shgprofiling'],
     isla: ['isla'], sales: ['sales', 'poultrysales'], production: ['production'],
     itemsnotsold: ['itemsnotsold'], localleverage: ['localleverage'],
-    saccoloan: ['saccoloan'], report: [],
+    saccoloan: ['saccoloan'], banklinkage: ['banklinkage'], report: [],
   };
   const doRefresh = c.req.query('refresh') !== '0';
   const refreshKeys = doRefresh
@@ -1567,6 +1568,67 @@ app.all('/api/sacco-loans/sync', async (c) => {
   return c.json({ ok: true, received, inserted, rows });
 });
 
+// ---- Youth Linked to Banks (FSDU service linkage) --------------------------
+app.get('/bank-linkage', async (c) => {
+  let opts = {};
+  try { opts = await bankLinkageOptions(storeEnv(c)); } catch { /* client fetch fallback */ }
+  return c.html(renderBankLinkage(baseUrl(c.req.url), opts));
+});
+
+app.get('/api/bank-linkage', async (c) => {
+  const q = c.req.query();
+  const split = (s?: string) =>
+    (s || '').split(',').map((x) => x.trim()).filter(Boolean);
+  return cachedJson(c, () => bankLinkageDash(storeEnv(c), {
+    districts: split(q.districts),
+    institutions: split(q.institutions),
+    types: split(q.types),
+    dateFrom: q.from || undefined,
+    dateTo: q.to || undefined,
+  }));
+});
+
+app.get('/api/bank-linkage/options', async (c) => {
+  const data = await bankLinkageOptions(storeEnv(c));
+  return c.json(data);
+});
+
+app.post('/api/bank-linkage/refresh', async (c) => {
+  const n = await refreshBankLinkage(storeEnv(c));
+  return c.json({ ok: true, rows: n });
+});
+
+// Full Youth-Linked-to-Banks OData sync: pull every page into public.records
+// (upsert by docId), then rebuild bank_linkage_rows. Small feed (~1k rows).
+app.all('/api/bank-linkage/sync', async (c) => {
+  const schema = SCHEMA_BY_KEY['fsdu_service_linkage_tracking_form'];
+  if (!schema) return c.json({ error: 'schema missing' }, 500);
+  let src;
+  try { src = resolveSource(schema, c.env as any); }
+  catch (e: any) { return c.json({ ok: false, error: String(e?.message || e) }, 400); }
+  if (!src) return c.json({ ok: false, error: 'no source' }, 400);
+
+  let skip = 0;
+  const top = 500;
+  let received = 0;
+  let inserted = 0;
+  let startSeq = (await maxSeq(storeEnv(c), schema)) + 1;
+  for (let guard = 0; guard < 20; guard++) {
+    const page = await fetchOdataPage(src, skip, top);
+    if (page.rows.length > 0) {
+      const { cleaned } = cleanRecords(schema, page.headers, page.rows, startSeq);
+      const res = await appendRecords(storeEnv(c), schema, cleaned, `odata:${schema.key}`, true);
+      inserted += res.inserted;
+      received += page.rows.length;
+      startSeq += page.rows.length;
+    }
+    skip += page.rows.length;
+    if (page.done || page.rows.length === 0) break;
+  }
+  const rows = await refreshBankLinkage(storeEnv(c));
+  return c.json({ ok: true, received, inserted, rows });
+});
+
 // ---- Report Dashboard: Targets vs Achieved ---------------------------------
 app.get('/report', (c) => c.html(renderReport(baseUrl(c.req.url))));
 app.get('/api/report', async (c) => {
@@ -2013,6 +2075,7 @@ app.all('/api/refresh-all', async (c) => {
   if (want('itemsnotsold')) jobs.push({ key: 'itemsnotsold', fn: () => refreshItemsNotSold(env) });
   if (want('localleverage')) jobs.push({ key: 'localleverage', fn: () => refreshLocalLeverage(env) });
   if (want('saccoloan'))    jobs.push({ key: 'saccoloan',    fn: () => refreshSaccoLoan(env) });
+  if (want('banklinkage'))  jobs.push({ key: 'banklinkage',  fn: () => refreshBankLinkage(env) });
   if (want('jobtracking'))  jobs.push({ key: 'jobtracking',  fn: () => refreshJobTracking(env) });
   // trainees_v2 district self-heal: recent attendance submissions (incl. the
   // whole Central cluster) land with a BLANK district in the raw OData feed;
@@ -2160,7 +2223,7 @@ sync_call "run" "$BASE/api/mis-sync/run"
 #    dashboard from them — instead of waiting for that table's ~45-min slot.
 #    (The heavy part — pulling raw rows from the MIS gateway — is still rotated
 #    across slots 0/1/2 to stay under the Worker CPU limit.)
-for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage saccoloan jobtracking distribution shgdistribution trainees; do
+for c in cluster newyouth shgprofiling isla production sales poultrysales localleverage saccoloan banklinkage jobtracking distribution shgdistribution trainees; do
   echo -n "refresh $c: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=$c"; echo
 done
 
@@ -2233,6 +2296,8 @@ if [ "$CYCLE" = "1" ]; then
   sync_call "view leverage(fresh)" "$BASE/api/mis-sync/view?key=local_leverage_fund_contribution_form&fresh=1&pageSize=250&maxPages=1"
   # SACCO loan portfolio — small OData feed (~1.5k rows); full pull + rebuild.
   sync_call "sacco loans" "$BASE/api/sacco-loans/sync"
+  # Youth Linked to Banks (FSDU service linkage) — small feed (~1k); full pull + rebuild.
+  sync_call "bank linkage" "$BASE/api/bank-linkage/sync"
 fi
 
 # ===== CYCLE SLOT 2 — distribution OData + items-not-sold + full warm ========

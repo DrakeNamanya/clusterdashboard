@@ -242,7 +242,7 @@ function em(s){ return '<span class="em">'+s+'</span>'; }
 
 function buildNarrative(d, clusterLabel, yiw){
   const p=d.profiling||{}, dist=d.distribution||{}, prod=d.production||{}, poul=d.poultry||{}, hs=d.hort_sales||{}, isla=d.isla||{}, lev=d.leverage||{};
-  const jt=d.job_tracking||{}, sac=d.sacco||{};
+  const jt=d.job_tracking||{}, sac=d.sacco||{}, bank=d.bank_linkage||{};
   const trBy=d.training_by||[]; const trained=d.training_total||0;
   let out='';
 
@@ -324,8 +324,15 @@ function buildNarrative(d, clusterLabel, yiw){
     [['Loans disbursed', fmt(sac.loans)],['SACCOs involved', fmt(sac.saccos)],['Total disbursed', ugx(sac.amount)],
      ['Female borrowers', fmt(sac.female)],['PWD borrowers', fmt(sac.pwd)]]);
 
-  // 10 Leverage Contributions
-  out += section('10','Leverage Contributions',
+  // 10 Youth Linked to Banks (FSDU service linkage — linked this week)
+  out += section('10','Youth Linked to Banks',
+    'During the week, '+em(fmt(bank.linkages)+' youth')+' were linked to '+em(fmt(bank.institutions)+' financial institutions')+' (banks / MFIs), '+
+    'accessing '+em(ugx(bank.loan_amount))+' in loans ('+fmt(bank.female)+' female, '+fmt(bank.pwd)+' PWD).',
+    [['Youth linked', fmt(bank.linkages)],['Financial institutions', fmt(bank.institutions)],['Loan disbursed', ugx(bank.loan_amount)],
+     ['Female', fmt(bank.female)],['PWD', fmt(bank.pwd)]]);
+
+  // 11 Leverage Contributions
+  out += section('11','Leverage Contributions',
     'Local leverage contributions totalled '+em(ugx(lev.amount))+' during the reporting period.',
     [['Total leverage', ugx(lev.amount)]]);
 

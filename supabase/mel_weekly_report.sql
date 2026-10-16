@@ -220,6 +220,22 @@ BEGIN
            COALESCE(SUM(is_female),0)::int AS female,
            COALESCE(SUM(is_pwd),0)::int    AS pwd
     FROM sacco
+  ),
+  -- ---------- YOUTH LINKED TO BANKS — bank_linkage_rows ----------
+  -- Youth linked to banks/MFIs during the reporting week (by linkage_date).
+  bank AS (
+    SELECT * FROM bank_linkage_rows
+    WHERE (v_dl IS NULL OR district_key=ANY(v_dl))
+      AND (p_date_from IS NULL OR linkage_date >= p_date_from)
+      AND (p_date_to   IS NULL OR linkage_date <= p_date_to)
+  ),
+  bank_tot AS (
+    SELECT COUNT(*)::int AS linkages,
+           COUNT(DISTINCT financial_institution)::int AS institutions,
+           COALESCE(SUM(loan_amount),0)::numeric AS loan_amount,
+           COALESCE(SUM(is_female),0)::int AS female,
+           COALESCE(SUM(is_pwd),0)::int    AS pwd
+    FROM bank
   )
   SELECT jsonb_build_object(
     'profiling', (SELECT to_jsonb(prof_tot) FROM prof_tot),
@@ -232,7 +248,8 @@ BEGIN
     'isla', (SELECT to_jsonb(isla_tot) FROM isla_tot),
     'leverage', (SELECT to_jsonb(lev_tot) FROM lev_tot),
     'job_tracking', (SELECT to_jsonb(jobtr_tot) FROM jobtr_tot),
-    'sacco', (SELECT to_jsonb(sacco_tot) FROM sacco_tot)
+    'sacco', (SELECT to_jsonb(sacco_tot) FROM sacco_tot),
+    'bank_linkage', (SELECT to_jsonb(bank_tot) FROM bank_tot)
   ) INTO v;
   RETURN v;
 END;
