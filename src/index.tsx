@@ -1057,8 +1057,9 @@ app.all('/api/distribution-odata/sync', async (c) => {
   }
   const pSkip = parseInt(c.req.query('skip') || '0', 10) || 0;
   const pLimit = parseInt(c.req.query('limit') || '20000', 10) || 20000;
+  const pTail = c.req.query('tail') === '1' || c.req.query('tail') === 'true';
   try {
-    const res = await syncDistributionOData(storeEnv(c), feed, pSkip, pLimit);
+    const res = await syncDistributionOData(storeEnv(c), feed, pSkip, pLimit, pTail);
     return c.json({ phase: feed, ...res });
   } catch (e: any) {
     return c.json({ ok: false, phase: feed, error: String(e?.message || e) }, 500);
@@ -2237,9 +2238,14 @@ if [ "$CYCLE" = "2" ]; then
   sync_call "dist events"       "$BASE/api/distribution-odata/sync?feed=events"
   sync_call "dist shg"          "$BASE/api/distribution-odata/sync?feed=shg"
   sync_call "dist agrihubs"     "$BASE/api/distribution-odata/sync?feed=agrihubs"
-  for s in 0 20000 40000 60000; do
+  # Backfill windows (older rows) rotate across the fixed skip ranges...
+  for s in 0 20000 40000 60000 80000; do
     sync_call "dist participants @$s" "$BASE/api/distribution-odata/sync?feed=participants&skip=$s&limit=20000"
   done
+  # ...and ALWAYS pull the TAIL (newest 20k) so this week's distributions (which
+  # land at the end of the feed) are never missed — the fixed-window-only sync
+  # was why fresh bird distributions were not appearing.
+  sync_call "dist participants TAIL" "$BASE/api/distribution-odata/sync?feed=participants&tail=1&limit=20000"
   sync_call "dist rebuild"      "$BASE/api/distribution-odata/sync?feed=rebuild"
   # Items Not Sold depends on distribution_rows ⋈ marketing records (after rebuild).
   echo -n "refresh itemsnotsold: "; curl -s --max-time 170 -X POST "$BASE/api/refresh-all?only=itemsnotsold"; echo

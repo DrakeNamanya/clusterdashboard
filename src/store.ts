@@ -4670,7 +4670,7 @@ async function collectOdata(
 export type DistSyncPhase = 'events' | 'shg' | 'participants' | 'agrihubs' | 'rebuild' | 'all';
 
 export async function syncDistributionOData(
-  env: Env, phase: DistSyncPhase = 'all', pSkip = 0, pLimit = 20000
+  env: Env, phase: DistSyncPhase = 'all', pSkip = 0, pLimit = 20000, pTail = false
 ): Promise<DistOdataSyncResult> {
   if (!clusterDbUrl(env)) throw new Error('No cluster DB configured');
   const sql = clusterSql(env);
@@ -4726,6 +4726,15 @@ export async function syncDistributionOData(
 
     // ---- 3) per-participant (sliced: pSkip..pSkip+pLimit so it fits a call) ----
     if (doParticipants) {
+      // TAIL MODE: the feed is ordered oldest->newest and grows at the END, so a
+      // fixed skip window (0..80k) permanently misses the NEWEST rows (this
+      // week's distributions land past the last window). In tail mode we first
+      // read the current total (cheap top=1 count), then start pLimit rows from
+      // the end so the freshest participant children are always synced.
+      if (pTail) {
+        const { total: t0 } = await misFetchOdataPage(env, DIST_ODATA_VIEWS.participants, 0, 1);
+        pSkip = Math.max(0, t0 - pLimit);
+      }
       const { rows: raw, total, nextSkip } = await collectOdata(env, DIST_ODATA_VIEWS.participants, (r) => [
         STR(r.docId), STR(r['__Submissions-id']), STR(r.participant_name), STR(r.shg_participant_id),
         STR(r.sex), STR(r.shg_unit_received), NUM(r.shg_qty_received), STR(r.shg_plot_size), DAY(r.dateCreated),
