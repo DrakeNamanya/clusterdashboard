@@ -2887,6 +2887,46 @@ export async function refreshSaccoLoan(env: Env): Promise<number> {
   return neonRpcScalar(env, 'refresh_sacco_loan_rows');
 }
 
+// --- Youth Linked to Banks (FSDU service linkage) --------------------------
+export interface BankLinkageFilters {
+  districts?: string[];
+  institutions?: string[];
+  types?: string[];
+  dateFrom?: string; // YYYY-MM-DD (linkage date)
+  dateTo?: string;
+  limit?: number;
+}
+
+/** Dashboard aggregate: KPIs + by institution / type / district / collector + rows. [Neon] */
+export async function bankLinkageDash(
+  env: Env,
+  opts: BankLinkageFilters = {}
+): Promise<any> {
+  return neonRpcJson(
+    env,
+    'bank_linkage_dash',
+    '$1::text[], $2::text[], $3::text[], $4::date, $5::date, $6::int',
+    [
+      opts.districts && opts.districts.length ? opts.districts : null,
+      opts.institutions && opts.institutions.length ? opts.institutions : null,
+      opts.types && opts.types.length ? opts.types : null,
+      opts.dateFrom || null,
+      opts.dateTo || null,
+      opts.limit != null ? opts.limit : null,
+    ]
+  );
+}
+
+/** Lightweight slicer option lists (districts + institutions + types). [Neon] */
+export async function bankLinkageOptions(env: Env): Promise<any> {
+  return neonRpcJson(env, 'bank_linkage_options', '', []);
+}
+
+/** Rebuild bank_linkage_rows from records (call after sync). [Neon] */
+export async function refreshBankLinkage(env: Env): Promise<number> {
+  return neonRpcScalar(env, 'refresh_bank_linkage_rows');
+}
+
 // --------------------------------------------------------------------------
 // Youth in Work — combined_job_tracking_tool_view.
 // Reads the flattened job_tracking_rows fact table. Targets come from

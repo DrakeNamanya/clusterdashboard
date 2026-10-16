@@ -95,6 +95,14 @@ export const ODATA_SOURCES: Record<
     userEnv: 'ODATA_PROFILING_USER',
     passEnv: 'ODATA_PROFILING_PASS',
   },
+  // Youth Linked to Banks — FSDU service-linkage tracking (bank/MFI linkages).
+  fsdu_service_linkage_tracking_form: {
+    url:
+      'https://azure.saye-ug.heifer.org/gateway/api/v1/odata-feed/view/' +
+      'fsdu_service_linkage_tracking_form_odata_view/fsdu_service_linkage_tracking_form_odata_view',
+    userEnv: 'ODATA_PROFILING_USER',
+    passEnv: 'ODATA_PROFILING_PASS',
+  },
 };
 
 function basicAuth(user: string, pass: string): string {

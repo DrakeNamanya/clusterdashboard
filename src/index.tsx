@@ -22,6 +22,7 @@ import {
   itemsNotSoldDash, itemsNotSoldOptions, refreshItemsNotSold,
   localLeverageDash, localLeverageOptions, refreshLocalLeverage,
   saccoLoanDash, saccoLoanOptions, refreshSaccoLoan,
+  bankLinkageDash, bankLinkageOptions, refreshBankLinkage,
   melReportDash, weeklyReport, cfReport, cfStaffList, cfPremierLeague, cfPaymentReport,
   cfGroups, cfWorkplanSave, cfWorkplanList, cfWorkplanGet,
   misSyncSlice, misSyncStatus, misSyncView, misSyncAllViews, misViewSyncStatus,
@@ -56,6 +57,7 @@ import { renderPoultrySales } from './poultry_sales';
 import { renderItemsNotSold } from './items_not_sold';
 import { renderLocalLeverage } from './local_leverage';
 import { renderSacco } from './sacco';
+import { renderBankLinkage } from './bank_linkage';
 import { renderReport } from './report';
 import { renderWeeklyReport } from './weekly';
 import { renderCfReport } from './cfreport';

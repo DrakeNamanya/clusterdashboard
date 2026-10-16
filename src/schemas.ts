@@ -386,6 +386,31 @@ export const SCHEMAS: SheetSchema[] = [
       }
     ),
   },
+  {
+    // Youth Linked to Banks — FSDU service-linkage tracking: youth linked to
+    // financial institutions (banks/MFIs) for loans & savings. Synced from the
+    // Heifer OData feed fsdu_service_linkage_tracking_form_odata_view and
+    // flattened into bank_linkage_rows by refresh_bank_linkage_rows(). Carries
+    // three participant streams (shg / sme / incubatee) coalesced on refresh.
+    // Dedup on the submission docId.
+    key: 'fsdu_service_linkage_tracking_form',
+    label: 'fsdu_service_linkage_tracking_form_odata_view',
+    filenameHints: ['fsdu_service_linkage', 'bank_linkage', 'youth linked to banks', 'service_linkage'],
+    dedupKey: 'docId',
+    columns: cols(
+      'docId,data_collection_date,data_collector_name,data_collector_role,district,subcounty,participant_type,participant_name,shg_participant_id,sex,shg_disability,sme_participant,sme_participant_id,gender,sme_disability,incubatee_participant,incubatee_participant_id,incubatee_gender,incubatee_disability,agrihub,financial_institution,financial_institution_other,linkage_date,linkage_outcome,service_ownership,financial_service,service_date,savings_deposit_amount_ugx,loan_purpose,loan_purpose_other,loan_amount_ugx,loan_cycle,loan_term_months,repayment_status,repayment_paid_ugx,createdBy,refID,dateCreated,lastUpdated',
+      {
+        data_collection_date: 'date',
+        linkage_date: 'date',
+        service_date: 'date',
+        savings_deposit_amount_ugx: 'number',
+        loan_amount_ugx: 'number',
+        repayment_paid_ugx: 'number',
+        dateCreated: 'date',
+        lastUpdated: 'date',
+      }
+    ),
+  },
 ];
 
 export const SCHEMA_BY_KEY: Record<string, SheetSchema> = Object.fromEntries(
