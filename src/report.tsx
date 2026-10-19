@@ -401,6 +401,10 @@ async function load(){
 document.getElementById('apply').addEventListener('click', load);
 document.getElementById('reset').addEventListener('click', ()=>{ const _t=new Date(); const _ti=_t.getFullYear()+'-'+String(_t.getMonth()+1).padStart(2,'0')+'-'+String(_t.getDate()).padStart(2,'0'); document.getElementById('from').value='2025-10-01'; document.getElementById('to').value=_ti; document.getElementById('cluster').value='iganga'; load(); });
 document.getElementById('cluster').addEventListener('change', load);
+// Always open with "Date to" = today so the Reach/Mobilization/Production
+// achieved figures include the very latest trainings (do not rely on the stale
+// hardcoded default or nav-snippet timing).
+(function(){ var _t=new Date(); document.getElementById('to').value = _t.getFullYear()+'-'+String(_t.getMonth()+1).padStart(2,'0')+'-'+String(_t.getDate()).padStart(2,'0'); })();
 load();
 </script>
 </body>
